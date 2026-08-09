@@ -50,6 +50,10 @@ This target was selected to expose memory, instruction-set, storage, and schedul
 ```text
 .
 ├── README.md
+├── bench/
+│   ├── README.md
+│   ├── target_probe.c
+│   └── results/
 ├── docs/
 │   └── ARCHITECTURE.md
 └── models/
@@ -59,6 +63,7 @@ This target was selected to expose memory, instruction-set, storage, and schedul
 
 - [Compiler and runtime architecture](docs/ARCHITECTURE.md)
 - [Gemma 4 E2B engineering plan](models/gemma-4-e2b/README.md)
+- [Target probe](bench/README.md)
 
 ## Implementation rule
 
