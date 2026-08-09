@@ -6,7 +6,13 @@
     "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7",
     "checkpoint_logical_bytes": 10246621918,
     "checkpoint_sha256": "2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550",
-    "checkpoint_hash_status": "pinned upstream hash; full file was not downloaded locally"
+    "checkpoint_hash_status": "independently verified from the complete file"
+  },
+  "full_checkpoint_verification": {
+    "environment": "Ubuntu 24.04 x86-64",
+    "size_bytes": 10246621918,
+    "sha256": "2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550",
+    "fixture_matches_range_extraction": true
   },
   "range_extraction": {
     "fetched_bytes": 73443610,

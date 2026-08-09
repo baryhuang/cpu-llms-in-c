@@ -441,9 +441,12 @@ the binary is a generated artifact and is not committed.
 The offline range fetcher read 73,443,610 bytes from the pinned
 10,246,621,918-byte checkpoint. It selected all 17 layer-0 records, the PLE
 projection normalization, two main-embedding rows, two token-PLE slices, and
-the layer-0 block of the context PLE projection. The complete checkpoint was
-not downloaded or independently hashed; its SHA-256 remains a pinned upstream
-fact.
+the layer-0 block of the context PLE projection. A separate Linux validation
+downloaded the complete 10,246,621,918-byte checkpoint and independently
+verified SHA-256
+`2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550`.
+Exporting from that complete file produced a byte-identical fixture to the
+range extraction.
 
 The input token IDs were 2 and 1. The exported layer has the published E2B
 dimensions: hidden size 1536, eight query heads, one K/V head, head dimension

@@ -75,8 +75,11 @@ build/gemma4-layer-test \
 ```
 
 `--skip-checkpoint-sha256` is required for the sparse source because unfetched
-ranges are holes. The complete checkpoint SHA-256 is therefore not claimed as
-locally verified.
+ranges are holes. This sparse reproduction cannot verify the complete file by
+itself. The recorded validation separately downloaded the complete checkpoint
+on Linux, verified its 10,246,621,918-byte size and SHA-256
+`2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550`,
+and produced a byte-identical fixture.
 
 This validation uses token IDs 2 and 1. It validates real layer-0 weights and
 the text PLE input path. It does not validate a safety-task prompt, tokenizer,
