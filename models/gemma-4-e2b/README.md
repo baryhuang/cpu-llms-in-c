@@ -1,6 +1,6 @@
 # Gemma 4 E2B on Intel Celeron J3455
 
-Status: engineering plan and analytical budget; runtime implementation has not started.
+Status: scalar layer bring-up; no checkpoint-level inference.
 
 This document records the first model-specific validation path for `cpu-llms-in-c`. It covers the Gemma 4 E2B text graph, an Intel Celeron J3455 target, proposed transformations, memory budgets, and throughput estimates.
 
@@ -17,7 +17,7 @@ Statements in this document belong to one of four classes.
 | Analytical estimate | Derived from parameter counts, assumed formats, or bandwidth models |
 | Project measurement | Produced by code in this repository on controlled hardware |
 
-There are currently no project measurements. Memory and throughput numbers below are analytical estimates or design limits.
+There are no checkpoint-level quality or performance measurements. The repository contains one miniature scalar layer correctness result; memory and throughput numbers below remain analytical estimates or design limits.
 
 ## 2. Target system
 
@@ -396,11 +396,56 @@ MTP may convert main-model verification into a small batch and improve arithmeti
 
 ## 9. Implementation plan
 
-No implementation stage below has started.
+Implementation has started with a deterministic miniature early-local decoder
+layer. This is a graph and numerical bring-up artifact. It is not checkpoint
+inference and is not a performance result.
+
+### Implemented scalar slice
+
+The current C path covers:
+
+```text
+input RMSNorm
+Q/K/V projection
+Q/K RMSNorm and V RMSNorm
+local RoPE
+causal sliding-window multi-query attention
+attention output normalization and residual
+pre-MLP normalization
+GELU-tanh gated MLP
+MLP output normalization and residual
+PLE gate and projection
+PLE output normalization and residual
+layer scalar
+```
+
+The fixture uses three positions, hidden size 8, two query heads, one K/V
+head, head dimension 4, intermediate size 12, PLE size 4, and sliding window
+2. It is deliberately too small for performance measurement.
+
+Validation results:
+
+| Environment | Build | Result |
+|---|---|---|
+| macOS arm64 | Clang C11, optimized and ASan/UBSan variants | 10 of 10 declared tensor boundaries passed; maximum absolute error 0 |
+| Ubuntu 24.04 x86-64 | GCC 13.3, static `x86-64-v3` binary | 10 of 10 declared tensor boundaries passed; maximum absolute error 0 |
+
+Committed fixture SHA-256:
+`e9e5db23c57fe09a3dac1863e199abf5cb787404e8727c25d3942160da2c15f7`.
+The validated Linux binary SHA-256 was
+`262d7291bcd1d056a3ee63ec63a47218c0e58ea20a016aef466d7db727772574`;
+the binary is a generated artifact and is not committed.
+
+This test validates the C implementation against the repository's independent
+scalar fixture generator. It does not yet validate official Gemma 4 weights or
+the pinned Transformers implementation. Global proportional RoPE, layers with
+shared K/V, checkpoint loading, tokenization, final normalization, the LM head,
+and autoregressive decode remain unimplemented.
 
 ### Stage 0: pin model and oracle data
 
-1. Pin one Gemma 4 E2B IT checkpoint and tokenizer revision.
+1. Pin one Gemma 4 E2B IT checkpoint and tokenizer revision. Complete; hashes
+   are recorded in `pins.json`.
 2. Fix text-only mode, thinking disabled, context 512, and batch 1.
 3. Export layer tensors from the reference implementation for small inputs: embedding, PLE, attention residual, MLP residual, PLE residual, final normalization, and selected logits.
 4. Keep the reference framework outside the target artifact.
@@ -422,6 +467,8 @@ No implementation stage below has started.
 1. Implement the tokenizer and pinned chat format.
 2. Implement the packed-image loader.
 3. Implement scalar FP32 RMSNorm, RoPE, attention, MLP, PLE, and LM head.
+   RMSNorm, local RoPE, early-local attention, MLP, and the runtime PLE path
+   are implemented for the miniature fixture. The LM head is not implemented.
 4. Run complete prefill and decode at context 16.
 5. Compare every declared tensor boundary with the oracle.
 

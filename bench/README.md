@@ -22,7 +22,3 @@ Defaults:
 - measurements: one thread, then all visible logical CPUs up to four threads.
 
 The benchmark reads a buffer larger than the target cache and accumulates every 64-bit word. Reported bandwidth includes the accumulation cost. It must not be presented as STREAM bandwidth or as a model throughput result.
-
-Recorded runs:
-
-- [DigitalOcean Premium Intel, 2 vCPU, 4 GiB](results/digitalocean-premium-intel-2vcpu-4gb.md)

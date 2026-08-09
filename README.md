@@ -6,9 +6,11 @@ The compiler takes a model checkpoint, a target CPU profile, deployment constrai
 
 ## Status
 
-Planning and engineering analysis only.
+Early scalar bring-up.
 
-- No runtime has been implemented.
+- A framework-independent scalar C implementation of one Gemma 4 early local decoder layer is present.
+- The implemented layer passes a deterministic miniature fixture at ten tensor boundaries on macOS and Linux x86-64.
+- No tokenizer, checkpoint loader, complete model runtime, or token decoder has been implemented.
 - No model has passed end-to-end correctness validation.
 - No performance result in this repository is a benchmark.
 - Memory and throughput figures are engineering estimates until measured on the target hardware.
@@ -52,18 +54,31 @@ This target was selected to expose memory, instruction-set, storage, and schedul
 ├── README.md
 ├── bench/
 │   ├── README.md
-│   ├── target_probe.c
-│   └── results/
+│   └── target_probe.c
 ├── docs/
 │   └── ARCHITECTURE.md
+├── include/cpu_llms/
+├── src/
+├── tests/
+├── tools/
 └── models/
     └── gemma-4-e2b/
-        └── README.md
+        ├── README.md
+        └── pins.json
 ```
 
 - [Compiler and runtime architecture](docs/ARCHITECTURE.md)
 - [Gemma 4 E2B engineering plan](models/gemma-4-e2b/README.md)
 - [Target probe](bench/README.md)
+
+## Correctness test
+
+```sh
+make fixture
+make test
+```
+
+The committed fixture is synthetic and small. Passing it validates the implemented layer equations and tensor order. It does not validate the official checkpoint.
 
 ## Implementation rule
 
