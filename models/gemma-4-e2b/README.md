@@ -1,6 +1,6 @@
 # Gemma 4 E2B on Intel Celeron J3455
 
-Status: scalar layer bring-up; no checkpoint-level inference.
+Status: bounded-profile complete-text-graph prototype measured; general inference not implemented.
 
 This document records the first model-specific validation path for `cpu-llms-in-c`. It covers the Gemma 4 E2B text graph, an Intel Celeron J3455 target, proposed transformations, memory budgets, and throughput estimates.
 
@@ -17,7 +17,7 @@ Statements in this document belong to one of four classes.
 | Analytical estimate | Derived from parameter counts, assumed formats, or bandwidth models |
 | Project measurement | Produced by code in this repository on controlled hardware |
 
-There are no checkpoint-level quality or performance measurements. The repository contains one miniature scalar layer correctness result; memory and throughput numbers below remain analytical estimates or design limits.
+The repository contains layer-level correctness results and one twelve-case bounded-profile complete-graph measurement. That smoke measurement is not a general quality result. Numbers explicitly identified as estimates or design limits remain unmeasured.
 
 ## 2. Target system
 
@@ -396,9 +396,10 @@ MTP may convert main-model verification into a small batch and improve arithmeti
 
 ## 9. Implementation plan
 
-Implementation has started with a deterministic miniature early-local decoder
-layer. This is a graph and numerical bring-up artifact. It is not checkpoint
-inference and is not a performance result.
+Implementation includes a deterministic miniature early-local decoder layer
+and one bounded-profile, complete-text-graph prototype. The first is a tensor
+boundary test. The second is a measured Q4 task artifact; it is not a general
+Gemma 4 runtime or a product safety evaluation.
 
 ### Implemented scalar slice
 
@@ -469,6 +470,70 @@ global proportional RoPE, shared K/V, final normalization, the LM head, or
 autoregressive decode. Exact machine-readable results are in
 `layer0-validation.json`.
 
+### Bounded task image and complete-graph measurement
+
+`task-profiles/hazard-v1.json` contains twelve explicit English observations:
+six marked `safe` and six marked `danger`. The compiler applies the pinned
+tokenizer and canonical chat framing offline. Across this finite profile there
+are 112 reachable token IDs and a maximum prompt length of 44 tokens.
+
+For those tokens, the compiler stores scaled input rows and fully folded PLE
+rows. It stores only the two label rows from the tied LM head. The 35-layer
+text graph uses signed group-128 Q4 matrices with BF16 scales. Late K/V weights
+ignored by the official shared-K/V forward path are not emitted.
+
+The generated image is 966,579,776 bytes. Of that total, 960,638,976 bytes are
+275 quantized matrix records and 5,940,800 bytes are token data, vectors,
+metadata, and alignment. Image SHA-256 is
+`c6fd92b85ceca8cbee757a6dc19dca036da894339bbf72c43e66ccff779a5168`.
+The image is generated and is not committed.
+
+The C runtime executes prompts sequentially, one token at a time. It implements
+all 35 layers, local and global attention, proportional global RoPE, late
+shared K/V, double-wide late MLPs, PLE, final RMSNorm, and constrained candidate
+logits. It accepts token sequences already compiled into the image. It does not
+contain a general tokenizer or accept arbitrary text.
+
+Measured on one Ubuntu x86-64 two-vCPU system with two OpenMP workers:
+
+| Measurement | Result |
+|---|---:|
+| Image size | 966,579,776 bytes |
+| Warm peak RSS | 948,224 KiB |
+| Warm swap | 0 |
+| Warm aggregate prefill | 0.5984 tokens/s over 493 tokens |
+| Warm aggregate one-step decode | 0.6205 tokens/s over 12 steps |
+| Cold case-0 prefill | 0.5282 tokens/s; 43 tokens in 81.40 s |
+| Cold case-0 one-step decode | 0.5757 tokens/s |
+| Cold peak RSS | 946,176 KiB |
+
+The warm twelve-case run reported zero filesystem inputs. Before the cold run,
+only the image received `POSIX_FADV_DONTNEED`. That run reported 1,886,584
+filesystem inputs and 325 major faults. Interpreting the Linux `ru_inblock`
+count as 512-byte blocks gives approximately 965.9 MB, close to one complete
+image read. This interpretation is an inference from the counter, not a direct
+storage-bandwidth trace.
+
+Every scalar token step visits all 960,638,976 quantized matrix bytes. At the
+measured aggregate rates, this is a logical matrix stream of approximately
+574.9 MB/s for prefill and 596.1 MB/s for decode. These are process memory
+access rates, not storage measurements. A deployment that rereads those bytes
+from an SD card for every token will be storage-bound; the measured steady
+state requires the mapped image to remain resident.
+
+The NumPy reference expands pinned BF16 weights and runs the same full text
+equations in FP32. It is not a Transformers BF16 execution. On the twelve
+written labels it produced 11/12. Q4 produced 12/12, with 11/12 decision
+agreement against the reference. The sole disagreement was
+`safe_empty_zone`: the reference selected `danger`, while Q4 selected `safe`.
+This does not establish that quantization improved quality; the decision crossed
+the two-label boundary.
+
+This smoke set is too small and too obvious to estimate safety quality. No
+adversarial, distribution-shift, calibration, free-text, long-context, or
+held-out evaluation has been run. Exact per-case logits and timings are in
+`task-profiles/hazard-v1-results.json`.
+
 ### Stage 0: pin model and oracle data
 
 1. Pin one Gemma 4 E2B IT checkpoint and tokenizer revision. Complete; hashes
@@ -491,14 +556,16 @@ autoregressive decode. Exact machine-readable results are in
 
 ### Stage 2: scalar C correctness runtime
 
-1. Implement the tokenizer and pinned chat format.
-2. Implement the packed-image loader.
+1. Implement the tokenizer and pinned chat format. The current compiler applies
+   them offline; the C runtime does not implement a general tokenizer.
+2. Implement the packed-image loader. Complete for `G4TASK01`.
 3. Implement scalar FP32 RMSNorm, RoPE, attention, MLP, PLE, and LM head.
-   RMSNorm, local RoPE, early-local attention, MLP, and the runtime PLE path
-   are implemented for miniature and real-weight layer-0 fixtures. The LM head
-   is not implemented.
-4. Run complete prefill and decode at context 16.
-5. Compare every declared tensor boundary with the oracle.
+   Complete for the bounded two-label path with Q4 matrix inputs.
+4. Run complete prefill and decode. Complete for twelve prompts up to 44 tokens
+   and one label-token decode step.
+5. Compare every declared tensor boundary with the oracle. Complete only for
+   the earlier layer-0 path. Full-graph comparison currently covers final
+   decisions and candidate logits, not every layer boundary.
 
 The scalar runtime is evaluated for correctness, not speed.
 

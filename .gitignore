@@ -3,3 +3,5 @@ __pycache__/
 /build/
 /tests/fixtures/gemma4_layer_official_*.bin
 *.safetensors.ranges.json
+*.g4task
+*.g4task.json

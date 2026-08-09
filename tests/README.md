@@ -85,3 +85,32 @@ This validation uses token IDs 2 and 1. It validates real layer-0 weights and
 the text PLE input path. It does not validate a safety-task prompt, tokenizer,
 later local layers, global attention, shared K/V, final normalization, the LM
 head, or autoregressive decode.
+
+## Bounded complete-graph task
+
+The `hazard-v1` profile is an end-to-end smoke workload, not a safety dataset.
+It is compiled remotely where the complete pinned checkpoint is stored:
+
+```sh
+python3 tools/evaluate_gemma4_task_reference.py \
+  --checkpoint "$CHECKPOINT" \
+  --config "$CONFIG" \
+  --tokenizer "$TOKENIZER" \
+  --profile models/gemma-4-e2b/task-profiles/hazard-v1.json \
+  --output hazard-v1-reference.json
+
+python3 tools/compile_gemma4_task_image.py \
+  --checkpoint "$CHECKPOINT" \
+  --config "$CONFIG" \
+  --tokenizer "$TOKENIZER" \
+  --profile models/gemma-4-e2b/task-profiles/hazard-v1.json \
+  --output hazard-v1-q4.g4task
+
+make OMPFLAGS=-fopenmp build/gemma4-task
+OMP_NUM_THREADS=2 build/gemma4-task hazard-v1-q4.g4task all
+```
+
+NumPy and `tokenizers` are compiler/reference dependencies. They are not C
+runtime dependencies. The generated image and reference output are not
+committed. Exact recorded measurements and limitations are in
+`models/gemma-4-e2b/task-profiles/hazard-v1-results.json`.

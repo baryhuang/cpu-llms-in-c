@@ -1,6 +1,6 @@
 # Compiler and Runtime Architecture
 
-Status: design phase; runtime implementation has not started.
+Status: the general framework remains a design; one bounded Gemma 4 E2B compiler/runtime prototype is implemented and measured.
 
 ## 1. Objective
 

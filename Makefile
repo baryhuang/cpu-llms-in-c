@@ -4,15 +4,17 @@ CPPFLAGS ?=
 CFLAGS ?= -O3 -std=c11 -Wall -Wextra -Wpedantic
 LDFLAGS ?=
 LDLIBS ?= -pthread
+OMPFLAGS ?=
 
 BUILD_DIR := build
 TARGET_PROBE := $(BUILD_DIR)/target-probe
 GEMMA4_LAYER_TEST := $(BUILD_DIR)/gemma4-layer-test
+GEMMA4_TASK := $(BUILD_DIR)/gemma4-task
 GEMMA4_LAYER_FIXTURE := tests/fixtures/gemma4_layer_v1.bin
 
 .PHONY: all clean fixture linux-tools test
 
-all: $(GEMMA4_LAYER_TEST)
+all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
 linux-tools: $(TARGET_PROBE)
 
@@ -31,8 +33,13 @@ $(GEMMA4_LAYER_TEST): tests/gemma4_layer_test.c src/gemma4_layer.c include/cpu_l
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Iinclude tests/gemma4_layer_test.c src/gemma4_layer.c \
 		-o $@ $(LDFLAGS) -lm
 
+$(GEMMA4_TASK): src/gemma4_task.c include/cpu_llms/gemma4_task.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -Iinclude src/gemma4_task.c \
+		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
 $(GEMMA4_LAYER_FIXTURE): tools/generate_gemma4_layer_fixture.py
 	python3 $< --output $@
 
 clean:
-	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST)
+	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)

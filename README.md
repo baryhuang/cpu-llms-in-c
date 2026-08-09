@@ -6,15 +6,14 @@ The compiler takes a model checkpoint, a target CPU profile, deployment constrai
 
 ## Status
 
-Early scalar bring-up.
+Bounded-profile scalar prototype.
 
-- A framework-independent scalar C implementation of one Gemma 4 early local decoder layer is present.
-- The layer passes both a committed miniature fixture and an uncommitted real-weight Gemma 4 E2B layer-0 fixture at ten tensor boundaries on macOS and Linux x86-64.
-- The offline tools can selectively read and range-fetch safetensors records without downloading an unused multimodal checkpoint in full.
-- No tokenizer, runtime checkpoint loader, complete model runtime, or token decoder has been implemented.
-- No model has passed end-to-end correctness validation.
-- No performance result in this repository is a benchmark.
-- Memory and throughput figures are engineering estimates until measured on the target hardware.
+- The offline compiler emits a 966,579,776-byte task image from the pinned Gemma 4 E2B IT checkpoint. It retains 112 profile-reachable tokens, folds their PLE rows, quantizes 275 executed matrices to group-128 Q4, and omits the unused multimodal graph and late shared-K/V weights.
+- The C11 runtime executes all 35 text layers, local and global RoPE, 15 physical K/V states, late shared K/V, double-wide late MLPs, PLE, final normalization, and a two-row constrained LM head. It has no inference-framework runtime dependency.
+- On one measured Ubuntu x86-64 two-vCPU system, the twelve-case warm run used 948,224 KiB peak RSS with no swap. Aggregate sequential prefill was 0.598 tokens/s and one-step decode was 0.621 tokens/s.
+- The twelve obvious smoke examples produced 12/12 Q4 decisions against their written labels. The independent BF16-weight NumPy reference produced 11/12, and Q4/reference decision agreement was 11/12. This is not a safety benchmark.
+- A general runtime tokenizer, arbitrary free-text input, fixed-prefix snapshots, tensor-by-tensor full-graph differential tests, SIMD kernels, and a real held-out safety evaluation are not implemented.
+- The earlier real-weight layer-0 test still passes ten declared tensor boundaries with maximum absolute error 0.
 
 ## Scope
 
@@ -67,7 +66,10 @@ This target was selected to expose memory, instruction-set, storage, and schedul
         ├── README.md
         ├── layer0-ranges.json
         ├── layer0-validation.json
-        └── pins.json
+        ├── pins.json
+        └── task-profiles/
+            ├── hazard-v1.json
+            └── hazard-v1-results.json
 ```
 
 - [Compiler and runtime architecture](docs/ARCHITECTURE.md)
@@ -81,7 +83,7 @@ make fixture
 make test
 ```
 
-The committed fixture is synthetic and small. A separate ignored fixture validates layer 0 with pinned official weights and real embedding/PLE rows. Neither result is end-to-end model validation.
+The committed fixture is synthetic and small. A separate ignored fixture validates layer 0 with pinned official weights and real embedding/PLE rows. The bounded task profile additionally exercises the complete text graph, but it does not replace full tensor-boundary or product-quality validation.
 
 ## Implementation rule
 
