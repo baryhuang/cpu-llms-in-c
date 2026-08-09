@@ -33,3 +33,52 @@ make test
 ```
 
 This fixture does not contain official model weights. It does not test global proportional RoPE, shared K/V layers, checkpoint loading, tokenization, final normalization, LM-head evaluation, or decoding.
+
+## Official layer-0 fixture
+
+`tools/fetch_safetensors_ranges.py` can create a sparse source file containing
+only selected ranges from the pinned checkpoint. For the layer-0 validation it
+fetches 73,443,610 bytes instead of the 10,246,621,918-byte multimodal file.
+
+`tools/export_gemma4_layer_fixture.py` then constructs two real token inputs
+from the main embedding, token PLE, context PLE projection, and PLE projection
+normalization. It expands the selected BF16 weights to FP32 and emits the same
+fixture format used by the C runner. NumPy is an offline exporter dependency;
+it is not a runtime dependency.
+
+The generated fixture is 144,857,148 bytes and is excluded from Git. Its
+SHA-256 is
+`2844d6c61f46d9b5a7ec51b89210c137c1b94aee7a098c31e4716a0fafe0a732`.
+Exact selectors and results are recorded in
+`models/gemma-4-e2b/layer0-validation.json`.
+
+Reproduce the source extraction and export:
+
+```sh
+python3 tools/fetch_safetensors_ranges.py \
+  --spec models/gemma-4-e2b/layer0-ranges.json \
+  --output /tmp/gemma4-e2b-layer0.safetensors
+
+curl -LfsS \
+  https://huggingface.co/google/gemma-4-E2B-it/resolve/3e22461f65e89153144f8adb70e3b8c2cc9845a7/config.json \
+  -o /tmp/gemma4-e2b-config.json
+
+python3 tools/export_gemma4_layer_fixture.py \
+  --checkpoint /tmp/gemma4-e2b-layer0.safetensors \
+  --config /tmp/gemma4-e2b-config.json \
+  --output tests/fixtures/gemma4_layer_official_e2b_layer0_tokens_2_1.bin \
+  --token-ids 2,1 \
+  --skip-checkpoint-sha256
+
+build/gemma4-layer-test \
+  tests/fixtures/gemma4_layer_official_e2b_layer0_tokens_2_1.bin
+```
+
+`--skip-checkpoint-sha256` is required for the sparse source because unfetched
+ranges are holes. The complete checkpoint SHA-256 is therefore not claimed as
+locally verified.
+
+This validation uses token IDs 2 and 1. It validates real layer-0 weights and
+the text PLE input path. It does not validate a safety-task prompt, tokenizer,
+later local layers, global attention, shared K/V, final normalization, the LM
+head, or autoregressive decode.

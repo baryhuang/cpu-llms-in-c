@@ -1,2 +1,5 @@
 .DS_Store
+__pycache__/
 /build/
+/tests/fixtures/gemma4_layer_official_*.bin
+*.safetensors.ranges.json

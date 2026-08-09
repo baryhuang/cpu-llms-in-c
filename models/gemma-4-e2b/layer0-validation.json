@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-10",
+  "source": {
+    "repository": "google/gemma-4-E2B-it",
+    "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7",
+    "checkpoint_logical_bytes": 10246621918,
+    "checkpoint_sha256": "2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550",
+    "checkpoint_hash_status": "pinned upstream hash; full file was not downloaded locally"
+  },
+  "range_extraction": {
+    "fetched_bytes": 73443610,
+    "header_sha256": "2f73f917a34fcf7c45554e83a8efb28bb016bdf38a48d2506d928411d4962f1a",
+    "layer": 0,
+    "full_layer_tensors": 17,
+    "additional_full_tensors": 1,
+    "additional_slices": 4
+  },
+  "input": {
+    "token_ids": [2, 1],
+    "sequence_length": 2,
+    "components": [
+      "main token embedding",
+      "token-identity PLE",
+      "layer-0 context PLE projection",
+      "PLE projection RMSNorm"
+    ]
+  },
+  "layer": {
+    "hidden_size": 1536,
+    "query_heads": 8,
+    "kv_heads": 1,
+    "head_dim": 256,
+    "intermediate_size": 6144,
+    "ple_size": 256,
+    "sliding_window": 512,
+    "layer_scalar": 0.017822265625
+  },
+  "fixture": {
+    "bytes": 144857148,
+    "sha256": "2844d6c61f46d9b5a7ec51b89210c137c1b94aee7a098c31e4716a0fafe0a732",
+    "committed": false
+  },
+  "boundaries": {
+    "normalized_input": 3072,
+    "query": 4096,
+    "key": 512,
+    "value": 512,
+    "attention": 3072,
+    "after_attention": 3072,
+    "mlp": 3072,
+    "after_mlp": 3072,
+    "ple": 3072,
+    "output": 3072
+  },
+  "results": [
+    {
+      "environment": "macOS arm64",
+      "result": "PASS",
+      "boundaries_passed": 10,
+      "maximum_absolute_error": 0.0,
+      "wall_seconds": 0.08,
+      "maximum_resident_bytes": 146407424
+    },
+    {
+      "environment": "Ubuntu 24.04 x86-64, 2 vCPU",
+      "binary_sha256": "262d7291bcd1d056a3ee63ec63a47218c0e58ea20a016aef466d7db727772574",
+      "result": "PASS",
+      "boundaries_passed": 10,
+      "maximum_absolute_error": 0.0,
+      "wall_seconds": 0.21,
+      "maximum_resident_bytes": 145752064,
+      "swap_events": 0
+    }
+  ],
+  "classification": "correctness measurement; not an inference benchmark"
+}

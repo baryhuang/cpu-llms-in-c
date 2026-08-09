@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "url": "https://huggingface.co/google/gemma-4-E2B-it/resolve/3e22461f65e89153144f8adb70e3b8c2cc9845a7/model.safetensors",
+  "tensor_prefixes": [
+    "model.language_model.layers.0."
+  ],
+  "tensors": [
+    "model.language_model.per_layer_projection_norm.weight"
+  ],
+  "slices": [
+    {
+      "tensor": "model.language_model.embed_tokens.weight",
+      "element_offset": 1536,
+      "element_count": 3072
+    },
+    {
+      "tensor": "model.language_model.embed_tokens_per_layer.weight",
+      "element_offset": 8960,
+      "element_count": 256
+    },
+    {
+      "tensor": "model.language_model.embed_tokens_per_layer.weight",
+      "element_offset": 17920,
+      "element_count": 256
+    },
+    {
+      "tensor": "model.language_model.per_layer_model_projection.weight",
+      "element_offset": 0,
+      "element_count": 393216
+    }
+  ],
+  "maximum_gap": 65536,
+  "chunk_bytes": 1048576,
+  "workers": 16
+}

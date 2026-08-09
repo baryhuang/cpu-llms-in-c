@@ -419,7 +419,7 @@ PLE output normalization and residual
 layer scalar
 ```
 
-The fixture uses three positions, hidden size 8, two query heads, one K/V
+The committed fixture uses three positions, hidden size 8, two query heads, one K/V
 head, head dimension 4, intermediate size 12, PLE size 4, and sliding window
 2. It is deliberately too small for performance measurement.
 
@@ -436,11 +436,35 @@ The validated Linux binary SHA-256 was
 `262d7291bcd1d056a3ee63ec63a47218c0e58ea20a016aef466d7db727772574`;
 the binary is a generated artifact and is not committed.
 
-This test validates the C implementation against the repository's independent
-scalar fixture generator. It does not yet validate official Gemma 4 weights or
-the pinned Transformers implementation. Global proportional RoPE, layers with
-shared K/V, checkpoint loading, tokenization, final normalization, the LM head,
-and autoregressive decode remain unimplemented.
+### Official layer-0 weight validation
+
+The offline range fetcher read 73,443,610 bytes from the pinned
+10,246,621,918-byte checkpoint. It selected all 17 layer-0 records, the PLE
+projection normalization, two main-embedding rows, two token-PLE slices, and
+the layer-0 block of the context PLE projection. The complete checkpoint was
+not downloaded or independently hashed; its SHA-256 remains a pinned upstream
+fact.
+
+The input token IDs were 2 and 1. The exported layer has the published E2B
+dimensions: hidden size 1536, eight query heads, one K/V head, head dimension
+256, intermediate size 6144, PLE size 256, and sliding window 512. The actual
+checkpoint layer scalar is 0.017822265625.
+
+The 144,857,148-byte fixture has SHA-256
+`2844d6c61f46d9b5a7ec51b89210c137c1b94aee7a098c31e4716a0fafe0a732`.
+Independent local and Linux exports produced the same hash. The scalar C runner
+passed all ten tensor boundaries with maximum absolute error 0 on both systems.
+The Linux correctness run used 145,752,064 bytes maximum RSS, reported no swap,
+and completed in 0.21 seconds. The macOS run used 146,407,424 bytes maximum RSS
+and completed in 0.08 seconds. These single runs are correctness observations,
+not inference benchmarks or token-throughput measurements.
+
+The oracle expands the official BF16 records to FP32 and evaluates the pinned
+layer equations with NumPy. It is not a direct BF16 Transformers forward pass.
+The test does not validate a safety-task prompt, tokenizer, later local layers,
+global proportional RoPE, shared K/V, final normalization, the LM head, or
+autoregressive decode. Exact machine-readable results are in
+`layer0-validation.json`.
 
 ### Stage 0: pin model and oracle data
 
@@ -468,7 +492,8 @@ and autoregressive decode remain unimplemented.
 2. Implement the packed-image loader.
 3. Implement scalar FP32 RMSNorm, RoPE, attention, MLP, PLE, and LM head.
    RMSNorm, local RoPE, early-local attention, MLP, and the runtime PLE path
-   are implemented for the miniature fixture. The LM head is not implemented.
+   are implemented for miniature and real-weight layer-0 fixtures. The LM head
+   is not implemented.
 4. Run complete prefill and decode at context 16.
 5. Compare every declared tensor boundary with the oracle.
 

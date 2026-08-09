@@ -19,6 +19,7 @@ linux-tools: $(TARGET_PROBE)
 fixture: $(GEMMA4_LAYER_FIXTURE)
 
 test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE)
+	python3 -m unittest discover -s tests -p 'test_*.py'
 	$(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE)
 
 $(TARGET_PROBE): bench/target_probe.c

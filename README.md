@@ -9,8 +9,9 @@ The compiler takes a model checkpoint, a target CPU profile, deployment constrai
 Early scalar bring-up.
 
 - A framework-independent scalar C implementation of one Gemma 4 early local decoder layer is present.
-- The implemented layer passes a deterministic miniature fixture at ten tensor boundaries on macOS and Linux x86-64.
-- No tokenizer, checkpoint loader, complete model runtime, or token decoder has been implemented.
+- The layer passes both a committed miniature fixture and an uncommitted real-weight Gemma 4 E2B layer-0 fixture at ten tensor boundaries on macOS and Linux x86-64.
+- The offline tools can selectively read and range-fetch safetensors records without downloading an unused multimodal checkpoint in full.
+- No tokenizer, runtime checkpoint loader, complete model runtime, or token decoder has been implemented.
 - No model has passed end-to-end correctness validation.
 - No performance result in this repository is a benchmark.
 - Memory and throughput figures are engineering estimates until measured on the target hardware.
@@ -64,6 +65,8 @@ This target was selected to expose memory, instruction-set, storage, and schedul
 └── models/
     └── gemma-4-e2b/
         ├── README.md
+        ├── layer0-ranges.json
+        ├── layer0-validation.json
         └── pins.json
 ```
 
@@ -78,7 +81,7 @@ make fixture
 make test
 ```
 
-The committed fixture is synthetic and small. Passing it validates the implemented layer equations and tensor order. It does not validate the official checkpoint.
+The committed fixture is synthetic and small. A separate ignored fixture validates layer 0 with pinned official weights and real embedding/PLE rows. Neither result is end-to-end model validation.
 
 ## Implementation rule
 
