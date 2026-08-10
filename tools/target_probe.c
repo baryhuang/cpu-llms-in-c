@@ -13,6 +13,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(__aarch64__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#endif
+
 #define DEFAULT_MIB 512U
 #define DEFAULT_SECONDS 2.0
 #define MAX_BENCH_THREADS 4
@@ -195,6 +200,35 @@ static void print_usage(const char *program)
     fprintf(stderr, "usage: %s [--mib N] [--seconds N]\n", program);
 }
 
+static void print_isa(void)
+{
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_cpu_init();
+    printf("isa arch=x86 sse4_2=%d avx=%d avx2=%d fma=%d\n",
+           __builtin_cpu_supports("sse4.2") != 0,
+           __builtin_cpu_supports("avx") != 0,
+           __builtin_cpu_supports("avx2") != 0,
+           __builtin_cpu_supports("fma") != 0);
+#elif defined(__aarch64__)
+    const unsigned long hwcap = getauxval(AT_HWCAP);
+    int asimd = 0;
+    int asimddp = 0;
+    int sve = 0;
+#ifdef HWCAP_ASIMD
+    asimd = (hwcap & HWCAP_ASIMD) != 0;
+#endif
+#ifdef HWCAP_ASIMDDP
+    asimddp = (hwcap & HWCAP_ASIMDDP) != 0;
+#endif
+#ifdef HWCAP_SVE
+    sve = (hwcap & HWCAP_SVE) != 0;
+#endif
+    printf("isa arch=aarch64 asimd=%d asimddp=%d sve=%d\n", asimd, asimddp, sve);
+#else
+    printf("isa arch=unknown\n");
+#endif
+}
+
 int main(int argc, char **argv)
 {
     unsigned long long requested_mib = DEFAULT_MIB;
@@ -242,7 +276,6 @@ int main(int argc, char **argv)
     }
     (void)madvise(buffer, bytes, MADV_HUGEPAGE);
 
-    __builtin_cpu_init();
     printf("target_probe_version=1\n");
     printf("logical_cpus=%ld\n", logical_cpus);
     printf("page_size_bytes=%ld\n", page_size);
@@ -250,11 +283,7 @@ int main(int argc, char **argv)
            (uint64_t)system_info.totalram * (uint64_t)system_info.mem_unit);
     printf("buffer_bytes=%zu\n", bytes);
     printf("duration_seconds=%.3f\n", duration_seconds);
-    printf("isa sse4_2=%d avx=%d avx2=%d fma=%d\n",
-           __builtin_cpu_supports("sse4.2") != 0,
-           __builtin_cpu_supports("avx") != 0,
-           __builtin_cpu_supports("avx2") != 0,
-           __builtin_cpu_supports("fma") != 0);
+    print_isa();
 
     max_threads = logical_cpus < MAX_BENCH_THREADS ? (int)logical_cpus : MAX_BENCH_THREADS;
     if (run_read_benchmark(buffer, bytes, 1, duration_seconds) != 0) {

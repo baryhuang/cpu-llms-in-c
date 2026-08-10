@@ -8,7 +8,7 @@ Everything is classified along two axes, model first, CPU second. A released art
 
 | Path | Contents |
 |---|---|
-| [`runtime/`](runtime/) | Shared model-independent tooling (hardware probe) |
+| [`tools/`](tools/) | On-target probe: ISA, topology, and measured memory bandwidth for CPU pins |
 | [`compiler/`](compiler/) | Offline compiler and independent reference tools |
 | `models/<model>/` | Model axis: pins, profile, graph record, reference outputs, model-only optimizations |
 | `models/<model>/targets/generic/` | The model's C runtime with model-axis optimizations only, portable to any CPU |

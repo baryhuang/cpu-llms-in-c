@@ -115,7 +115,8 @@ Smoke examples are recorded as smoke examples. They do not establish product qua
 A released artifact is one point in a cross product with two axes: one pinned model and one pinned CPU target. The classification order is fixed — model first, CPU second:
 
 ```text
-runtime/                          shared model-independent runtime tooling (hardware probe)
+tools/                            shared on-target tooling: hardware and memory-bandwidth probe
+                                  used to pin every CPU target
 compiler/                         offline compiler and reference tools
 models/<model>/                   model axis: profile, pins, graph record, reference outputs
 models/<model>/targets/generic/   the model's C runtime with model-axis optimizations only,

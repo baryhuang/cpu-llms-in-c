@@ -24,7 +24,7 @@ test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE)
 	python3 -m unittest discover -s tests -p 'test_*.py'
 	$(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE)
 
-$(TARGET_PROBE): runtime/target_probe.c
+$(TARGET_PROBE): tools/target_probe.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
 
