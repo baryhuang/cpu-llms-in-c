@@ -83,6 +83,7 @@ Same gates as the Gemma record: independent NumPy BF16 reference with per-tensor
 | Answer candidates are single tokens | `safe`=18112, `danger`=30416, `yes`, `no`, `0`, `1`, `A`-`D`, `安全`=96520, `危险`=98693 — all single tokens (pinned tokenizer, `tokenizers` 0.23.1) |
 | NumPy reference matches the oracle | [`compiler/qwen35_reference.py`](../../compiler/qwen35_reference.py) matches the pinned transformers `Qwen3_5TextModel` forward to 2e-4 on a tiny random hybrid model ([`tests/test_qwen35_reference.py`](../../tests/test_qwen35_reference.py)) |
 | C layer matches the fixture exactly | [`targets/generic/qwen35_layer.c`](targets/generic/qwen35_layer.c) matches all 17 declared boundaries of the committed DeltaNet + full-attention fixture with max_abs 0; the fixture itself is tied back to the NumPy reference ([`tests/test_qwen35_fixture.py`](../../tests/test_qwen35_fixture.py)) |
+| C runtime matches the reference on real weights | [`targets/generic/qwen35_task.c`](targets/generic/qwen35_task.c) executing the compiled image reproduces the NumPy-reference answer logits to ~1e-4 on all four smoke cases (4/4 decisions, margins >= 1.0); ~9.5 prefill tokens/s with scalar kernels, 4 threads, on the x86-64 dev machine — an informal dev number, not a target benchmark |
 
 ## Open items
 

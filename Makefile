@@ -55,5 +55,11 @@ $(QWEN35_LAYER_TEST): tests/qwen35_layer_test.c $(QWEN35_GENERIC)/qwen35_layer.c
 $(QWEN35_LAYER_FIXTURE): compiler/generate_qwen35_layer_fixture.py
 	python3 $< --output $@
 
+QWEN35_TASK := $(BUILD_DIR)/qwen35-task
+
+$(QWEN35_TASK): $(QWEN35_GENERIC)/qwen35_task.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) $< -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
 clean:
 	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
