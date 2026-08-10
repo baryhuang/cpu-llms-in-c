@@ -25,6 +25,31 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 
 The Gemma artifact predates the prompt-defined output contract and compiles its two labels in — now the restricted special case. The Qwen artifact carries the default contract: runtime tokenizer, full output head, per-call answer sets.
 
+## Memory is the governing factor
+
+Decode must stream every visited weight byte from DRAM for each token, so the hard ceiling is:
+
+```text
+tokens/s  ≤  usable memory bandwidth / weight bytes visited per token
+```
+
+| Quantity | Gemma 4 E2B on dev x86 (measured) | Qwen3.5-0.8B on A113X (estimate) |
+|---|---:|---:|
+| Weight bytes visited per decode token | 960 MB | ~290 MB |
+| Usable DRAM bandwidth | not the limit yet | ~1.5-3 GB/s (to be probed) |
+| Achieved streaming rate | 575 MB/s (scalar-kernel bound) | — |
+| Resulting decode rate | 0.598 tokens/s measured | ~5-10 tokens/s ceiling |
+| Image + state vs RAM | 966 MB + ~50 MB, fits, zero swap | ~420 MB + ~50 MB vs 1-2 GB, fits |
+
+Two regimes follow, and they map exactly onto the two optimization axes:
+
+| Regime | Binding constraint | Lever | Axis |
+|---|---|---|---|
+| Compute-bound (current scalar kernel) | 575 MB/s achieved vs multi-GB/s available | faster kernels, more threads | CPU |
+| Bandwidth-bound (after SIMD kernels) | DRAM bandwidth itself | fewer bytes per token: smaller model, answer-set scoring, lower bits | model |
+
+Capacity is a gate, not a tunable: the image and state must stay resident with zero swap — exceeding RAM means paging from eMMC at ~100-300 MB/s and an order-of-magnitude collapse.
+
 ## Optimization roadmap
 
 Each step is an analytical estimate, not a benchmark result; factors do not multiply cleanly and the stack is capped by the target's memory bandwidth. A step lands only after tensor-level correctness tests for the code it touches.
