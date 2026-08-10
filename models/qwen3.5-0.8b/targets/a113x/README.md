@@ -18,6 +18,23 @@ Year evidence: [Amlogic OpenLinux release notes mirror](https://manuals.plus/m/6
 
 To finalize: cache sizes, measured memory bandwidth, page size, and thermal behavior from an on-device probe. Gates (RSS ceiling, zero swap, latency targets) are set after the first baseline run.
 
+## Pre-device verification (done on the dev machine)
+
+| Check | Result |
+|---|---|
+| Cross-compile, runtime + probe | clean with `-Wall -Wextra -Wpedantic`, static aarch64 binaries (musl toolchain) |
+| Probe under qemu-aarch64 | runs; reports the aarch64 ISA path (`asimd/asimddp/sve` reflect qemu, not the A53) |
+| Runtime under qemu-aarch64 | full inference on the compiled image; logits match the x86 build to ~1e-5, correct decision — emulated timing is meaningless and not recorded |
+
+Cross-compile recipe (single-file static binaries, no libc dependency on the device):
+
+```sh
+aarch64-linux-musl-gcc -O3 -std=c11 -static -fopenmp \
+  models/qwen3.5-0.8b/targets/generic/qwen35_task.c -o qwen35-task-aarch64 -lm
+aarch64-linux-musl-gcc -O3 -std=c11 -static tools/target_probe.c \
+  -o target-probe-aarch64 -lpthread
+```
+
 ## CPU-axis optimizations (this target only)
 
 In order of execution. Estimates are analytical; none is a benchmark result.
