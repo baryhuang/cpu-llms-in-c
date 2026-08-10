@@ -18,10 +18,10 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 
 ## Status
 
-| Model x CPU | Status | Verification | Measured performance | Record |
-|---|---|---|---|---|
-| Gemma 4 E2B x two-vCPU x86-64 dev machine | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
-| Qwen3.5-0.8B x Amlogic A113X (4x Cortex-A53, 1-2 GB) | planned | nothing pinned yet | nothing measured yet | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) |
+| Model | CPU | Status | Verification | Measured performance | Record |
+|---|---|---|---|---|---|
+| Gemma 4 E2B | two-vCPU x86-64 dev machine (unpinned) | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
+| Qwen3.5-0.8B | Amlogic A113X (4x Cortex-A53, 1-2 GB) | planned | nothing pinned yet | nothing measured yet | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) |
 
 The Gemma artifact predates the prompt-defined output contract and compiles its two labels in — now the restricted special case. The Qwen artifact carries the default contract: runtime tokenizer, full output head, per-call answer sets.
 
