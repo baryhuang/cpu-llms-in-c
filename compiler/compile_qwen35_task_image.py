@@ -46,7 +46,7 @@ except ImportError:
 
 
 MAGIC = b"QW35TSK1"
-VERSION = 1
+VERSION = 2
 GROUP_SIZE = 128
 TEXT_PREFIX = "model.language_model."
 HEADER = struct.Struct("<8s8I4Q")
@@ -108,10 +108,92 @@ def classify(name: str, shape: tuple[int, ...]) -> int:
     return KIND_F32
 
 
+def bytes_to_unicode() -> dict[int, str]:
+    """GPT-2 byte-level mapping from raw bytes to printable unicode chars."""
+    printable = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(0xA1, 0xAD))
+        + list(range(0xAE, 0x100))
+    )
+    mapped = printable[:]
+    extra = 0
+    for byte in range(256):
+        if byte not in printable:
+            printable.append(byte)
+            mapped.append(256 + extra)
+            extra += 1
+    return {byte: chr(char) for byte, char in zip(printable, mapped)}
+
+
+def build_tokenizer_entries(tokenizer_path: Path) -> list[tuple[str, int, np.ndarray]]:
+    """Pack vocab byte strings, ranked merges, and special tokens for the C runtime."""
+    spec = json.loads(tokenizer_path.read_text())
+    if spec["model"]["type"] != "BPE":
+        raise ValueError("expected a BPE tokenizer")
+    unicode_to_byte = {char: byte for byte, char in bytes_to_unicode().items()}
+
+    def token_to_bytes(token: str) -> bytes:
+        return bytes(unicode_to_byte[char] for char in token)
+
+    vocab: dict[str, int] = spec["model"]["vocab"]
+    added = spec.get("added_tokens", [])
+    token_count = max(
+        max(vocab.values()), max((t["id"] for t in added), default=0)
+    ) + 1
+
+    token_bytes: list[bytes] = [b""] * token_count
+    for token, token_id in vocab.items():
+        token_bytes[token_id] = token_to_bytes(token)
+    for token in added:
+        token_bytes[token["id"]] = token["content"].encode("utf-8")
+
+    offsets = np.zeros(token_count + 1, dtype=np.uint32)
+    for index, data in enumerate(token_bytes):
+        offsets[index + 1] = offsets[index] + len(data)
+    blob = np.frombuffer(b"".join(token_bytes), dtype=np.uint8)
+
+    byte_tokens = np.full(256, 0xFFFFFFFF, dtype=np.uint32)
+    for token_id, data in enumerate(token_bytes):
+        if len(data) == 1:
+            if byte_tokens[data[0]] == 0xFFFFFFFF:
+                byte_tokens[data[0]] = token_id
+    if int((byte_tokens == 0xFFFFFFFF).sum()) != 0:
+        raise ValueError("byte-level vocabulary is missing single-byte tokens")
+
+    merges = []
+    for rank, merge in enumerate(spec["model"]["merges"]):
+        left, right = merge.split(" ") if isinstance(merge, str) else merge
+        merged = left + right
+        merges.append((vocab[left], vocab[right], vocab[merged], rank))
+    merges.sort(key=lambda entry: (entry[0], entry[1]))
+    merge_array = np.asarray(merges, dtype=np.uint32)
+
+    specials = sorted(
+        (t for t in added if t.get("special")), key=lambda t: -len(t["content"])
+    )
+    special_ids = np.asarray([t["id"] for t in specials], dtype=np.uint32)
+    special_strings = [t["content"].encode("utf-8") for t in specials]
+    special_offsets = np.zeros(len(specials) + 1, dtype=np.uint32)
+    for index, data in enumerate(special_strings):
+        special_offsets[index + 1] = special_offsets[index] + len(data)
+    special_blob = np.frombuffer(b"".join(special_strings), dtype=np.uint8)
+
+    return [
+        ("tokenizer.token_offsets", KIND_U32, offsets),
+        ("tokenizer.token_bytes", KIND_U8, blob),
+        ("tokenizer.byte_tokens", KIND_U32, byte_tokens),
+        ("tokenizer.merges", KIND_U32, merge_array),
+        ("tokenizer.special_ids", KIND_U32, special_ids),
+        ("tokenizer.special_offsets", KIND_U32, special_offsets),
+        ("tokenizer.special_bytes", KIND_U8, special_blob),
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--tokenizer", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument(
@@ -132,6 +214,8 @@ def main() -> None:
             raise ValueError("checkpoint hash does not match the pinned revision")
     if sha256_file(args.config) != pins["model"]["files"]["config.json"]:
         raise ValueError("config does not match the pinned revision")
+    if sha256_file(args.tokenizer) != pins["model"]["files"]["tokenizer.json"]:
+        raise ValueError("tokenizer does not match the pinned revision")
 
     config = json.loads(args.config.read_text())["text_config"]
     if (
@@ -165,6 +249,13 @@ def main() -> None:
             else:
                 byte_count = int(np.prod(shape)) * 4
             entries.append(Entry(short, kind, shape, byte_count=byte_count))
+
+        raw_payloads: dict[str, bytes] = {}
+        for name, kind, array in build_tokenizer_entries(args.tokenizer):
+            dtype = "<u4" if kind == KIND_U32 else np.uint8
+            payload = np.ascontiguousarray(array, dtype=dtype).tobytes()
+            entries.append(Entry(name, kind, tuple(array.shape), byte_count=len(payload)))
+            raw_payloads[name] = payload
 
         directory_offset = HEADER.size
         data_offset = align(directory_offset + len(entries) * DESCRIPTOR.size)
@@ -228,6 +319,9 @@ def main() -> None:
                     )
                 else:
                     output.write(array.astype("<f4").tobytes(order="C"))
+            for entry in entries[len(selected) :]:
+                output.seek(entry.offset)
+                output.write(raw_payloads[entry.name])
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, args.output)
@@ -251,7 +345,8 @@ def main() -> None:
             for entry in entries
             if entry.kind in (KIND_Q4_GROUPED, KIND_Q8_GROUPED)
         ),
-        "tokenizer_tables": "not included in image v1; runtime accepts token ids",
+        "tokenizer_sha256": pins["model"]["files"]["tokenizer.json"],
+        "tokenizer_tables": "vocab byte strings, ranked merges, byte map, special tokens",
         "elapsed_seconds": time.monotonic() - started,
     }
     manifest_path = args.manifest or args.output.with_suffix(args.output.suffix + ".json")

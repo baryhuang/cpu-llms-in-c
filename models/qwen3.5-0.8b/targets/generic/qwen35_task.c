@@ -129,11 +129,26 @@ struct layer {
     const struct descriptor *down_proj;
 };
 
+struct tokenizer {
+    int present;
+    uint32_t token_count;
+    const uint32_t *token_offsets;
+    const uint8_t *token_bytes;
+    const uint32_t *byte_tokens;
+    const uint32_t *merges; /* [merge_count][4] = left,right,merged,rank sorted by (l,r) */
+    uint32_t merge_count;
+    const uint32_t *special_ids;
+    const uint32_t *special_offsets;
+    const uint8_t *special_bytes;
+    uint32_t special_count;
+};
+
 struct model {
     struct mapped_image image;
     struct layer layers[LAYERS];
     const struct descriptor *embed;
     const struct descriptor *final_norm;
+    struct tokenizer tokenizer;
 };
 
 struct state {
@@ -225,7 +240,8 @@ static int map_image(const char *path, struct mapped_image *image)
         return -1;
     }
     image->header = (const struct image_header *)image->base;
-    if (memcmp(image->header->magic, "QW35TSK1", 8) != 0 || image->header->version != 1U ||
+    if (memcmp(image->header->magic, "QW35TSK1", 8) != 0 ||
+        (image->header->version != 1U && image->header->version != 2U) ||
         image->header->group_size != GROUP || image->header->file_bytes != image->bytes ||
         image->header->hidden != HIDDEN || image->header->layer_count != LAYERS ||
         image->header->full_interval != FULL_INTERVAL) {
@@ -373,6 +389,33 @@ static const struct descriptor *need(const struct mapped_image *image, const cha
     return find_entry(image, name);
 }
 
+static void resolve_tokenizer(struct model *model)
+{
+    const struct mapped_image *image = &model->image;
+    const struct descriptor *offsets = find_entry(image, "tokenizer.token_offsets");
+    const struct descriptor *blob = find_entry(image, "tokenizer.token_bytes");
+    const struct descriptor *bytes_map = find_entry(image, "tokenizer.byte_tokens");
+    const struct descriptor *merges = find_entry(image, "tokenizer.merges");
+    const struct descriptor *special_ids = find_entry(image, "tokenizer.special_ids");
+    const struct descriptor *special_offsets = find_entry(image, "tokenizer.special_offsets");
+    const struct descriptor *special_bytes = find_entry(image, "tokenizer.special_bytes");
+    if (!offsets || !blob || !bytes_map || !merges || !special_ids || !special_offsets ||
+        !special_bytes || merges->rank != 2U || merges->shape[1] != 4U) {
+        return;
+    }
+    model->tokenizer.present = 1;
+    model->tokenizer.token_count = offsets->shape[0] - 1U;
+    model->tokenizer.token_offsets = entry_data(image, offsets);
+    model->tokenizer.token_bytes = entry_data(image, blob);
+    model->tokenizer.byte_tokens = entry_data(image, bytes_map);
+    model->tokenizer.merges = entry_data(image, merges);
+    model->tokenizer.merge_count = merges->shape[0];
+    model->tokenizer.special_ids = entry_data(image, special_ids);
+    model->tokenizer.special_offsets = entry_data(image, special_offsets);
+    model->tokenizer.special_bytes = entry_data(image, special_bytes);
+    model->tokenizer.special_count = special_ids->shape[0];
+}
+
 static int resolve_model(const char *path, struct model *model)
 {
     memset(model, 0, sizeof(*model));
@@ -385,6 +428,7 @@ static int resolve_model(const char *path, struct model *model)
         model->final_norm == NULL || model->final_norm->kind != KIND_F32) {
         return -1;
     }
+    resolve_tokenizer(model);
     for (uint32_t index = 0; index < LAYERS; ++index) {
         struct layer *layer = &model->layers[index];
         layer->is_full = (index + 1U) % FULL_INTERVAL == 0U;
@@ -696,6 +740,239 @@ static void free_state(struct state *state)
     memset(state, 0, sizeof(*state));
 }
 
+/* --- tokenizer ---------------------------------------------------------- */
+
+static int is_ws(uint8_t c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v';
+}
+
+static int is_digit_ascii(uint8_t c)
+{
+    return c >= '0' && c <= '9';
+}
+
+/* ASCII letters plus every non-ASCII byte. This approximates \p{L}\p{M} from
+ * the pinned pretokenizer regex: multi-byte letters and combining marks land
+ * in letter runs, at the cost of classifying non-ASCII punctuation the same
+ * way. The parity test against the pinned tokenizer bounds the deviation. */
+static int is_letterish(uint8_t c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c >= 0x80;
+}
+
+static size_t contraction_length(const uint8_t *text, size_t length, size_t p)
+{
+    if (text[p] != '\'' || p + 1 >= length) {
+        return 0;
+    }
+    const uint8_t one = text[p + 1] | 0x20;
+    if (one == 's' || one == 't' || one == 'm' || one == 'd') {
+        return 2;
+    }
+    if (p + 2 < length) {
+        const uint8_t two = text[p + 2] | 0x20;
+        if ((one == 'r' && two == 'e') || (one == 'v' && two == 'e') ||
+            (one == 'l' && two == 'l')) {
+            return 3;
+        }
+    }
+    return 0;
+}
+
+/* Length of the next pretokenizer chunk starting at p. Mirrors the ordered
+ * alternatives of the pinned Split regex. */
+static size_t pretoken_length(const uint8_t *text, size_t length, size_t p)
+{
+    size_t span = contraction_length(text, length, p);
+    if (span != 0) {
+        return span;
+    }
+    /* [^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+ */
+    {
+        size_t start = p;
+        const uint8_t c = text[start];
+        if (!is_letterish(c) && !is_digit_ascii(c) && c != '\r' && c != '\n') {
+            start += 1;
+        }
+        if (start < length && is_letterish(text[start])) {
+            size_t end = start;
+            while (end < length && is_letterish(text[end])) {
+                end += 1;
+            }
+            return end - p;
+        }
+    }
+    /* \p{N} — a single digit */
+    if (is_digit_ascii(text[p])) {
+        return 1;
+    }
+    /* " ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*" */
+    {
+        size_t cursor = p;
+        if (text[cursor] == ' ' && cursor + 1 < length) {
+            cursor += 1;
+        }
+        size_t run = cursor;
+        while (run < length && !is_ws(text[run]) && !is_letterish(text[run]) &&
+               !is_digit_ascii(text[run])) {
+            run += 1;
+        }
+        if (run > cursor) {
+            while (run < length && (text[run] == '\r' || text[run] == '\n')) {
+                run += 1;
+            }
+            return run - p;
+        }
+    }
+    /* whitespace alternatives */
+    if (is_ws(text[p])) {
+        size_t end = p;
+        size_t last_newline = 0;
+        int saw_newline = 0;
+        while (end < length && is_ws(text[end])) {
+            if (text[end] == '\r' || text[end] == '\n') {
+                last_newline = end;
+                saw_newline = 1;
+            }
+            end += 1;
+        }
+        if (saw_newline) {
+            return last_newline + 1 - p; /* \s*[\r\n]+ */
+        }
+        if (end == length) {
+            return end - p; /* \s+(?!\S) at end of input */
+        }
+        if (end - p >= 2) {
+            return end - p - 1; /* \s+(?!\S) keeps the final space for the next word */
+        }
+        return 1; /* \s+ */
+    }
+    return 1; /* lone CR/LF or unmatched byte falls through one at a time */
+}
+
+static uint32_t merge_lookup(const struct tokenizer *tokenizer, uint32_t left, uint32_t right,
+                             uint32_t *merged)
+{
+    size_t low = 0;
+    size_t high = tokenizer->merge_count;
+    while (low < high) {
+        const size_t middle = (low + high) / 2;
+        const uint32_t *entry = tokenizer->merges + middle * 4;
+        if (entry[0] < left || (entry[0] == left && entry[1] < right)) {
+            low = middle + 1;
+        } else if (entry[0] == left && entry[1] == right) {
+            *merged = entry[2];
+            return entry[3];
+        } else {
+            high = middle;
+        }
+    }
+    return UINT32_MAX;
+}
+
+enum { CHUNK_CAPACITY = 2048 };
+
+static int bpe_encode_chunk(const struct tokenizer *tokenizer, const uint8_t *chunk,
+                            size_t chunk_length, uint32_t *output, int capacity, int count)
+{
+    static uint32_t ids[CHUNK_CAPACITY];
+    if (chunk_length > CHUNK_CAPACITY) {
+        return -1;
+    }
+    size_t n = chunk_length;
+    for (size_t index = 0; index < n; ++index) {
+        ids[index] = tokenizer->byte_tokens[chunk[index]];
+    }
+    while (n > 1) {
+        uint32_t best_rank = UINT32_MAX;
+        uint32_t best_merged = 0;
+        size_t best_pos = 0;
+        for (size_t index = 0; index + 1 < n; ++index) {
+            uint32_t merged;
+            const uint32_t rank = merge_lookup(tokenizer, ids[index], ids[index + 1], &merged);
+            if (rank < best_rank) {
+                best_rank = rank;
+                best_merged = merged;
+                best_pos = index;
+            }
+        }
+        if (best_rank == UINT32_MAX) {
+            break;
+        }
+        ids[best_pos] = best_merged;
+        memmove(ids + best_pos + 1, ids + best_pos + 2, (n - best_pos - 2) * sizeof(uint32_t));
+        n -= 1;
+    }
+    for (size_t index = 0; index < n; ++index) {
+        if (count >= capacity) {
+            return -1;
+        }
+        output[count++] = ids[index];
+    }
+    return count;
+}
+
+static int encode_segment(const struct tokenizer *tokenizer, const uint8_t *text, size_t length,
+                          uint32_t *output, int capacity, int count)
+{
+    size_t position = 0;
+    while (position < length) {
+        const size_t span = pretoken_length(text, length, position);
+        count = bpe_encode_chunk(tokenizer, text + position, span, output, capacity, count);
+        if (count < 0) {
+            return -1;
+        }
+        position += span;
+    }
+    return count;
+}
+
+static int encode_text(const struct tokenizer *tokenizer, const char *input, uint32_t *output,
+                       int capacity)
+{
+    const uint8_t *text = (const uint8_t *)input;
+    const size_t length = strlen(input);
+    size_t position = 0;
+    int count = 0;
+    while (position < length) {
+        /* Earliest special-token occurrence from here; ties favor the longer
+         * literal because the table is sorted by descending length. */
+        size_t special_at = length;
+        uint32_t special_index = 0;
+        for (uint32_t index = 0; index < tokenizer->special_count; ++index) {
+            const size_t begin = tokenizer->special_offsets[index];
+            const size_t size = tokenizer->special_offsets[index + 1] - begin;
+            if (size == 0 || size > length - position) {
+                continue;
+            }
+            for (size_t at = position; at + size <= length && at < special_at; ++at) {
+                if (memcmp(text + at, tokenizer->special_bytes + begin, size) == 0) {
+                    special_at = at;
+                    special_index = index;
+                    break;
+                }
+            }
+        }
+        count = encode_segment(tokenizer, text + position, special_at - position, output,
+                               capacity, count);
+        if (count < 0) {
+            return -1;
+        }
+        if (special_at < length) {
+            if (count >= capacity) {
+                return -1;
+            }
+            output[count++] = tokenizer->special_ids[special_index];
+            position = special_at + tokenizer->special_offsets[special_index + 1] -
+                       tokenizer->special_offsets[special_index];
+        } else {
+            position = length;
+        }
+    }
+    return count;
+}
+
 static int parse_id_list(const char *text, uint32_t *values, int capacity)
 {
     int count = 0;
@@ -719,29 +996,32 @@ int main(int argc, char **argv)
     const char *image_path = NULL;
     const char *ids_text = NULL;
     const char *answers_text = NULL;
+    const char *prompt_text = NULL;
+    const char *answer_words = NULL;
+    int encode_only = 0;
+    const char *usage = "usage: %s IMAGE (--prompt TEXT | --ids ID,...) "
+                        "(--answers-text WORD,... | --answers ID,...)\n";
     for (int index = 1; index < argc; ++index) {
         if (strcmp(argv[index], "--ids") == 0 && index + 1 < argc) {
             ids_text = argv[++index];
         } else if (strcmp(argv[index], "--answers") == 0 && index + 1 < argc) {
             answers_text = argv[++index];
+        } else if (strcmp(argv[index], "--prompt") == 0 && index + 1 < argc) {
+            prompt_text = argv[++index];
+        } else if (strcmp(argv[index], "--answers-text") == 0 && index + 1 < argc) {
+            answer_words = argv[++index];
+        } else if (strcmp(argv[index], "--encode-only") == 0) {
+            encode_only = 1;
         } else if (image_path == NULL) {
             image_path = argv[index];
         } else {
-            fprintf(stderr, "usage: %s IMAGE --ids ID,ID,... --answers ID,ID,...\n", argv[0]);
+            fprintf(stderr, usage, argv[0]);
             return 2;
         }
     }
-    if (image_path == NULL || ids_text == NULL || answers_text == NULL) {
-        fprintf(stderr, "usage: %s IMAGE --ids ID,ID,... --answers ID,ID,...\n", argv[0]);
-        return 2;
-    }
-
-    static uint32_t token_ids[MAX_TOKENS];
-    static uint32_t answer_ids[MAX_ANSWERS];
-    const int token_count = parse_id_list(ids_text, token_ids, MAX_TOKENS);
-    const int answer_count = parse_id_list(answers_text, answer_ids, MAX_ANSWERS);
-    if (token_count <= 0 || answer_count <= 0) {
-        fprintf(stderr, "invalid id list\n");
+    if (image_path == NULL || (ids_text == NULL && prompt_text == NULL) ||
+        (answers_text == NULL && answer_words == NULL)) {
+        fprintf(stderr, usage, argv[0]);
         return 2;
     }
 
@@ -749,6 +1029,57 @@ int main(int argc, char **argv)
     if (resolve_model(image_path, &model) != 0) {
         fprintf(stderr, "invalid or unsupported task image: %s\n", image_path);
         return 2;
+    }
+    if ((prompt_text != NULL || answer_words != NULL) && !model.tokenizer.present) {
+        fprintf(stderr, "image carries no tokenizer tables; pass --ids/--answers\n");
+        return 2;
+    }
+
+    static uint32_t token_ids[MAX_TOKENS];
+    static uint32_t answer_ids[MAX_ANSWERS];
+    int token_count;
+    int answer_count = 0;
+    if (ids_text != NULL) {
+        token_count = parse_id_list(ids_text, token_ids, MAX_TOKENS);
+    } else {
+        token_count = encode_text(&model.tokenizer, prompt_text, token_ids, MAX_TOKENS);
+    }
+    if (answers_text != NULL) {
+        answer_count = parse_id_list(answers_text, answer_ids, MAX_ANSWERS);
+    } else {
+        char buffer[512];
+        const char *cursor = answer_words;
+        while (*cursor != '\0' && answer_count >= 0) {
+            const char *comma = strchr(cursor, ',');
+            const size_t size = comma ? (size_t)(comma - cursor) : strlen(cursor);
+            if (size == 0 || size >= sizeof(buffer) || answer_count >= MAX_ANSWERS) {
+                answer_count = -1;
+                break;
+            }
+            memcpy(buffer, cursor, size);
+            buffer[size] = '\0';
+            uint32_t encoded[8];
+            const int encoded_count = encode_text(&model.tokenizer, buffer, encoded, 8);
+            if (encoded_count != 1) {
+                fprintf(stderr, "answer '%s' is not a single token (%d)\n", buffer,
+                        encoded_count);
+                answer_count = -1;
+                break;
+            }
+            answer_ids[answer_count++] = encoded[0];
+            cursor = comma ? comma + 1 : cursor + size;
+        }
+    }
+    if (token_count <= 0 || answer_count <= 0) {
+        fprintf(stderr, "invalid prompt or answer list\n");
+        return 2;
+    }
+    if (encode_only) {
+        for (int index = 0; index < token_count; ++index) {
+            printf("%s%u", index == 0 ? "" : ",", token_ids[index]);
+        }
+        printf("\n");
+        return 0;
     }
     for (int index = 0; index < token_count; ++index) {
         if (token_ids[index] >= model.image.header->vocab_rows) {

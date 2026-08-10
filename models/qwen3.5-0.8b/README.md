@@ -66,11 +66,11 @@ Same gates as the Gemma record: independent NumPy BF16 reference with per-tensor
 
 | Field | Value |
 |---|---|
-| Format | `QW35TSK1` |
-| Image size | 486,162,816 bytes (~464 MiB) |
-| Image sha256 | `7c0880ff5c65e73af09532471a8c767782fa7f6d18d832dbbb35ca7252167142` |
+| Format | `QW35TSK1` version 2 |
+| Image size | 492,962,304 bytes (~470 MiB) |
+| Image sha256 | `00bb5a62214f1db4...` (full value in the build manifest) |
 | Quantization | Q4 group 128 (97 matrices incl. tied embedding/head); Q8 group 128 for the 54 DeltaNet projections; float32 small tensors |
-| Tokenizer tables | not in v1 — runtime accepts token ids until the C tokenizer lands |
+| Tokenizer tables | vocab byte strings, ranked merges, byte map, and special tokens (~6.7 MB); the runtime tokenizes prompt text itself |
 | Estimated decode traffic | ~350 MB per token (quantized matrices minus embedding table) |
 
 **Quantization sensitivity finding.** With every matrix at min/max Q4, smoke decisions flip against the BF16 reference (danger scored below safe on an obvious danger case), and MSE-optimal Q4 scales do not recover them. Class ablation over the NumPy reference isolates the damage: promoting only the DeltaNet projections (`in_proj_qkv`, `in_proj_z`, `out_proj`) to Q8 restores 4/4 smoke decisions with margins >= 1.0; promoting attention instead leaves thin margins (+0.18) and promoting the MLPs still fails a case. The Q4-quantized embedding/head is harmless. This matches the expectation that the recurrent DeltaNet state amplifies weight noise. Four smoke cases are a signal, not an evaluation; the 12-case set and logit deltas run once the C runtime executes the image.
@@ -84,9 +84,11 @@ Same gates as the Gemma record: independent NumPy BF16 reference with per-tensor
 | NumPy reference matches the oracle | [`compiler/qwen35_reference.py`](../../compiler/qwen35_reference.py) matches the pinned transformers `Qwen3_5TextModel` forward to 2e-4 on a tiny random hybrid model ([`tests/test_qwen35_reference.py`](../../tests/test_qwen35_reference.py)) |
 | C layer matches the fixture exactly | [`targets/generic/qwen35_layer.c`](targets/generic/qwen35_layer.c) matches all 17 declared boundaries of the committed DeltaNet + full-attention fixture with max_abs 0; the fixture itself is tied back to the NumPy reference ([`tests/test_qwen35_fixture.py`](../../tests/test_qwen35_fixture.py)) |
 | C runtime matches the reference on real weights | [`targets/generic/qwen35_task.c`](targets/generic/qwen35_task.c) executing the compiled image reproduces the NumPy-reference answer logits to ~1e-4 on all four smoke cases (4/4 decisions, margins >= 1.0); ~9.5 prefill tokens/s with scalar kernels, 4 threads, on the x86-64 dev machine — an informal dev number, not a target benchmark |
+| C tokenizer matches the pinned tokenizer | 20/20 exact id-sequence parity against `tokenizers` on the 12 chat-templated hazard cases plus Chinese, contraction, punctuation, and whitespace stress strings; `--prompt` text produces logits identical to the `--ids` path |
+| Chinese zero-shot weakness is the model, not the stack | a Chinese hazard prompt with the runtime answer set `安全/危险` picks the wrong label, and the BF16 reference picks the same wrong label — direction agrees, so the artifact is faithful; 0.8B classification benefits from few-shot examples in the prompt |
 
 ## Open items
 
-- Independent NumPy reference implementation with DeltaNet tensor boundaries.
-- Runtime BPE tokenizer in C, round-trip tested against the pinned vocabulary.
-- Decide the compiled sequence bound for the first artifact.
+- Formal 12-case evaluation harness writing `results.json` (benchmark/verification separation as in the Gemma record).
+- Cross-compile and measure the A113X baseline; llama.cpp measured alongside.
+- The tokenizer pretokenizer approximates `\p{L}\p{N}` with ASCII classes plus treating all non-ASCII bytes as letters; exact on the parity corpus, but non-ASCII punctuation may split differently — extend the corpus before relying on exotic scripts.
