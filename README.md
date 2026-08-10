@@ -106,7 +106,22 @@ The measured decode step feeds the selected label token through another 35 layer
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Cross-model compiler/runtime contract |
 | [`REVIEW.html`](REVIEW.html) | Human-readable test inputs, outputs, commands, and runtime boundary |
 
-Start with the [Gemma 4 E2B record](models/gemma-4-e2b/README.md) for the implemented artifact. Large checkpoints, generated model images, generated binaries, and credentials are excluded from the repository.
+Start with the [Gemma 4 E2B record](models/gemma-4-e2b/README.md) for the implemented artifact and the [Qwen3.5-0.8B record](models/qwen3.5-0.8b/README.md) for the planned next one. Large checkpoints, generated model images, generated binaries, and credentials are excluded from the repository.
+
+## Optimization roadmap
+
+Optimizations split along the two repository axes and stack. Model-axis steps hold on any CPU and live in the model record; CPU-axis steps hold for one pinned CPU and live under `targets/<cpu>/`. The factors below are analytical estimates against the measured Gemma baseline (0.598 tokens/s, scalar kernel, two threads) — they are not benchmark results, they do not multiply cleanly, and the stack is capped by the target's memory bandwidth.
+
+| Step | Axis | Mechanism | Estimated effect |
+|---|---|---|---|
+| 1. Switch to Qwen3.5-0.8B | model | per-token matrix traffic 960 MB → ~290 MB | ~3.3x per token |
+| 2. Batched prefill | model | read each matrix once per layer per prompt, not per token | up to ~40x on prompt prefill |
+| 3. Per-call answer-set scoring | model | skip the 248K-row output head unless generating | ~130 MB saved per decision |
+| 4. NEON TBL lookup kernel | CPU | T-MAC-style table lookup replaces scalar Q4 unpack and multiply | ~3x kernel throughput |
+| 5. Four-thread static partition | CPU | all A113X cores with deterministic reductions | up to ~2x, bandwidth-capped |
+| 6. Lower-bit LUT (experimental) | CPU | Q3/Q2 with linear LUT cost scaling, only if task quality survives | further 1.3-2x |
+
+Details and ordering: model axis in [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md), CPU axis in [`models/qwen3.5-0.8b/targets/a113x/README.md`](models/qwen3.5-0.8b/targets/a113x/README.md). Each step lands only after the tensor-level correctness tests for the code it touches.
 
 ## Current limits
 
