@@ -1,10 +1,10 @@
 # cpu-llms-in-c
 
-An offline compiler turns a pinned language model into a packed Q4 image, and a small C11 runtime executes it on CPU. The deployed target needs no Python, PyTorch, llama.cpp, or ONNX Runtime. Task outputs are defined by the prompt at run time — the runtime is not hardwired to one task.
+An offline compiler turns a pinned language model into a packed image, and a small C11 runtime executes it on a pinned CPU/SoC. A target may dispatch compiler-selected graph regions to an on-SoC accelerator. The deployed target needs no Python, PyTorch, llama.cpp, or ONNX Runtime. Task outputs are defined by the prompt at run time — the runtime is not hardwired to one task.
 
 ## Organization
 
-Everything is classified along two axes, model first, CPU second. A released artifact is one model x CPU pair, and results never transfer between pairs. The full contract is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Everything is classified along two axes, model first, CPU/SoC target second. The target pins the CPU and, when selected, an on-SoC accelerator. A released artifact is one model x target pair, and results never transfer between pairs. The full contract is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 | Path | Contents |
 |---|---|
@@ -12,17 +12,21 @@ Everything is classified along two axes, model first, CPU second. A released art
 | [`compiler/`](compiler/) | Offline compiler and independent reference tools |
 | `models/<model>/` | Model axis: pins, profile, graph record, reference outputs, model-only optimizations |
 | `models/<model>/targets/generic/` | The model's C runtime with model-axis optimizations only, portable to any CPU |
-| `models/<model>/targets/<cpu>/` | CPU axis: CPU pin, CPU-specialized kernels, and results measured for that pair |
+| `models/<model>/targets/<soc>/` | Target axis: CPU/SoC pin, accelerator boundary, specialized kernels, and results measured for that pair |
 | [`tests/`](tests/) | Committed correctness tests (`make test`) |
 
 Checkpoints, generated images, binaries, and credentials are never committed.
 
 ## Status
 
-| Model | CPU | Status | Verification | Measured performance | Record |
-|---|---|---|---|---|---|
-| Gemma 4 E2B | two-vCPU x86-64 dev machine (unpinned) | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
-| Qwen3.5-0.8B | Amlogic A113X (4x Cortex-A53, 1-2 GB) | planned | nothing pinned yet | nothing measured yet | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) |
+| Model | CPU / SoC target | Chip year | Status | Verification | Measured performance | Record |
+|---|---|---:|---|---|---|---|
+| Gemma 4 E2B | two-vCPU x86-64 dev machine (unpinned) | not pinned | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
+| Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | planned | no target run | nothing measured | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) |
+| Qwen3.5-0.8B | Rockchip RK3588S: 4x Cortex-A76 + 4x Cortex-A55, NPU | 2022 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3588s/README.md) |
+| Qwen3.5-0.8B | Rockchip RK3576: 4x Cortex-A72 + 4x Cortex-A53, NPU | 2024 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3576/README.md) |
+
+Chip year means first public MP release, official launch, or official development-board sale; it is not the board manufacture year. The evidence and exact event are recorded in each target file.
 
 The Gemma artifact predates the prompt-defined output contract and compiles its two labels in — now the restricted special case. The Qwen artifact carries the default contract: runtime tokenizer, full output head, per-call answer sets.
 
@@ -51,6 +55,15 @@ Two regimes follow, and they map exactly onto the two optimization axes:
 
 Capacity is a gate, not a tunable: the image and state must stay resident with zero swap — exceeding RAM means paging from eMMC at ~100-300 MB/s and an order-of-magnitude collapse.
 
+The Rockchip NPU changes the memory/compute trade. The following numbers are external RKLLM v1.3 reference data with sequence length 128 and 64 generated tokens. They are not measurements by this repository.
+
+| Model | Target | Quantization | TTFT | Decode | Reported memory | 1 GB implication |
+|---|---|---|---:|---:|---:|---|
+| Qwen3.5-0.8B | RK3588 | W8A8 | 587.74 ms | 27.05 tokens/s | 1039.66 MB | no OS/runtime headroom |
+| Qwen3.5-0.8B | RK3576 | W4A16 | 1369.31 ms | 18.79 tokens/s | 689.50 MB | fits on paper; board RSS and zero swap still unverified |
+
+Source: [Rockchip RKLLM benchmark, revision `878f936`](https://github.com/airockchip/rknn-llm/blob/878f9361fd3afa7e167b7079918918f78d2c1c2a/benchmark.md). RK3588S shares the RK3588 compute/NPU block used by this planning baseline, but the exact board must still be measured.
+
 ## Optimization roadmap
 
 Each step is an analytical estimate, not a benchmark result; factors do not multiply cleanly and the stack is capped by the target's memory bandwidth. A step lands only after tensor-level correctness tests for the code it touches.
@@ -64,7 +77,7 @@ Each step is an analytical estimate, not a benchmark result; factors do not mult
 | 5. Four-thread static partition | CPU | all A113X cores, deterministic reductions | up to ~2x, bandwidth-capped |
 | 6. Lower-bit LUT (experimental) | CPU | Q3/Q2 with linear LUT cost scaling, only if task quality survives | further 1.3-2x |
 
-Model-axis details: [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md). CPU-axis details: [`models/qwen3.5-0.8b/targets/a113x/README.md`](models/qwen3.5-0.8b/targets/a113x/README.md).
+Model-axis details: [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md). Target details: [A113X](models/qwen3.5-0.8b/targets/a113x/README.md) · [RK3588S](models/qwen3.5-0.8b/targets/rk3588s/README.md) · [RK3576](models/qwen3.5-0.8b/targets/rk3576/README.md).
 
 ## Why rewrite instead of using an existing stack
 

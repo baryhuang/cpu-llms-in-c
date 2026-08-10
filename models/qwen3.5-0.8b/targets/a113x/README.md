@@ -7,11 +7,14 @@ Status: planned. The CPU pin below is provisional until `target_probe` runs on t
 | Field | Value |
 |---|---|
 | SoC | Amlogic A113X |
+| Chip year | 2017 — OpenLinux MP release for A113D/A113X on 2017-08-31 |
 | Cores | 4x ARM Cortex-A53 (ARMv8-A, AArch64) |
 | SIMD | NEON/ASIMD 128-bit, includes TBL byte table lookup |
 | RAM | 1 GB or 2 GB depending on board variant — to be pinned |
 | Storage | eMMC 8/32 GB |
 | OS | Armbian (Debian bookworm) |
+
+Year evidence: [Amlogic OpenLinux release notes mirror](https://manuals.plus/m/66778c57bce54f4fd8afa6ff632d78c9ded060489bae66094d81b01c8d0b215a.pdf). The year identifies the chip software MP release, not the LinuxBox board revision.
 
 To finalize: cache sizes, measured memory bandwidth, page size, and thermal behavior from an on-device probe. Gates (RSS ceiling, zero swap, latency targets) are set after the first baseline run.
 

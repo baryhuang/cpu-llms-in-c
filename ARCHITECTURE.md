@@ -5,7 +5,7 @@ Status: one bounded Gemma 4 E2B artifact is implemented. The cross-model compile
 ## Output
 
 ```text
-checkpoint + tokenizer + workload profile + CPU profile
+checkpoint + tokenizer + workload profile + target profile
                          |
                          v
                   offline compiler
@@ -22,10 +22,10 @@ Compilation may use large development machines and long searches. The deployment
 |---|---|
 | Deployment profile | prompt/input schema, output schema, limits, validation data; label sets only for restricted specializations |
 | Model adapter | checkpoint import, tokenizer, graph, exact rewrites, numerical oracle |
-| CPU backend | kernels, tensor layout, static memory, threads, prefetch and mapping policy |
+| Target backend | CPU/NPU kernels, tensor layout, static memory, transfer boundary, threads, prefetch and mapping policy |
 | Runtime | input validation, fixed graph execution, output formatting |
 
-Application labels do not belong in the CPU backend. Model layer names do not belong in the deployment profile.
+Application labels do not belong in the target backend. Model layer names do not belong in the deployment profile.
 
 ## Compile inputs
 
@@ -34,7 +34,7 @@ A release must pin:
 - checkpoint, tokenizer, and reference revisions;
 - input and output contracts;
 - fixed prompt text and variable-field rules;
-- CPU ISA, core/cache topology, RAM and storage constraints;
+- CPU ISA, core/cache topology, accelerator API/data types, shared-memory topology, RAM and storage constraints;
 - image-size, RSS, swap, latency, and quality gates;
 - search, held-out, boundary, and out-of-domain data partitions.
 
@@ -74,11 +74,12 @@ Task outputs are defined by the prompt at run time, not by the compiled artifact
 
 Reading a checkpoint is not model support. Support requires graph execution, reference comparison, target measurements, and workload validation.
 
-## CPU-backend requirements
+## Target-backend requirements
 
-- record ISA, cores, caches, NUMA, RAM, storage, ABI, and page size;
-- generate scalar and ISA-specific packed kernels;
+- record CPU ISA, cores, caches, accelerator, NUMA, RAM, storage, ABI, driver/runtime versions, and page size;
+- generate scalar, ISA-specific, and selected accelerator kernels;
 - define matrix order, alignment, block format, and prefetch policy;
+- define which graph regions stay on CPU and which execute on an accelerator; account for dispatch, synchronization, and copies;
 - use a bounded arena and fixed state lifetimes;
 - define thread partitions and deterministic reductions;
 - keep the model image resident when decode repeatedly visits its weights.
@@ -112,26 +113,26 @@ Smoke examples are recorded as smoke examples. They do not establish product qua
 
 ## Repository contract
 
-A released artifact is one point in a cross product with two axes: one pinned model and one pinned CPU target. The classification order is fixed — model first, CPU second:
+A released artifact is one point in a cross product with two axes: one pinned model and one pinned CPU/SoC target. The classification order is fixed — model first, CPU/SoC target second:
 
 ```text
 tools/                            shared on-target tooling: hardware and memory-bandwidth probe
-                                  used to pin every CPU target
+                                  used to pin every target
 compiler/                         offline compiler and reference tools
 models/<model>/                   model axis: profile, pins, graph record, reference outputs
 models/<model>/targets/generic/   the model's C runtime with model-axis optimizations only,
                                   portable to any CPU
-models/<model>/targets/<cpu>/     CPU axis: CPU pin, CPU-specialized kernels and layouts, and
-                                  results measured for this model x CPU pair
+models/<model>/targets/<soc>/     target axis: CPU/SoC and accelerator pin, specialized kernels,
+                                  layouts, and results measured for this model x target pair
 tests/                            committed small fixtures and tests
 ```
 
-- The model directory holds everything independent of the CPU: input profile, checkpoint and tokenizer pins, graph constants, and reference outputs.
-- `targets/generic/` holds the model's runtime source carrying only model-axis optimizations; it is the portable starting point every pinned CPU target builds from.
-- Each `targets/<cpu>/` directory holds everything specific to one model x CPU combination: the CPU pin (ISA, cores, caches, RAM, storage), CPU-specialized kernel, layout, and schedule choices, and the benchmarks measured on that CPU.
+- The model directory holds everything independent of the target: input profile, checkpoint and tokenizer pins, graph constants, and reference outputs.
+- `targets/generic/` holds the model's runtime source carrying only model-axis optimizations; it is the portable CPU starting point every pinned target builds from.
+- Each `targets/<soc>/` directory holds everything specific to one model x target combination: CPU/SoC pin, optional accelerator boundary, kernel, layout and schedule choices, and benchmarks measured on that hardware.
 - Changing either axis creates a new combination that requires its own validation. Results never transfer between combinations.
 
-No CPU target has been selected yet. The current Gemma 4 E2B results under `models/gemma-4-e2b/` were measured on an unpinned two-vCPU development machine; they move into the first `targets/<cpu>/` directory when a target is selected.
+No Gemma 4 CPU target has been selected yet. The current Gemma 4 E2B results under `models/gemma-4-e2b/` were measured on an unpinned two-vCPU development machine; they move into the first pinned target directory when a target is selected.
 
 Cross-model contracts stay in this file. Checkpoints, generated model images, binaries, machine credentials, and access tokens are not committed.
 

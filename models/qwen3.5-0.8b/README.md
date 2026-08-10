@@ -1,6 +1,16 @@
 # Qwen3.5-0.8B
 
-Status: planned. No artifact, pins, or measurements exist yet. This record and [`targets/a113x/`](targets/a113x/) hold the optimization plan, split by axis: this file lists model-axis optimizations that hold on any CPU; the target file lists CPU-axis optimizations for one selected CPU.
+Status: planned. Source pins exist; no artifact or target measurement exists yet. This file lists model-axis optimizations that hold on every target. Each target file pins one CPU/SoC and records only the optimizations and measurements for that combination.
+
+## Target matrix
+
+| Target | Chip year | CPU | Accelerator | Current evidence | Record |
+|---|---:|---|---|---|---|
+| Amlogic A113X | 2017 | 4x Cortex-A53 | CPU only for this project | analytical estimate only | [target](targets/a113x/README.md) |
+| Rockchip RK3588S | 2022 | 4x Cortex-A76 + 4x Cortex-A55 | 6 TOPS NPU | external RKLLM baseline; no repository run | [target](targets/rk3588s/README.md) |
+| Rockchip RK3576 | 2024 | 4x Cortex-A72 + 4x Cortex-A53 | 6 TOPS RKNN NPU | external RKLLM baseline; no repository run | [target](targets/rk3576/README.md) |
+
+Chip year uses the release-event evidence in the target record, not a board manufacture date. Equal TOPS labels do not make two NPUs interchangeable: supported data paths, memory interfaces, core organization, and software differ.
 
 ## Source
 
