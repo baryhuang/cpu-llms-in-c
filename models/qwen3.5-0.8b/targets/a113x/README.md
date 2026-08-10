@@ -20,11 +20,12 @@ To finalize: cache sizes, measured memory bandwidth, page size, and thermal beha
 In order of execution. Estimates are analytical; none is a benchmark result.
 
 1. **Scalar baseline first.** Cross-compile the unmodified C11 runtime, run the probe and the artifact on the device, and record the first `results.json` here. Every later step is measured against this. The same baseline run also measures off-the-shelf llama.cpp on the device for the rewrite-versus-stack comparison in the top-level [`README.md`](../../../../README.md).
-2. **NEON TBL lookup kernel.** The T-MAC table-lookup formulation of low-bit GEMV maps directly onto NEON's TBL instruction: a 16-entry per-input table fits one 128-bit register, eliminating scalar nibble unpacking and multiplication. Published 4-bit single-thread speedups are ~3x on ARM cores.
-3. **Multi-token lookup prefill.** Vec-LUT-style vectorization: reuse each precomputed table across the batched prompt tokens so prefill saturates bandwidth instead of repeating per-token lookups.
-4. **Four-thread static partition.** Fixed row partitions per core with deterministic reductions (versus the current 2-thread OpenMP loop); expected up to ~2x, capped by DRAM bandwidth.
-5. **Weight layout for the A53.** Offline reordering of Q4 records for sequential DRAM access in kernel visit order, tile sizes fitted to the small L1/L2, and software prefetch distances tuned on-device.
-6. **Experimental: lower-bit LUT.** The lookup kernel's cost scales linearly down with bit width; a Q3/Q2 variant would cut traffic a further 25-50% if task quality survives — measured, not assumed.
+2. **NEON vectorized Q4 GEMV.** Import the proven ggml/llama.cpp kernel technique for the ARMv8.0 baseline: vector nibble unpacking (`vand`/`vshr`) and 16-lane multiply-accumulate. Existing off-the-shelf kernels are a source of CPU-axis techniques, not a fixed advantage of another stack; this step absorbs the one that applies to this core. Expected ~3-5x over the scalar baseline.
+3. **NEON TBL lookup kernel.** The T-MAC table-lookup formulation of low-bit GEMV maps onto NEON's TBL instruction (also ARMv8.0): a 16-entry per-input table fits one 128-bit register, eliminating unpacking and multiplication entirely. Measured against step 2 on the device; the faster kernel is kept.
+4. **Multi-token lookup prefill.** Vec-LUT-style vectorization: reuse each precomputed table across the batched prompt tokens so prefill saturates bandwidth instead of repeating per-token lookups.
+5. **Four-thread static partition.** Fixed row partitions per core with deterministic reductions (versus the current 2-thread OpenMP loop); expected up to ~2x, capped by DRAM bandwidth.
+6. **Weight layout for the A53.** Offline reordering of Q4 records for sequential DRAM access in kernel visit order, tile sizes fitted to the small L1/L2, and software prefetch distances tuned on-device.
+7. **Experimental: lower-bit LUT.** The lookup kernel's cost scales linearly down with bit width; a Q3/Q2 variant would cut traffic a further 25-50% if task quality survives — measured, not assumed.
 
 ## Feasibility notes
 

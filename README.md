@@ -117,7 +117,7 @@ Optimizations split along the two repository axes and stack. Model-axis steps ho
 | 1. Switch to Qwen3.5-0.8B | model | per-token matrix traffic 960 MB → ~290 MB | ~3.3x per token |
 | 2. Batched prefill | model | read each matrix once per layer per prompt, not per token | up to ~40x on prompt prefill |
 | 3. Per-call answer-set scoring | model | skip the 248K-row output head unless generating | ~130 MB saved per decision |
-| 4. NEON TBL lookup kernel | CPU | T-MAC-style table lookup replaces scalar Q4 unpack and multiply | ~3x kernel throughput |
+| 4. NEON kernel | CPU | imported llama.cpp-style vectorized GEMV, then T-MAC-style TBL lookup; the faster is kept | ~3-5x kernel throughput |
 | 5. Four-thread static partition | CPU | all A113X cores with deterministic reductions | up to ~2x, bandwidth-capped |
 | 6. Lower-bit LUT (experimental) | CPU | Q3/Q2 with linear LUT cost scaling, only if task quality survives | further 1.3-2x |
 
@@ -137,8 +137,8 @@ The comparison target is Qwen3.5-0.8B on the provisional A113X device (4x Cortex
 What the table implies:
 
 - **PyTorch and ONNX are not candidates on this class of device.** PyTorch does not fit the memory; ONNX cannot express the DeltaNet layers without decomposing into tens of primitive ops per step.
-- **The real off-the-shelf competitor is llama.cpp**, and honesty requires saying: its NEON kernels will beat our scalar baseline at first. Both stacks face the same DRAM bandwidth wall, so the theoretical steady-state decode gap is modest.
-- The rewrite's structural advantages are elsewhere: per-call answer-set scoring skips ~130 MB of head traffic per decision (~1.4x on decision latency, more on short prompts); roughly 3-10x smaller non-weight RSS leaves headroom on the 1 GB board; a dependency-free ~100 KB static binary; a tensor-verified DeltaNet path instead of a freshly landed one; and full control of the kernel and layout for roadmap steps 4-6, which an upstream project cannot specialize per target.
+- **The real off-the-shelf comparison is llama.cpp.** Its NEON kernels beat a scalar baseline, but kernel techniques are CPU-axis optimizations, not properties of a stack: the same vectorization is imported as a CPU-axis step here (see the target record), so any kernel gap is transient. Both stacks then face the same DRAM bandwidth wall.
+- The rewrite's structural advantages are the parts an upstream generic stack cannot absorb: per-call answer-set scoring skips ~130 MB of head traffic per decision (~1.4x on decision latency, more on short prompts); roughly 3-10x smaller non-weight RSS leaves headroom on the 1 GB board; a dependency-free ~100 KB static binary; a tensor-verified DeltaNet path instead of a freshly landed one; and per-target kernel and layout specialization beyond what a general project ships.
 - If off-the-shelf llama.cpp on the device meets the latency and memory gates, that result is recorded too — the baseline measurement includes it.
 
 ## Current limits
