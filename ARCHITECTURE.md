@@ -20,7 +20,7 @@ Compilation may use large development machines and long searches. The deployment
 
 | Component | Owns |
 |---|---|
-| Deployment profile | prompt/input schema, labels, output schema, limits, validation data |
+| Deployment profile | prompt/input schema, output schema, limits, validation data; label sets only for restricted specializations |
 | Model adapter | checkpoint import, tokenizer, graph, exact rewrites, numerical oracle |
 | CPU backend | kernels, tensor layout, static memory, threads, prefetch and mapping policy |
 | Runtime | input validation, fixed graph execution, output formatting |
@@ -62,7 +62,7 @@ These removals require proof from the input contract. A free-text field normally
 
 The current Gemma 4 artifact is more restricted: it stores twelve complete token sequences and accepts only their numeric case indices. See [`REVIEW.html`](REVIEW.html).
 
-For a binary label set, the application output contains one bit. A diagnostic runtime may retain both logits. A decision-only compiler may instead store `W_1 - W_0` and compare one raw score with zero when the removed output transform is monotonic. Any post-decision label-token decode is optional unless another generated token is part of the output contract.
+Task outputs are defined by the prompt at run time, not by the compiled artifact. The default runtime carries the tokenizer and the full output head, accepts a prompt and an optional per-invocation set of allowed answers, and scores only the requested answer rows after prefill; with no answer set it generates tokens normally. A fixed compiled-in label set — including the binary one-bit case with the `W_1 - W_0` decision-only rewrite — is an optional restricted specialization for extreme targets, not the contract. The first Gemma 4 artifact is such a special case.
 
 ## Model-adapter requirements
 
