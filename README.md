@@ -81,26 +81,27 @@ Model-axis details: [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README
 
 ## Why rewrite instead of using an existing stack
 
-Theoretical comparison for Qwen3.5-0.8B on the A113X device; no measurements yet.
+A general inference stack must accept any model and any prompt at load time. This repository instead compiles one pinned model, one task contract, and one CPU/SoC target ahead of time — every advantage below is a consequence of that, not of cleverer kernels. All numbers are analytical estimates for Qwen3.5-0.8B on the 1 GB A113X board, not measurements; the first on-device baseline run measures llama.cpp side by side ([target plan](models/qwen3.5-0.8b/targets/a113x/README.md)).
 
-| Stack | Fits the 1 GB board | Decode traffic per token | Notes |
+| Stack | Fits the 1 GB board | Decode traffic per token (est.) | Disqualifier or cost |
 |---|---|---:|---|
-| This C runtime (plan) | yes | ~290 MB | ~30 MB overhead, zero dependencies, per-call answer sets skip the head |
-| llama.cpp (Q4 GGUF) | yes | ~420 MB | full 248K-row head every token; DeltaNet CPU op is new and unspecialized |
-| PyTorch + Transformers | no | ~1.6 GB | BF16 weights alone exceed RAM; serves as the numerical oracle |
-| ONNX Runtime | no | — | no operators for non-softmax attention as of 2026 |
+| This C runtime (plan) | yes | ~290 MB | ~30 MB non-weight memory, zero dependencies, per-call answer sets skip the head |
+| llama.cpp (Q4 GGUF) | yes | ~420 MB | pays the full 248,320-row head every token; DeltaNet CPU op is freshly landed, unspecialized, and not tensor-verified |
+| PyTorch + Transformers | no | ~1.6 GB | BF16 weights alone exceed RAM — kept only as the numerical oracle |
+| ONNX Runtime | no | — | cannot run the architecture: no operators for non-softmax attention as of 2026 |
 
-llama.cpp is the only real alternative. Kernel techniques are not what separates the stacks — its NEON vectorization is imported here as CPU-axis step 4, and both then face the same DRAM bandwidth wall. What a generic stack cannot absorb:
+That leaves llama.cpp as the only stack that runs at all, and kernels are not what separate us from it: its NEON vectorization is imported here as CPU-axis roadmap step 4, after which both stacks face the same DRAM bandwidth wall. The remaining gap is structural — each row below depends on information a generic runtime does not have at load time:
 
-| Structural advantage | Theoretical effect |
-|---|---|
-| Per-call answer-set scoring | skips ~130 MB head traffic per decision, ~1.4x on decision latency |
-| Non-weight memory | ~30 MB vs ~100-300 MB, headroom on the 1 GB board |
-| Dependency-free static binary | ~100 KB, no Python or C++ runtime |
-| Tensor-verified DeltaNet path | per-boundary comparison vs a freshly landed upstream op |
-| Per-target kernel and layout specialization | roadmap steps 4-6, tuned per CPU pin |
+| Structural advantage | Estimated effect on the A113X | Why a generic stack cannot absorb it |
+|---|---|---|
+| Per-call answer-set scoring | skips ~130 MB of head traffic per decision, ~1.4x on decision latency | needs the task contract in the runtime API; a generic decode loop computes all 248,320 logits every token |
+| Compile-time exact rewrites | text-only input contract: MRoPE provably reduces to RoPE, vision tower and MTP head never enter the image | must keep run-time paths for inputs that never arrive |
+| Fixed non-weight memory | ~30 MB bounded arena vs ~100-300 MB framework overhead — the headroom that decides fit on 1 GB | allocator, context, and graph machinery sized for generality |
+| Dependency-free static binary | ~100 KB, no Python or C++ runtime on the target | frameworks ship their runtime with the model |
+| Tensor-verified DeltaNet path | per-boundary comparison against the pinned oracle before any kernel lands | upstream op is freshly landed with no equivalent gate |
+| Per-target specialization | roadmap steps 4-6: kernels, layout, and threads tuned to the pinned CPU, results recorded per pair | one build must serve every CPU |
 
-The on-device baseline measurement includes llama.cpp, and its numbers are recorded alongside ours.
+These estimates become results only through the recorded baseline run; llama.cpp's on-device numbers land alongside ours.
 
 ## Build and test
 
