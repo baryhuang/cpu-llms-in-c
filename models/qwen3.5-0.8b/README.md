@@ -7,8 +7,13 @@ Status: planned. No artifact, pins, or measurements exist yet. This record and [
 | Field | Value |
 |---|---|
 | Source | `Qwen/Qwen3.5-0.8B` (Apache 2.0) |
-| Checkpoint pin | not yet pinned |
+| Checkpoint revision | `2fc06364715b967f1860aea9cf38778875588b17` (2026-03-02) |
+| Checkpoint size | 1,746,942,600 bytes, single safetensors file |
+| Checkpoint sha256 | from LFS metadata, re-verified locally before compiling |
+| Reference oracle | `huggingface/transformers` `fd12552d`, `models/qwen3_5/` (pinned in [`pins.json`](pins.json)) |
 | Runtime contract | prompt-defined outputs per [`ARCHITECTURE.md`](../../ARCHITECTURE.md): runtime tokenizer, full output head, optional per-call answer sets |
+
+All file hashes are in [`pins.json`](pins.json).
 
 ## Architecture (from the published config)
 
@@ -22,8 +27,13 @@ Status: planned. No artifact, pins, or measurements exist yet. This record and [
 | Linear-attention heads | 16 key/value heads, dim 128, conv kernel 4 |
 | Vocabulary | 248,320 (tied embeddings) |
 | RoPE | MRoPE sections [11, 11, 10], partial rotary 0.25, theta 1e7 |
+| Attention output gate | `attn_output_gate: true` on full-attention layers |
+| DeltaNet state dtype | float32 (`mamba_ssm_dtype`) |
 | Context | 262,144 (we compile a much smaller bound) |
 | Vision tower | 12 layers — removed at compile time |
+| MTP head | 1 layer (`mtp_num_hidden_layers`) — removed at compile time |
+
+The config declares 248,320 embedding rows but the tokenizer defines 248,070 entries; the remainder is padding plus special tokens (vision start/end 248053/248054, image 248056, video 248057, EOS 248044).
 
 The Gated-DeltaNet layers keep one fixed-size state matrix per head (about 1 MB per layer, ~18 MB total) instead of a growing KV cache; only the 6 full-attention layers keep KV. Prefill through the linear layers is sequential in the token dimension; their projections still batch.
 
@@ -42,8 +52,15 @@ Ordered by expected effect. Estimates are analytical; none is a benchmark result
 
 Same gates as the Gemma record: independent NumPy BF16 reference with per-tensor boundaries — extended with DeltaNet checkpoints (post-conv, post-gate, post-state-update, post-output-gate) — a committed layer fixture, tokenizer round-trip tests against the pinned `tokenizer.json`, and target measurements reported separately from verification.
 
+## Verified facts
+
+| Check | Result |
+|---|---|
+| Source pins | done — revision, all file hashes, and reference oracle in [`pins.json`](pins.json) |
+| Answer candidates are single tokens | `safe`=18112, `danger`=30416, `yes`, `no`, `0`, `1`, `A`-`D`, `安全`=96520, `危险`=98693 — all single tokens (pinned tokenizer, `tokenizers` 0.23.1) |
+
 ## Open items
 
-- Pin checkpoint/config/tokenizer hashes.
-- Verify the runtime BPE tokenizer against the pinned vocabulary.
+- Independent NumPy reference implementation with DeltaNet tensor boundaries.
+- Runtime BPE tokenizer in C, round-trip tested against the pinned vocabulary.
 - Decide the compiled sequence bound for the first artifact.
