@@ -11,6 +11,9 @@ TARGET_PROBE := $(BUILD_DIR)/target-probe
 GEMMA4_LAYER_TEST := $(BUILD_DIR)/gemma4-layer-test
 GEMMA4_TASK := $(BUILD_DIR)/gemma4-task
 GEMMA4_LAYER_FIXTURE := tests/fixtures/gemma4_layer_v1.bin
+QWEN35_GENERIC := models/qwen3.5-0.8b/targets/generic
+QWEN35_LAYER_TEST := $(BUILD_DIR)/qwen35-layer-test
+QWEN35_LAYER_FIXTURE := tests/fixtures/qwen35_layer_v1.bin
 
 .PHONY: all clean fixture linux-tools test
 
@@ -20,9 +23,10 @@ linux-tools: $(TARGET_PROBE)
 
 fixture: $(GEMMA4_LAYER_FIXTURE)
 
-test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE)
+test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35_LAYER_FIXTURE)
 	python3 -m unittest discover -s tests -p 'test_*.py'
 	$(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE)
+	$(QWEN35_LAYER_TEST) $(QWEN35_LAYER_FIXTURE)
 
 $(TARGET_PROBE): tools/target_probe.c
 	mkdir -p $(BUILD_DIR)
@@ -41,6 +45,14 @@ $(GEMMA4_TASK): $(GEMMA4_GENERIC)/gemma4_task.c $(GEMMA4_GENERIC)/gemma4_task.h
 		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
 $(GEMMA4_LAYER_FIXTURE): compiler/generate_gemma4_layer_fixture.py
+	python3 $< --output $@
+
+$(QWEN35_LAYER_TEST): tests/qwen35_layer_test.c $(QWEN35_GENERIC)/qwen35_layer.c $(QWEN35_GENERIC)/qwen35_layer.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN35_GENERIC) tests/qwen35_layer_test.c $(QWEN35_GENERIC)/qwen35_layer.c \
+		-o $@ $(LDFLAGS) -lm
+
+$(QWEN35_LAYER_FIXTURE): compiler/generate_qwen35_layer_fixture.py
 	python3 $< --output $@
 
 clean:
