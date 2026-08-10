@@ -101,7 +101,7 @@ The measured decode step feeds the selected label token through another 35 layer
 |---|---|
 | [`runtime/`](runtime/) | C runtime, headers, layer reference, and hardware probe |
 | [`compiler/`](compiler/) | Offline compiler and independent reference tools |
-| [`models/`](models/) | Model-specific profile, pins, results, and implementation notes |
+| [`models/`](models/) | One directory per model; per-CPU results live under `models/<model>/targets/<cpu>/` (model first, CPU second) |
 | [`tests/`](tests/) | Synthetic and real-weight correctness tests |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Cross-model compiler/runtime contract |
 | [`REVIEW.html`](REVIEW.html) | Human-readable test inputs, outputs, commands, and runtime boundary |

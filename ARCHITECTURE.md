@@ -112,13 +112,23 @@ Smoke examples are recorded as smoke examples. They do not establish product qua
 
 ## Repository contract
 
+A released artifact is one point in a cross product with two axes: one pinned model and one pinned CPU target. The classification order is fixed — model first, CPU second:
+
 ```text
-runtime/   C runtime and headers
-compiler/  offline compiler and reference tools
-models/    one directory per model family or checkpoint
-tests/     committed small fixtures and tests
+runtime/                        C runtime and headers
+compiler/                       offline compiler and reference tools
+models/<model>/                 model axis: profile, pins, graph record, reference outputs
+models/<model>/targets/<cpu>/   CPU axis under its model: CPU pin, kernel and layout
+                                choices, and results measured for this model x CPU pair
+tests/                          committed small fixtures and tests
 ```
 
-Model-specific constants and results stay under `models/<model>/`. Cross-model contracts stay in this file. Checkpoints, generated model images, binaries, machine credentials, and access tokens are not committed.
+- The model directory holds everything independent of the CPU: input profile, checkpoint and tokenizer pins, graph constants, and reference outputs.
+- Each `targets/<cpu>/` directory holds everything specific to one model x CPU combination: the CPU pin (ISA, cores, caches, RAM, storage), kernel, layout, and schedule choices, and the benchmarks measured on that CPU.
+- Changing either axis creates a new combination that requires its own validation. Results never transfer between combinations.
+
+No CPU target has been selected yet. The current Gemma 4 E2B results under `models/gemma-4-e2b/` were measured on an unpinned two-vCPU development machine; they move into the first `targets/<cpu>/` directory when a target is selected.
+
+Cross-model contracts stay in this file. Checkpoints, generated model images, binaries, machine credentials, and access tokens are not committed.
 
 Current model record: [`models/gemma-4-e2b/`](models/gemma-4-e2b/).

@@ -395,7 +395,7 @@
     "The profile contains twelve obvious English examples and is not a safety benchmark.",
     "The reference is an independent NumPy execution of pinned BF16 weights and equations, not a Transformers BF16 run.",
     "The runtime accepts precompiled token sequences from this profile; it does not implement a general tokenizer.",
-    "The scalar Q4 kernel is not an SSE4.2-optimized target kernel.",
+    "The scalar Q4 kernel is not a SIMD-optimized kernel; a target CPU has not been selected.",
     "No distribution-shift, adversarial, calibration, or long-context evaluation has been run."
   ]
 }

@@ -161,15 +161,15 @@ This runs:
 
 A separate ignored 144,857,148-byte fixture was exported from the pinned official weights. Its layer-0 output matched all ten declared boundaries with maximum absolute error 0. Details remain in [`layer0-validation.json`](layer0-validation.json).
 
-## Target and remaining work
+## Remaining work
 
-The constrained hardware design target is an Intel Celeron J3455 with SSE4.2, 3.34 GiB visible RAM, a 960 MiB RSS target, a 1,024 MiB hard limit, and no inference swap. The current complete-graph numbers were collected on a different two-vCPU x86-64 system; they are not J3455 benchmark claims.
+A deployment target CPU has not been selected. The current complete-graph numbers were collected on a two-vCPU x86-64 system; they are not claims about any other hardware. When a CPU target is selected, its pin and measured results move under `targets/<cpu>/` in this directory, following the model-first, CPU-second taxonomy in [`../../ARCHITECTURE.md`](../../ARCHITECTURE.md).
 
 Not implemented:
 
 - runtime tokenization and arbitrary free-text fields;
 - fixed-prefix state snapshots;
-- SSE4.2 packed GEMV and static worker scheduling;
+- ISA-specific packed GEMV and static worker scheduling;
 - full-graph tensor-boundary comparison;
 - held-out, adversarial, calibration, or distribution-shift evaluation;
 - codebook/LUT compression or conditional MLP trees.
@@ -181,4 +181,3 @@ The next useful change is a bounded schema with variable text, followed by token
 - [Gemma 4 model card](https://ai.google.dev/gemma/docs/core/model_card_4)
 - [Gemma 4 technical report](https://arxiv.org/abs/2607.02770)
 - [Transformers Gemma 4 implementation](https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma4/modeling_gemma4.py)
-- [Intel Celeron J3455 specifications](https://www.intel.com/content/www/us/en/products/sku/95594/intel-celeron-processor-j3455-2m-cache-up-to-2-30-ghz/specifications.html)
