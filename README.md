@@ -18,9 +18,12 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 
 ## Status
 
-**Implemented: [Gemma 4 E2B](models/gemma-4-e2b/README.md)** — a complete 35-layer C/Q4 artifact for one compiled two-label profile, verified 12/12 against written labels and 10/10 against layer-0 tensor boundaries. Measured on an unpinned two-vCPU x86-64 dev machine: 0.598 tokens/s, scalar kernel, 926 MiB peak RSS, zero swap. Exact inputs, outputs, and the runtime boundary: [`REVIEW.html`](REVIEW.html). This artifact predates the prompt-defined output contract and compiles its two labels in — now treated as the restricted special case.
+| Model x CPU | Status | Verification | Measured performance | Record |
+|---|---|---|---|---|
+| Gemma 4 E2B x two-vCPU x86-64 dev machine | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
+| Qwen3.5-0.8B x Amlogic A113X (4x Cortex-A53, 1-2 GB) | planned | nothing pinned yet | nothing measured yet | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) |
 
-**Planned: [Qwen3.5-0.8B](models/qwen3.5-0.8b/README.md)** on an [Amlogic A113X target](models/qwen3.5-0.8b/targets/a113x/README.md) (4x Cortex-A53, 1-2 GB). Hybrid DeltaNet architecture, runtime tokenizer, full output head, per-call answer sets. Nothing is pinned or measured yet.
+The Gemma artifact predates the prompt-defined output contract and compiles its two labels in — now the restricted special case. The Qwen artifact carries the default contract: runtime tokenizer, full output head, per-call answer sets.
 
 ## Optimization roadmap
 
@@ -48,7 +51,17 @@ Theoretical comparison for Qwen3.5-0.8B on the A113X device; no measurements yet
 | PyTorch + Transformers | no | ~1.6 GB | BF16 weights alone exceed RAM; serves as the numerical oracle |
 | ONNX Runtime | no | — | no operators for non-softmax attention as of 2026 |
 
-llama.cpp is the only real alternative. Kernel techniques are not what separates the stacks — its NEON vectorization is imported here as CPU-axis step 4, and both then face the same DRAM bandwidth wall. What a generic stack cannot absorb: per-call answer-set scoring (~1.4x per decision), 3-10x smaller non-weight RSS, a ~100 KB dependency-free binary, a tensor-verified DeltaNet path, and per-target kernel/layout specialization. The on-device baseline measurement includes llama.cpp, and its numbers are recorded alongside ours.
+llama.cpp is the only real alternative. Kernel techniques are not what separates the stacks — its NEON vectorization is imported here as CPU-axis step 4, and both then face the same DRAM bandwidth wall. What a generic stack cannot absorb:
+
+| Structural advantage | Theoretical effect |
+|---|---|
+| Per-call answer-set scoring | skips ~130 MB head traffic per decision, ~1.4x on decision latency |
+| Non-weight memory | ~30 MB vs ~100-300 MB, headroom on the 1 GB board |
+| Dependency-free static binary | ~100 KB, no Python or C++ runtime |
+| Tensor-verified DeltaNet path | per-boundary comparison vs a freshly landed upstream op |
+| Per-target kernel and layout specialization | roadmap steps 4-6, tuned per CPU pin |
+
+The on-device baseline measurement includes llama.cpp, and its numbers are recorded alongside ours.
 
 ## Build and test
 
@@ -60,11 +73,13 @@ Model-specific compile and run commands live in each model record, e.g. the [Gem
 
 ## Current limits
 
-- no runtime tokenizer or arbitrary free-text input yet (planned for the Qwen artifact);
-- no SIMD kernel yet;
-- no full-graph tensor-by-tensor differential test;
-- no held-out application-quality evaluation;
-- one bounded Gemma 4 profile implemented; the cross-model compiler remains a design.
+| Limit | Where it is addressed |
+|---|---|
+| No runtime tokenizer or free-text input | Qwen artifact plan, model axis |
+| No SIMD kernel | CPU-axis roadmap steps 4-6 |
+| No full-graph tensor-by-tensor differential test | required before any kernel swap lands |
+| No held-out application-quality evaluation | open |
+| Cross-model compiler remains a design | the second model record starts generalizing it |
 
 ## License
 
