@@ -68,6 +68,7 @@ Same gates as the Gemma record: independent NumPy BF16 reference with per-tensor
 |---|---|
 | Source pins | done — revision, all file hashes, and reference oracle in [`pins.json`](pins.json) |
 | Answer candidates are single tokens | `safe`=18112, `danger`=30416, `yes`, `no`, `0`, `1`, `A`-`D`, `安全`=96520, `危险`=98693 — all single tokens (pinned tokenizer, `tokenizers` 0.23.1) |
+| NumPy reference matches the oracle | [`compiler/qwen35_reference.py`](../../compiler/qwen35_reference.py) matches the pinned transformers `Qwen3_5TextModel` forward to 2e-4 on a tiny random hybrid model ([`tests/test_qwen35_reference.py`](../../tests/test_qwen35_reference.py)) |
 
 ## Open items
 
