@@ -62,6 +62,19 @@ Ordered by expected effect. Estimates are analytical; none is a benchmark result
 
 Same gates as the Gemma record: independent NumPy BF16 reference with per-tensor boundaries — extended with DeltaNet checkpoints (post-conv, post-gate, post-state-update, post-output-gate) — a committed layer fixture, tokenizer round-trip tests against the pinned `tokenizer.json`, and target measurements reported separately from verification.
 
+## Artifact (image v1)
+
+| Field | Value |
+|---|---|
+| Format | `QW35TSK1` |
+| Image size | 486,162,816 bytes (~464 MiB) |
+| Image sha256 | `7c0880ff5c65e73af09532471a8c767782fa7f6d18d832dbbb35ca7252167142` |
+| Quantization | Q4 group 128 (97 matrices incl. tied embedding/head); Q8 group 128 for the 54 DeltaNet projections; float32 small tensors |
+| Tokenizer tables | not in v1 — runtime accepts token ids until the C tokenizer lands |
+| Estimated decode traffic | ~350 MB per token (quantized matrices minus embedding table) |
+
+**Quantization sensitivity finding.** With every matrix at min/max Q4, smoke decisions flip against the BF16 reference (danger scored below safe on an obvious danger case), and MSE-optimal Q4 scales do not recover them. Class ablation over the NumPy reference isolates the damage: promoting only the DeltaNet projections (`in_proj_qkv`, `in_proj_z`, `out_proj`) to Q8 restores 4/4 smoke decisions with margins >= 1.0; promoting attention instead leaves thin margins (+0.18) and promoting the MLPs still fails a case. The Q4-quantized embedding/head is harmless. This matches the expectation that the recurrent DeltaNet state amplifies weight noise. Four smoke cases are a signal, not an evaluation; the 12-case set and logit deltas run once the C runtime executes the image.
+
 ## Verified facts
 
 | Check | Result |

@@ -40,11 +40,11 @@ tokens/s  ≤  usable memory bandwidth / weight bytes visited per token
 
 | Quantity | Gemma 4 E2B on dev x86 (measured) | Qwen3.5-0.8B on A113X (estimate) |
 |---|---:|---:|
-| Weight bytes visited per decode token | 960 MB | ~290 MB |
+| Weight bytes visited per decode token | 960 MB | ~350 MB (Q8 DeltaNet projections included) |
 | Usable DRAM bandwidth | not the limit yet | ~1.5-3 GB/s (to be probed) |
 | Achieved streaming rate | 575 MB/s (scalar-kernel bound) | — |
-| Resulting decode rate | 0.598 tokens/s measured | ~5-10 tokens/s ceiling |
-| Image + state vs RAM | 966 MB + ~50 MB, fits, zero swap | ~420 MB + ~50 MB vs 1-2 GB, fits |
+| Resulting decode rate | 0.598 tokens/s measured | ~4-8 tokens/s ceiling |
+| Image + state vs RAM | 966 MB + ~50 MB, fits, zero swap | ~465 MB + ~50 MB vs 1-2 GB, fits |
 
 Two regimes follow, and they map exactly onto the two optimization axes:
 
@@ -70,7 +70,7 @@ Each step is an analytical estimate, not a benchmark result; factors do not mult
 
 | Step | Axis | Mechanism | Estimated effect |
 |---|---|---|---|
-| 1. Switch to Qwen3.5-0.8B | model | per-token matrix traffic 960 MB → ~290 MB | ~3.3x per token |
+| 1. Switch to Qwen3.5-0.8B | model | per-token matrix traffic 960 MB → ~350 MB (Q8 DeltaNet projections — see the model record) | ~2.7x per token |
 | 2. Batched prefill | model | read each matrix once per layer per prompt, not per token | up to ~40x on prompt prefill |
 | 3. Per-call answer-set scoring | model | skip the 248K-row output head unless generating | ~130 MB saved per decision |
 | 4. NEON kernel | CPU | imported llama.cpp-style vectorized GEMV, then T-MAC-style TBL lookup; keep the faster | ~3-5x kernel throughput |
@@ -85,7 +85,7 @@ A general inference stack must accept any model and any prompt at load time. Thi
 
 | Stack | Fits the 1 GB board | Decode traffic per token (est.) | Disqualifier or cost |
 |---|---|---:|---|
-| This C runtime (plan) | yes | ~290 MB | ~30 MB non-weight memory, zero dependencies, per-call answer sets skip the head |
+| This C runtime (plan) | yes | ~350 MB | ~30 MB non-weight memory, zero dependencies, per-call answer sets skip the head |
 | llama.cpp (Q4 GGUF) | yes | ~420 MB | pays the full 248,320-row head every token; DeltaNet CPU op is freshly landed, unspecialized, and not tensor-verified |
 | PyTorch + Transformers | no | ~1.6 GB | BF16 weights alone exceed RAM — kept only as the numerical oracle |
 | ONNX Runtime | no | — | cannot run the architecture: no operators for non-softmax attention as of 2026 |

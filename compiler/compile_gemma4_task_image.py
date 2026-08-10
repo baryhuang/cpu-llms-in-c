@@ -24,6 +24,7 @@ try:
         load_rows,
         validate_text_config,
     )
+    from .q4_image import align, q4_byte_count, quantize_q4_grouped, sha256_file
     from .safetensors_file import SafetensorsFile
 except ImportError:
     from evaluate_gemma4_task_reference import canonical_prompt
@@ -34,6 +35,7 @@ except ImportError:
         load_rows,
         validate_text_config,
     )
+    from q4_image import align, q4_byte_count, quantize_q4_grouped, sha256_file
     from safetensors_file import SafetensorsFile
 
 
@@ -57,47 +59,6 @@ class Entry:
     byte_count: int = 0
 
 
-def align(value: int, alignment: int = 64) -> int:
-    return (value + alignment - 1) // alignment * alignment
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def float32_to_bf16(values: np.ndarray) -> np.ndarray:
-    bits = np.asarray(values, dtype="<f4").view("<u4").copy()
-    bits += np.uint32(0x7FFF) + ((bits >> np.uint32(16)) & np.uint32(1))
-    return (bits >> np.uint32(16)).astype("<u2")
-
-
-def q4_byte_count(shape: tuple[int, ...]) -> int:
-    if len(shape) != 2 or shape[1] % GROUP_SIZE:
-        raise ValueError(f"Q4 matrix shape must be [rows, multiple of {GROUP_SIZE}]: {shape}")
-    return shape[0] * (shape[1] // GROUP_SIZE) * (2 + GROUP_SIZE // 2)
-
-
-def quantize_q4_grouped(weights: np.ndarray) -> bytes:
-    rows, columns = weights.shape
-    if columns % GROUP_SIZE:
-        raise ValueError(f"matrix width {columns} is not divisible by {GROUP_SIZE}")
-    groups = columns // GROUP_SIZE
-    blocks = np.asarray(weights, dtype=np.float32).reshape(rows, groups, GROUP_SIZE)
-    minimum = np.min(blocks, axis=-1)
-    maximum = np.max(blocks, axis=-1)
-    scale = np.maximum(-minimum / np.float32(8.0), maximum / np.float32(7.0))
-    scale[scale == 0] = np.float32(1.0)
-    quantized = np.rint(blocks / scale[..., None]).clip(-8, 7).astype(np.int8)
-    unsigned = (quantized.astype(np.int16) & 0xF).astype(np.uint8)
-    packed = unsigned[..., 0::2] | (unsigned[..., 1::2] << np.uint8(4))
-    records = np.empty((rows, groups, 2 + GROUP_SIZE // 2), dtype=np.uint8)
-    records[..., :2] = float32_to_bf16(scale).view(np.uint8).reshape(rows, groups, 2)
-    records[..., 2:] = packed
-    return records.tobytes(order="C")
 
 
 def encode_profile(profile: dict, tokenizer: Tokenizer):
