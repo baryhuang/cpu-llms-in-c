@@ -23,7 +23,7 @@ class Gemma4TaskReferenceTest(unittest.TestCase):
     def test_hazard_profile_is_balanced_and_bounded(self):
         repository = Path(__file__).resolve().parents[1]
         profile = json.loads(
-            (repository / "models/gemma-4-e2b/task-profiles/hazard-v1.json").read_text()
+            (repository / "models/gemma-4-e2b/profile.json").read_text()
         )
         labels = [item["name"] for item in profile["labels"]]
         self.assertEqual(labels, ["safe", "danger"])

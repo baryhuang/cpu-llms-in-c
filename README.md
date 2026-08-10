@@ -1,100 +1,103 @@
 # cpu-llms-in-c
 
-`cpu-llms-in-c` is an experimental compiler and runtime project for running language models on CPU-only systems.
+Compile a language model and a bounded workload into a packed model image and a C runtime for CPU-only inference. The target does not require Python, PyTorch, llama.cpp, ONNX Runtime, or another inference framework.
 
-The compiler takes a model checkpoint, a target CPU profile, deployment constraints, and an optional bounded input profile. It produces a model-specific C runtime and a packed model image. Existing inference frameworks may be used as correctness oracles during development, but they are not runtime dependencies.
+**Review the exact test inputs and outputs in [`REVIEW.html`](REVIEW.html).**
 
-## Status
+## Measured prototype
 
-Bounded-profile scalar prototype.
+The first complete prototype specializes Gemma 4 E2B for a two-label hazard smoke workload.
 
-- The offline compiler emits a 966,579,776-byte task image from the pinned Gemma 4 E2B IT checkpoint. It retains 112 profile-reachable tokens, folds their PLE rows, quantizes 275 executed matrices to group-128 Q4, and omits the unused multimodal graph and late shared-K/V weights.
-- The C11 runtime executes all 35 text layers, local and global RoPE, 15 physical K/V states, late shared K/V, double-wide late MLPs, PLE, final normalization, and a two-row constrained LM head. It has no inference-framework runtime dependency.
-- On one measured Ubuntu x86-64 two-vCPU system, the twelve-case warm run used 948,224 KiB peak RSS with no swap. Aggregate sequential prefill was 0.598 tokens/s and one-step decode was 0.621 tokens/s.
-- The twelve obvious smoke examples produced 12/12 Q4 decisions against their written labels. The independent BF16-weight NumPy reference produced 11/12, and Q4/reference decision agreement was 11/12. This is not a safety benchmark.
-- A general runtime tokenizer, arbitrary free-text input, fixed-prefix snapshots, tensor-by-tensor full-graph differential tests, SIMD kernels, and a real held-out safety evaluation are not implemented.
-- The earlier real-weight layer-0 test still passes ten declared tensor boundaries with maximum absolute error 0.
+| Result | Measured value |
+|---|---:|
+| Executed graph | 35 text layers |
+| Packed image | 966,579,776 bytes (921.8 MiB) |
+| Peak RSS, warm run | 948,224 KiB (926 MiB) |
+| Swap | 0 |
+| Warm prefill | 0.598 tokens/s |
+| Warm decision step | 0.621 tokens/s |
+| Cold prefill | 0.528 tokens/s |
+| Cold decision step | 0.576 tokens/s |
+| Q4 decisions against written labels | 12/12 |
+| BF16-reference decisions against written labels | 11/12 |
+| Q4/BF16 decision agreement | 11/12 |
 
-## Scope
+The twelve cases are obvious smoke inputs, not a safety benchmark. The current artifact accepts only inputs compiled from the profile; it is not a general text-generation runtime.
 
-The project investigates offline specialization across the full inference stack:
+Raw measurements, per-case logits, timings, hashes, and limitations are in [`models/gemma-4-e2b/results.json`](models/gemma-4-e2b/results.json).
 
-- model graph lowering;
-- architecture-specific graph rewrites;
-- mixed-bit and codebook quantization;
-- tensor and model-image layout;
-- CPU-specific kernels;
-- static memory allocation;
-- thread placement and scheduling;
-- bounded-input specialization when the deployment permits it;
-- target-machine validation and artifact packaging.
+## Build and run
 
-The intended runtime is a small C program with no Python interpreter, training stack, graph interpreter, or general-purpose inference framework on the target machine.
-
-## Current validation target
-
-The first planned validation target is text-only Gemma 4 E2B inference on an Intel Celeron J3455 system:
-
-| Item | Target |
-|---|---|
-| CPU | Intel Celeron J3455, 4 cores, SSE4.2 |
-| Available RAM | 3.34 GiB |
-| Steady-state RSS target | 960 MiB |
-| Hard RSS limit | 1,024 MiB |
-| Swap during inference | 0 |
-| Context limit | 512 tokens |
-| Runtime | Generated C executable and immutable packed model image |
-
-This target was selected to expose memory, instruction-set, storage, and scheduling constraints. It is not the only architecture intended for the framework.
-
-## Repository layout
-
-```text
-.
-├── README.md
-├── bench/
-│   ├── README.md
-│   └── target_probe.c
-├── docs/
-│   └── ARCHITECTURE.md
-├── include/cpu_llms/
-├── src/
-├── tests/
-├── tools/
-└── models/
-    └── gemma-4-e2b/
-        ├── README.md
-        ├── layer0-ranges.json
-        ├── layer0-validation.json
-        ├── pins.json
-        └── task-profiles/
-            ├── hazard-v1.json
-            └── hazard-v1-results.json
-```
-
-- [Compiler and runtime architecture](docs/ARCHITECTURE.md)
-- [Gemma 4 E2B engineering plan](models/gemma-4-e2b/README.md)
-- [Target probe](bench/README.md)
-
-## Correctness test
+Run the committed correctness tests:
 
 ```sh
-make fixture
 make test
 ```
 
-The committed fixture is synthetic and small. A separate ignored fixture validates layer 0 with pinned official weights and real embedding/PLE rows. The bounded task profile additionally exercises the complete text graph, but it does not replace full tensor-boundary or product-quality validation.
+Compile the task image on a machine that holds the pinned checkpoint:
 
-## Implementation rule
+```sh
+python3 tools/compile_gemma4_task_image.py \
+  --checkpoint /path/to/model.safetensors \
+  --config /path/to/config.json \
+  --tokenizer /path/to/tokenizer.json \
+  --profile models/gemma-4-e2b/profile.json \
+  --output hazard-v1.g4task
+```
 
-Claims are separated into four categories:
+Build and execute the C runtime:
 
-1. facts taken from primary model or hardware documentation;
-2. observations collected from the target machine;
-3. analytical estimates;
-4. measured project results.
+```sh
+make OMPFLAGS=-fopenmp build/gemma4-task
+OMP_NUM_THREADS=2 build/gemma4-task hazard-v1.g4task all
+```
 
-An estimate is not reported as a benchmark. An approximate graph transformation is not reported as an exact rewrite. A model is not reported as supported until its graph, numerical boundaries, output behavior, memory use, and target-machine execution have been validated.
+The model image is intentionally not stored in Git.
+
+## Implementation
+
+```text
+checkpoint + tokenizer + task profile
+                 |
+                 v
+        offline Python compiler
+                 |
+        folded PLE + Q4 matrices
+        reachable token rows only
+        two output-label rows
+                 |
+                 v
+       G4TASK01 packed image
+                 |
+                 v
+         mmap C11 runtime
+                 |
+      safe/danger logits and timing
+```
+
+The C runtime implements the full specialized text path: local and global RoPE, 15 physical K/V states, late shared K/V, double-wide late MLPs, PLE, final normalization, and the constrained LM head. The current matrix kernel is scalar Q4 GEMV with optional OpenMP.
+
+## Repository
+
+| Path | Contents |
+|---|---|
+| [`include/`](include/) | Public C interfaces |
+| [`src/`](src/) | C runtimes |
+| [`tools/`](tools/) | Offline compiler, reference evaluator, and hardware probe |
+| [`models/`](models/) | Model-specific profile, pins, results, and implementation notes |
+| [`tests/`](tests/) | Synthetic and real-weight correctness tests |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Cross-model compiler/runtime contract |
+| [`REVIEW.html`](REVIEW.html) | Human-readable test inputs, outputs, commands, and runtime boundary |
+
+Start with the [Gemma 4 E2B record](models/gemma-4-e2b/README.md) for the implemented artifact. Large checkpoints, generated model images, generated binaries, and credentials are excluded from the repository.
+
+## Current limits
+
+- no runtime tokenizer or arbitrary free-text input;
+- no SIMD kernel yet;
+- no full-graph tensor-by-tensor differential test;
+- no held-out application-quality evaluation;
+- one bounded Gemma 4 profile implemented; the cross-model compiler remains a design.
 
 ## License
 
