@@ -1,149 +1,66 @@
 # cpu-llms-in-c
 
-Compile a language model and a bounded workload into a packed model image and a C runtime for CPU-only inference. The target does not require Python, PyTorch, llama.cpp, ONNX Runtime, or another inference framework.
+An offline compiler turns a pinned language model into a packed Q4 image, and a small C11 runtime executes it on CPU. The deployed target needs no Python, PyTorch, llama.cpp, or ONNX Runtime. Task outputs are defined by the prompt at run time — the runtime is not hardwired to one task.
 
-**Review the exact test inputs and outputs in [`REVIEW.html`](REVIEW.html).**
+## Organization
 
-## Benchmark
-
-The first complete prototype specializes Gemma 4 E2B for a two-label hazard smoke workload.
-
-The C/Q4 benchmark used two CPU threads. Verification work is excluded from these durations.
-
-| Benchmark phase | Work | Duration | Throughput |
-|---|---:|---:|---:|
-| Offline image compilation | 275 Q4 matrices, 112 token rows | 28.246025 s | — |
-| Warm classification | 493 prompt tokens, 12 cases | 823.854355 s | 0.598407 tokens/s |
-| Warm extra label-token decode | 12 tokens | 19.338979 s | 0.620508 tokens/s |
-| Warm process wall time | complete 12-case run | 843.24 s | — |
-| Cold classification | case 0, 43 prompt tokens | 81.401387 s | 0.528247 tokens/s |
-| Cold extra label-token decode | case 0, 1 token | 1.736948 s | 0.575723 tokens/s |
-| Cold process wall time | complete case-0 run | 83.16 s | — |
-
-Warm peak RSS was 948,224 KiB (926 MiB), with zero swap. `classification` covers the prompt forward pass, final normalization, two logits, and the one-bit comparison. The extra label-token decode happens after the decision and is not required to return it.
-
-## Verification
-
-Verification is reported separately from benchmark timing.
-
-| Verification | Result |
-|---|---:|
-| Q4 decisions against written labels | 12/12 |
-| BF16-reference decisions against written labels | 11/12 |
-| Q4/BF16 decision agreement | 11/12 |
-| Real-weight layer-0 tensor boundaries | 10/10, maximum absolute error 0 |
-| BF16-reference execution duration | 24.875661 s compute; 26.67 s process wall time |
-
-The BF16 reference uses batched NumPy execution and its duration is not a C-runtime benchmark. The twelve cases are obvious smoke inputs, not a safety benchmark. The current artifact accepts only inputs compiled from the profile; it is not a general text-generation runtime.
-
-Raw measurements, per-case logits, timings, hashes, and limitations are in [`models/gemma-4-e2b/results.json`](models/gemma-4-e2b/results.json).
-
-## Build and run
-
-Run the committed correctness tests:
-
-```sh
-make test
-```
-
-Compile the task image on a machine that holds the pinned checkpoint:
-
-```sh
-python3 compiler/compile_gemma4_task_image.py \
-  --checkpoint /path/to/model.safetensors \
-  --config /path/to/config.json \
-  --tokenizer /path/to/tokenizer.json \
-  --profile models/gemma-4-e2b/profile.json \
-  --output hazard-v1.g4task
-```
-
-Build and execute the C runtime:
-
-```sh
-make OMPFLAGS=-fopenmp build/gemma4-task
-OMP_NUM_THREADS=2 build/gemma4-task hazard-v1.g4task all
-```
-
-The model image is intentionally not stored in Git.
-
-## Implementation
-
-```text
-checkpoint + tokenizer + task profile
-                 |
-                 v
-        offline Python compiler
-                 |
-        folded PLE + Q4 matrices
-        reachable token rows only
-        two output-label rows
-                 |
-                 v
-       G4TASK01 packed image
-                 |
-                 v
-         mmap C11 runtime
-                 |
-       one-bit decision + diagnostic logits
-```
-
-The C runtime implements the full specialized text path: local and global RoPE, 15 physical K/V states, late shared K/V, double-wide late MLPs, PLE, final normalization, and the constrained LM head. The current matrix kernel is scalar Q4 GEMV with optional OpenMP.
-
-## Output contract
-
-The application result is one bit: `0 = safe`, `1 = danger`. The current diagnostic runtime computes two FP32 logits and compares them. Because the final soft cap is monotonic, a decision-only compiler can replace the two output rows with one exact difference row, `W_danger - W_safe`, and test one score against zero.
-
-The measured decode step feeds the selected label token through another 35 layers. That step is for decode measurement; the binary decision is already available after prefill and does not require it.
-
-## Repository
+Everything is classified along two axes, model first, CPU second. A released artifact is one model x CPU pair, and results never transfer between pairs. The full contract is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 | Path | Contents |
 |---|---|
-| [`runtime/`](runtime/) | C runtime, headers, layer reference, and hardware probe |
+| [`runtime/`](runtime/) | C runtime, headers, layer reference, hardware probe |
 | [`compiler/`](compiler/) | Offline compiler and independent reference tools |
-| [`models/`](models/) | One directory per model; per-CPU results live under `models/<model>/targets/<cpu>/` (model first, CPU second) |
-| [`tests/`](tests/) | Synthetic and real-weight correctness tests |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Cross-model compiler/runtime contract |
-| [`REVIEW.html`](REVIEW.html) | Human-readable test inputs, outputs, commands, and runtime boundary |
+| `models/<model>/` | Model axis: pins, profile, graph record, reference outputs, model-only optimizations |
+| `models/<model>/targets/<cpu>/` | CPU axis: CPU pin, kernels, and results measured for that pair |
+| [`tests/`](tests/) | Committed correctness tests (`make test`) |
 
-Start with the [Gemma 4 E2B record](models/gemma-4-e2b/README.md) for the implemented artifact and the [Qwen3.5-0.8B record](models/qwen3.5-0.8b/README.md) for the planned next one. Large checkpoints, generated model images, generated binaries, and credentials are excluded from the repository.
+Checkpoints, generated images, binaries, and credentials are never committed.
+
+## Status
+
+**Implemented: [Gemma 4 E2B](models/gemma-4-e2b/README.md)** — a complete 35-layer C/Q4 artifact for one compiled two-label profile, verified 12/12 against written labels and 10/10 against layer-0 tensor boundaries. Measured on an unpinned two-vCPU x86-64 dev machine: 0.598 tokens/s, scalar kernel, 926 MiB peak RSS, zero swap. Exact inputs, outputs, and the runtime boundary: [`REVIEW.html`](REVIEW.html). This artifact predates the prompt-defined output contract and compiles its two labels in — now treated as the restricted special case.
+
+**Planned: [Qwen3.5-0.8B](models/qwen3.5-0.8b/README.md)** on an [Amlogic A113X target](models/qwen3.5-0.8b/targets/a113x/README.md) (4x Cortex-A53, 1-2 GB). Hybrid DeltaNet architecture, runtime tokenizer, full output head, per-call answer sets. Nothing is pinned or measured yet.
 
 ## Optimization roadmap
 
-Optimizations split along the two repository axes and stack. Model-axis steps hold on any CPU and live in the model record; CPU-axis steps hold for one pinned CPU and live under `targets/<cpu>/`. The factors below are analytical estimates against the measured Gemma baseline (0.598 tokens/s, scalar kernel, two threads) — they are not benchmark results, they do not multiply cleanly, and the stack is capped by the target's memory bandwidth.
+Each step is an analytical estimate, not a benchmark result; factors do not multiply cleanly and the stack is capped by the target's memory bandwidth. A step lands only after tensor-level correctness tests for the code it touches.
 
 | Step | Axis | Mechanism | Estimated effect |
 |---|---|---|---|
 | 1. Switch to Qwen3.5-0.8B | model | per-token matrix traffic 960 MB → ~290 MB | ~3.3x per token |
 | 2. Batched prefill | model | read each matrix once per layer per prompt, not per token | up to ~40x on prompt prefill |
 | 3. Per-call answer-set scoring | model | skip the 248K-row output head unless generating | ~130 MB saved per decision |
-| 4. NEON kernel | CPU | imported llama.cpp-style vectorized GEMV, then T-MAC-style TBL lookup; the faster is kept | ~3-5x kernel throughput |
-| 5. Four-thread static partition | CPU | all A113X cores with deterministic reductions | up to ~2x, bandwidth-capped |
+| 4. NEON kernel | CPU | imported llama.cpp-style vectorized GEMV, then T-MAC-style TBL lookup; keep the faster | ~3-5x kernel throughput |
+| 5. Four-thread static partition | CPU | all A113X cores, deterministic reductions | up to ~2x, bandwidth-capped |
 | 6. Lower-bit LUT (experimental) | CPU | Q3/Q2 with linear LUT cost scaling, only if task quality survives | further 1.3-2x |
 
-Details and ordering: model axis in [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md), CPU axis in [`models/qwen3.5-0.8b/targets/a113x/README.md`](models/qwen3.5-0.8b/targets/a113x/README.md). Each step lands only after the tensor-level correctness tests for the code it touches.
+Model-axis details: [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md). CPU-axis details: [`models/qwen3.5-0.8b/targets/a113x/README.md`](models/qwen3.5-0.8b/targets/a113x/README.md).
 
-## Rewrite versus off-the-shelf stacks (theoretical)
+## Why rewrite instead of using an existing stack
 
-The comparison target is Qwen3.5-0.8B on the provisional A113X device (4x Cortex-A53, 1-2 GB RAM). All numbers are analytical, not measurements.
+Theoretical comparison for Qwen3.5-0.8B on the A113X device; no measurements yet.
 
-| Stack | Runs on the 1 GB board | Decode traffic per token | Per-decision head cost | Overhead beyond weights | Qwen3.5 hybrid support |
-|---|---|---:|---:|---:|---|
-| This C runtime (plan) | yes (~420 MB image + ~30 MB) | ~290 MB | a few head rows | ~30 MB, zero dependencies | own DeltaNet implementation, tensor-verified |
-| llama.cpp (Q4 GGUF) | yes (~0.5 GB + context/scratch) | ~290 MB + 130 MB full head every token | full 248K-row head | ~100-300 MB, single binary | GATED_DELTA_NET op landed 2026, basic vector CPU path |
-| PyTorch + Transformers | no — BF16 weights alone ~1.6 GB | ~1.6 GB | full head | Python + PyTorch, ~1 GB+ | reference implementation (the oracle) |
-| ONNX Runtime | no practical path | — | — | — | zero non-softmax attention operators as of 2026 |
+| Stack | Fits the 1 GB board | Decode traffic per token | Notes |
+|---|---|---:|---|
+| This C runtime (plan) | yes | ~290 MB | ~30 MB overhead, zero dependencies, per-call answer sets skip the head |
+| llama.cpp (Q4 GGUF) | yes | ~420 MB | full 248K-row head every token; DeltaNet CPU op is new and unspecialized |
+| PyTorch + Transformers | no | ~1.6 GB | BF16 weights alone exceed RAM; serves as the numerical oracle |
+| ONNX Runtime | no | — | no operators for non-softmax attention as of 2026 |
 
-What the table implies:
+llama.cpp is the only real alternative. Kernel techniques are not what separates the stacks — its NEON vectorization is imported here as CPU-axis step 4, and both then face the same DRAM bandwidth wall. What a generic stack cannot absorb: per-call answer-set scoring (~1.4x per decision), 3-10x smaller non-weight RSS, a ~100 KB dependency-free binary, a tensor-verified DeltaNet path, and per-target kernel/layout specialization. The on-device baseline measurement includes llama.cpp, and its numbers are recorded alongside ours.
 
-- **PyTorch and ONNX are not candidates on this class of device.** PyTorch does not fit the memory; ONNX cannot express the DeltaNet layers without decomposing into tens of primitive ops per step.
-- **The real off-the-shelf comparison is llama.cpp.** Its NEON kernels beat a scalar baseline, but kernel techniques are CPU-axis optimizations, not properties of a stack: the same vectorization is imported as a CPU-axis step here (see the target record), so any kernel gap is transient. Both stacks then face the same DRAM bandwidth wall.
-- The rewrite's structural advantages are the parts an upstream generic stack cannot absorb: per-call answer-set scoring skips ~130 MB of head traffic per decision (~1.4x on decision latency, more on short prompts); roughly 3-10x smaller non-weight RSS leaves headroom on the 1 GB board; a dependency-free ~100 KB static binary; a tensor-verified DeltaNet path instead of a freshly landed one; and per-target kernel and layout specialization beyond what a general project ships.
-- If off-the-shelf llama.cpp on the device meets the latency and memory gates, that result is recorded too — the baseline measurement includes it.
+## Build and test
+
+```sh
+make test
+```
+
+Model-specific compile and run commands live in each model record, e.g. the [Gemma 4 E2B build](models/gemma-4-e2b/README.md#build).
 
 ## Current limits
 
-- no runtime tokenizer or arbitrary free-text input;
+- no runtime tokenizer or arbitrary free-text input yet (planned for the Qwen artifact);
 - no SIMD kernel yet;
 - no full-graph tensor-by-tensor differential test;
 - no held-out application-quality evaluation;
