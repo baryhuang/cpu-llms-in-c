@@ -4,25 +4,37 @@ Compile a language model and a bounded workload into a packed model image and a 
 
 **Review the exact test inputs and outputs in [`REVIEW.html`](REVIEW.html).**
 
-## Measured prototype
+## Benchmark
 
 The first complete prototype specializes Gemma 4 E2B for a two-label hazard smoke workload.
 
-| Result | Measured value |
+The C/Q4 benchmark used two CPU threads. Verification work is excluded from these durations.
+
+| Benchmark phase | Work | Duration | Throughput |
+|---|---:|---:|---:|
+| Offline image compilation | 275 Q4 matrices, 112 token rows | 28.246025 s | — |
+| Warm classification | 493 prompt tokens, 12 cases | 823.854355 s | 0.598407 tokens/s |
+| Warm extra label-token decode | 12 tokens | 19.338979 s | 0.620508 tokens/s |
+| Warm process wall time | complete 12-case run | 843.24 s | — |
+| Cold classification | case 0, 43 prompt tokens | 81.401387 s | 0.528247 tokens/s |
+| Cold extra label-token decode | case 0, 1 token | 1.736948 s | 0.575723 tokens/s |
+| Cold process wall time | complete case-0 run | 83.16 s | — |
+
+Warm peak RSS was 948,224 KiB (926 MiB), with zero swap. `classification` covers the prompt forward pass, final normalization, two logits, and the one-bit comparison. The extra label-token decode happens after the decision and is not required to return it.
+
+## Verification
+
+Verification is reported separately from benchmark timing.
+
+| Verification | Result |
 |---|---:|
-| Executed graph | 35 text layers |
-| Packed image | 966,579,776 bytes (921.8 MiB) |
-| Peak RSS, warm run | 948,224 KiB (926 MiB) |
-| Swap | 0 |
-| Warm prefill | 0.598 tokens/s |
-| Warm extra label-token decode | 0.621 tokens/s |
-| Cold prefill | 0.528 tokens/s |
-| Cold extra label-token decode | 0.576 tokens/s |
 | Q4 decisions against written labels | 12/12 |
 | BF16-reference decisions against written labels | 11/12 |
 | Q4/BF16 decision agreement | 11/12 |
+| Real-weight layer-0 tensor boundaries | 10/10, maximum absolute error 0 |
+| BF16-reference execution duration | 24.875661 s compute; 26.67 s process wall time |
 
-The twelve cases are obvious smoke inputs, not a safety benchmark. The current artifact accepts only inputs compiled from the profile; it is not a general text-generation runtime.
+The BF16 reference uses batched NumPy execution and its duration is not a C-runtime benchmark. The twelve cases are obvious smoke inputs, not a safety benchmark. The current artifact accepts only inputs compiled from the profile; it is not a general text-generation runtime.
 
 Raw measurements, per-case logits, timings, hashes, and limitations are in [`models/gemma-4-e2b/results.json`](models/gemma-4-e2b/results.json).
 

@@ -55,6 +55,7 @@
     .metric span { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
     .metric b { display: block; margin-top: 9px; font-size: 24px; line-height: 1.1; }
     .metric small { display: block; margin-top: 6px; color: var(--muted); }
+    .metrics + h3 { margin-top: 20px; }
     .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     pre {
       margin: 0;
@@ -110,7 +111,8 @@
     <nav class="bar" aria-label="Review sections">
       <a href="#boundary">Input boundary</a>
       <a href="#method">How it ran</a>
-      <a href="#cases">12 test cases</a>
+      <a href="#benchmark">Benchmark</a>
+      <a href="#verification">Verification</a>
       <a href="#sources">Source files</a>
     </nav>
   </header>
@@ -120,14 +122,40 @@
     It accepts <code>IMAGE [CASE_INDEX|all]</code>. The compiler tokenizes the twelve observations below and writes those token sequences into the model image. At runtime, the second argument selects one stored sequence; it is parsed as an integer or the literal <code>all</code>. There is no text or stdin input path. The application output is one bit: <code>0 = safe</code>, <code>1 = danger</code>.
   </section>
 
-  <section aria-labelledby="summary-title">
-    <h2 id="summary-title">Recorded result</h2>
+  <section id="benchmark" aria-labelledby="benchmark-title">
+    <h2 id="benchmark-title">Benchmark</h2>
+    <p class="note">C/Q4 runtime, two CPU threads. Verification execution is excluded. All durations below are wall-clock seconds.</p>
     <div class="metrics">
-      <div class="metric"><span>Q4 / written labels</span><b>12 / 12</b><small>6 safe, 6 danger</small></div>
-      <div class="metric"><span>Q4 / BF16 agreement</span><b>11 / 12</b><small>one decision boundary crossed</small></div>
-      <div class="metric"><span>Warm throughput</span><b>0.598 / 0.621</b><small>prefill / extra label-token decode</small></div>
-      <div class="metric"><span>Resident memory</span><b>926 MiB</b><small>peak RSS; no swap</small></div>
+      <div class="metric"><span>Offline image compilation</span><b>28.246025 s</b><small>275 matrices; 112 token rows</small></div>
+      <div class="metric"><span>Warm classification duration</span><b>823.854355 s</b><small>493 prompt tokens; 0.598407 tok/s</small></div>
+      <div class="metric"><span>Warm extra-decode duration</span><b>19.338979 s</b><small>12 label tokens; 0.620508 tok/s</small></div>
+      <div class="metric"><span>Warm process duration</span><b>843.24 s</b><small>complete 12-case wall time</small></div>
+      <div class="metric"><span>Warm peak RSS</span><b>926 MiB</b><small>948,224 KiB; no swap</small></div>
+      <div class="metric"><span>Cold classification duration</span><b>81.401387 s</b><small>case 0; 43 tokens; 0.528247 tok/s</small></div>
+      <div class="metric"><span>Cold extra-decode duration</span><b>1.736948 s</b><small>case 0; 0.575723 tok/s</small></div>
+      <div class="metric"><span>Cold process duration</span><b>83.16 s</b><small>complete case-0 wall time</small></div>
     </div>
+    <h3>Warm per-case durations</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th># / ID</th><th>Prompt tokens</th><th>Classification duration</th><th>Classification throughput</th><th>Extra-decode duration</th><th>Extra-decode throughput</th></tr></thead>
+        <tbody>
+          <tr><td>0 / <code>safe_power_isolated</code></td><td>43</td><td>62.786325 s</td><td>0.684863 tok/s</td><td>1.436223 s</td><td>0.696271 tok/s</td></tr>
+          <tr><td>1 / <code>safe_empty_zone</code></td><td>40</td><td>74.900251 s</td><td>0.534044 tok/s</td><td>1.637409 s</td><td>0.610721 tok/s</td></tr>
+          <tr><td>2 / <code>safe_maintenance_lockout</code></td><td>42</td><td>73.677620 s</td><td>0.570051 tok/s</td><td>2.190102 s</td><td>0.456600 tok/s</td></tr>
+          <tr><td>3 / <code>safe_robot_idle</code></td><td>43</td><td>75.826978 s</td><td>0.567080 tok/s</td><td>1.508172 s</td><td>0.663054 tok/s</td></tr>
+          <tr><td>4 / <code>safe_pressure_released</code></td><td>43</td><td>67.169120 s</td><td>0.640175 tok/s</td><td>1.447366 s</td><td>0.690910 tok/s</td></tr>
+          <tr><td>5 / <code>safe_conveyor_clear</code></td><td>43</td><td>70.355746 s</td><td>0.611180 tok/s</td><td>1.673379 s</td><td>0.597593 tok/s</td></tr>
+          <tr><td>6 / <code>danger_person_moving_machine</code></td><td>39</td><td>61.710494 s</td><td>0.631983 tok/s</td><td>1.545119 s</td><td>0.647199 tok/s</td></tr>
+          <tr><td>7 / <code>danger_guard_bypassed</code></td><td>44</td><td>69.734516 s</td><td>0.630964 tok/s</td><td>1.503105 s</td><td>0.665289 tok/s</td></tr>
+          <tr><td>8 / <code>danger_uncontrolled_pressure</code></td><td>38</td><td>59.866422 s</td><td>0.634746 tok/s</td><td>1.702738 s</td><td>0.587289 tok/s</td></tr>
+          <tr><td>9 / <code>danger_robot_entry</code></td><td>38</td><td>66.757389 s</td><td>0.569225 tok/s</td><td>1.468966 s</td><td>0.680751 tok/s</td></tr>
+          <tr><td>10 / <code>danger_exposed_wires</code></td><td>41</td><td>76.568933 s</td><td>0.535465 tok/s</td><td>1.568163 s</td><td>0.637689 tok/s</td></tr>
+          <tr><td>11 / <code>danger_conveyor_reach</code></td><td>39</td><td>64.500561 s</td><td>0.604646 tok/s</td><td>1.658237 s</td><td>0.603050 tok/s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Classification duration ends after final normalization, two logits, and the one-bit comparison. Extra decode happens after the result and is not required to return it.</p>
   </section>
 
   <section class="panel" aria-labelledby="output-title">
@@ -159,9 +187,9 @@ Exact decision-only rewrite:
   --output hazard-v1.g4task</pre>
       </div>
       <div class="panel">
-        <h3>2. Build and execute all stored cases</h3>
+        <h3>2. Build and measure all stored cases</h3>
         <pre>make OMPFLAGS=-fopenmp build/gemma4-task
-OMP_NUM_THREADS=2 \
+/usr/bin/time -v env OMP_NUM_THREADS=2 \
   build/gemma4-task hazard-v1.g4task all</pre>
       </div>
     </div>
@@ -180,13 +208,9 @@ Classify the observation. Reply with exactly safe or danger.&lt;turn|&gt;
 </pre>
       </div>
       <div class="panel">
-        <h3>Recorded case 0 output</h3>
+        <h3>Recorded case 0 verification output</h3>
         <pre>{"case":0,"tokens":43,"expected":0,"predicted":0,
- "safe_logit":4.65898371,"danger_logit":-13.1987514,
- "prompt_seconds":62.786325,
- "prefill_tokens_per_second":0.684863,
- "decode_seconds":1.436223,
- "decode_tokens_per_second":0.696271}</pre>
+ "safe_logit":4.65898371,"danger_logit":-13.1987514}</pre>
       </div>
     </div>
     <p class="note">Labels are single tokenizer tokens: <code>safe</code> = 12977 and <code>danger</code> = 32667. The profile contains 112 unique token rows after tokenization.</p>
@@ -211,8 +235,16 @@ case index is outside the image</pre>
     <p class="note">This follows directly from the runtime parser: any second argument other than <code>all</code> must parse completely as an in-range integer case index.</p>
   </section>
 
-  <section id="cases" aria-labelledby="cases-title">
-    <h2 id="cases-title">Inputs and outputs</h2>
+  <section id="verification" aria-labelledby="verification-title">
+    <h2 id="verification-title">Verification</h2>
+    <p class="note">Output and numerical checks only. These results and the BF16 execution duration are excluded from the C/Q4 benchmark.</p>
+    <div class="metrics">
+      <div class="metric"><span>Q4 / written labels</span><b>12 / 12</b><small>6 safe, 6 danger</small></div>
+      <div class="metric"><span>BF16 / written labels</span><b>11 / 12</b><small>one false positive</small></div>
+      <div class="metric"><span>Q4 / BF16 agreement</span><b>11 / 12</b><small>case 1 crossed the boundary</small></div>
+      <div class="metric"><span>BF16 verification duration</span><b>24.875661 s</b><small>26.67 s process wall; batched NumPy</small></div>
+    </div>
+    <h3>Verification inputs and outputs</h3>
     <div class="filters" aria-label="Filter test cases">
       <button type="button" data-filter="all" aria-pressed="true">All 12</button>
       <button type="button" data-filter="mismatch" aria-pressed="false">Q4/BF16 mismatch</button>
@@ -220,74 +252,73 @@ case index is outside the image</pre>
       <button type="button" data-filter="danger" aria-pressed="false">Expected danger</button>
     </div>
     <div class="table-wrap">
-      <table>
+      <table id="verification-table">
         <thead>
           <tr>
             <th># / ID</th><th>Observation</th><th>Expected</th><th>BF16</th><th>Q4</th>
             <th>BF16 logits<br>safe / danger</th><th>Q4 logits<br>safe / danger</th>
-            <th>Tokens</th><th>Prefill<br>s / tok/s</th><th>Extra decode<br>s / tok/s</th>
           </tr>
         </thead>
         <tbody>
           <tr data-expected="safe" data-mismatch="false">
             <td>0<br><code>safe_power_isolated</code></td><td class="obs">The machine is stopped, electrical power is isolated, and the safety guard is closed.</td>
             <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">2.1276 / -10.0733</td><td class="number">4.6590 / -13.1988</td><td class="number">43</td><td class="number">62.7863 / 0.6849</td><td class="number">1.4362 / 0.6963</td>
+            <td class="number">2.1276 / -10.0733</td><td class="number">4.6590 / -13.1988</td>
           </tr>
           <tr class="mismatch" data-expected="safe" data-mismatch="true">
             <td>1<br><code>safe_empty_zone</code></td><td class="obs">The hazard zone is empty and the locked gate remains closed during operation.</td>
             <td><span class="tag safe">safe</span></td><td><span class="tag danger">danger</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">13.8178 / 19.1788</td><td class="number">14.9666 / 12.5546</td><td class="number">40</td><td class="number">74.9003 / 0.5340</td><td class="number">1.6374 / 0.6107</td>
+            <td class="number">13.8178 / 19.1788</td><td class="number">14.9666 / 12.5546</td>
           </tr>
           <tr data-expected="safe" data-mismatch="false">
             <td>2<br><code>safe_maintenance_lockout</code></td><td class="obs">Maintenance is in progress with lockout and tagout applied and zero stored energy verified.</td>
             <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">2.1843 / -11.2548</td><td class="number">6.5092 / -10.2359</td><td class="number">42</td><td class="number">73.6776 / 0.5701</td><td class="number">2.1901 / 0.4566</td>
+            <td class="number">2.1843 / -11.2548</td><td class="number">6.5092 / -10.2359</td>
           </tr>
           <tr data-expected="safe" data-mismatch="false">
             <td>3<br><code>safe_robot_idle</code></td><td class="obs">The robot is in a verified idle state and no person is inside its fenced workspace.</td>
             <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">3.0198 / -16.1828</td><td class="number">5.7938 / -13.9427</td><td class="number">43</td><td class="number">75.8270 / 0.5671</td><td class="number">1.5082 / 0.6631</td>
+            <td class="number">3.0198 / -16.1828</td><td class="number">5.7938 / -13.9427</td>
           </tr>
           <tr data-expected="safe" data-mismatch="false">
             <td>4<br><code>safe_pressure_released</code></td><td class="obs">The pressure vessel is isolated, depressurized, and confirmed at zero pressure before access.</td>
             <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">2.0271 / -11.2036</td><td class="number">5.0694 / -11.2337</td><td class="number">43</td><td class="number">67.1691 / 0.6402</td><td class="number">1.4474 / 0.6909</td>
+            <td class="number">2.0271 / -11.2036</td><td class="number">5.0694 / -11.2337</td>
           </tr>
           <tr data-expected="safe" data-mismatch="false">
             <td>5<br><code>safe_conveyor_clear</code></td><td class="obs">The conveyor is stopped and cleared, and its emergency stop has been tested before inspection.</td>
             <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">3.2492 / -10.3662</td><td class="number">6.6360 / -9.4083</td><td class="number">43</td><td class="number">70.3557 / 0.6112</td><td class="number">1.6734 / 0.5976</td>
+            <td class="number">3.2492 / -10.3662</td><td class="number">6.6360 / -9.4083</td>
           </tr>
           <tr data-expected="danger" data-mismatch="false">
             <td>6<br><code>danger_person_moving_machine</code></td><td class="obs">A person is inside the hazard zone while the machine is moving.</td>
             <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-18.4487 / 12.2356</td><td class="number">-6.4855 / 13.7035</td><td class="number">39</td><td class="number">61.7105 / 0.6320</td><td class="number">1.5451 / 0.6472</td>
+            <td class="number">-18.4487 / 12.2356</td><td class="number">-6.4855 / 13.7035</td>
           </tr>
           <tr data-expected="danger" data-mismatch="false">
             <td>7<br><code>danger_guard_bypassed</code></td><td class="obs">The safety guard is open and its interlock has been bypassed while the motor is energized.</td>
             <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-17.8402 / 15.1991</td><td class="number">-9.8358 / 10.8254</td><td class="number">44</td><td class="number">69.7345 / 0.6310</td><td class="number">1.5031 / 0.6653</td>
+            <td class="number">-17.8402 / 15.1991</td><td class="number">-9.8358 / 10.8254</td>
           </tr>
           <tr data-expected="danger" data-mismatch="false">
             <td>8<br><code>danger_uncontrolled_pressure</code></td><td class="obs">A worker is loosening a fitting while the line remains pressurized.</td>
             <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-13.3689 / 12.8202</td><td class="number">-7.2562 / 11.2444</td><td class="number">38</td><td class="number">59.8664 / 0.6347</td><td class="number">1.7027 / 0.5873</td>
+            <td class="number">-13.3689 / 12.8202</td><td class="number">-7.2562 / 11.2444</td>
           </tr>
           <tr data-expected="danger" data-mismatch="false">
             <td>9<br><code>danger_robot_entry</code></td><td class="obs">A worker entered the robot cell while automatic motion is enabled.</td>
             <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-4.9891 / 14.6633</td><td class="number">-1.3563 / 12.3935</td><td class="number">38</td><td class="number">66.7574 / 0.5692</td><td class="number">1.4690 / 0.6808</td>
+            <td class="number">-4.9891 / 14.6633</td><td class="number">-1.3563 / 12.3935</td>
           </tr>
           <tr data-expected="danger" data-mismatch="false">
             <td>10<br><code>danger_exposed_wires</code></td><td class="obs">Exposed live conductors are within reach and electrical power has not been isolated.</td>
             <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-17.9172 / 14.6793</td><td class="number">-9.1719 / 12.9716</td><td class="number">41</td><td class="number">76.5689 / 0.5355</td><td class="number">1.5682 / 0.6377</td>
+            <td class="number">-17.9172 / 14.6793</td><td class="number">-9.1719 / 12.9716</td>
           </tr>
           <tr data-expected="danger" data-mismatch="false">
             <td>11<br><code>danger_conveyor_reach</code></td><td class="obs">An operator is reaching into a running conveyor to remove a jam.</td>
             <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-17.6443 / 13.6259</td><td class="number">-7.1755 / 13.5782</td><td class="number">39</td><td class="number">64.5006 / 0.6046</td><td class="number">1.6582 / 0.6031</td>
+            <td class="number">-17.6443 / 13.6259</td><td class="number">-7.1755 / 13.5782</td>
           </tr>
         </tbody>
       </table>
@@ -311,7 +342,7 @@ case index is outside the image</pre>
 </main>
 <script>
   const buttons = [...document.querySelectorAll('[data-filter]')];
-  const rows = [...document.querySelectorAll('tbody tr')];
+  const rows = [...document.querySelectorAll('#verification-table tbody tr')];
   for (const button of buttons) {
     button.addEventListener('click', () => {
       const filter = button.dataset.filter;

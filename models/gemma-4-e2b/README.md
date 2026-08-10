@@ -2,26 +2,42 @@
 
 Implemented status: complete 35-layer text graph for one compiled two-label profile. General text inference is not implemented.
 
-## Result
+## Benchmark
 
-The measurement used the pinned official checkpoint, a generated Q4 image, the C11 runtime, and two CPU threads on an Ubuntu x86-64 test system.
+The C/Q4 benchmark used the pinned checkpoint, generated image, C11 runtime, two CPU threads, and an Ubuntu x86-64 test system. BF16 reference execution and correctness tests are excluded from this section.
 
-| Metric | Result |
+| Phase | Work | Duration | Throughput |
+|---|---:|---:|---:|
+| Offline image compilation | 275 Q4 matrices, 112 token rows | 28.246025 s | — |
+| Warm classification | 493 prompt tokens, 12 cases | 823.854355 s | 0.598407 tokens/s |
+| Warm extra label-token decode | 12 tokens | 19.338979 s | 0.620508 tokens/s |
+| Warm process wall time | complete 12-case run | 843.24 s | — |
+| Cold classification | case 0, 43 prompt tokens | 81.401387 s | 0.528247 tokens/s |
+| Cold extra label-token decode | case 0, 1 token | 1.736948 s | 0.575723 tokens/s |
+| Cold process wall time | complete case-0 run | 83.16 s | — |
+
+Warm peak RSS was 948,224 KiB (926 MiB), with zero swap. Cold peak RSS was 946,176 KiB (924 MiB). The warm aggregate logically visited approximately 575 MB/s of matrix data during classification and 596 MB/s during the extra decode. These are memory-access rates, not storage measurements.
+
+The cold case produced 325 major page faults and 1,886,584 filesystem input blocks. Interpreting Linux input blocks as 512-byte units gives approximately 966 MB, close to the full image size.
+
+`classification duration` ends after final normalization, two logits, and the one-bit comparison. `extra label-token decode duration` measures a subsequent 35-layer token step and is not required to return the binary result.
+
+## Verification
+
+Verification is not included in the benchmark durations above.
+
+| Check | Result |
 |---|---:|
-| Image size | 966,579,776 bytes (921.8 MiB) |
-| Peak RSS, warm run | 948,224 KiB (926 MiB) |
-| Swap | 0 |
-| Warm prefill | 0.598 tokens/s |
-| Warm extra label-token decode | 0.621 tokens/s |
-| Cold prefill | 0.528 tokens/s |
-| Cold extra label-token decode | 0.576 tokens/s |
 | Q4 decisions / written labels | 12/12 |
 | BF16-reference decisions / written labels | 11/12 |
 | Q4/BF16 agreement | 11/12 |
+| Real-weight layer-0 tensor boundaries | 10/10, maximum absolute error 0 |
+| BF16 reference compute duration | 24.875661 s |
+| BF16 reference process wall time | 26.67 s |
 
 The only Q4/reference disagreement was `safe_empty_zone`: the BF16 reference selected `danger`; Q4 selected the written label `safe`. This boundary crossing does not establish that Q4 is better.
 
-The twelve inputs are a smoke set, not a safety evaluation. Open [`../../REVIEW.html`](../../REVIEW.html) to inspect every input and output. Unrounded logits, timings, hashes, page-fault counts, and limitations are in [`results.json`](results.json). The input contract is in [`profile.json`](profile.json).
+The BF16 reference is an independent batched NumPy execution. Its duration is reported for reproducibility, not as target-runtime performance. The twelve inputs are a smoke set, not a safety evaluation. Open [`../../REVIEW.html`](../../REVIEW.html) to inspect every input and output. Unrounded data are in [`results.json`](results.json); the input contract is in [`profile.json`](profile.json).
 
 ## Artifact
 
@@ -102,7 +118,7 @@ score <= 0 -> safe
 
 Gemma's final `30 * tanh(logit / 30)` soft cap is monotonic, so comparing the raw projections preserves the selected label. This reduces two head rows to one. It does not reduce the 35-layer body.
 
-The recorded `decode_seconds` is an additional benchmark step: after making the decision, the runtime feeds the selected label token through all 35 layers. A deployment that returns only the bit can omit this step. For case 0, classification was available after 62.786325 seconds; the additional 1.436223-second label-token decode was not required for the classification.
+After making the decision, the current benchmark path feeds the selected label token through all 35 layers. A deployment that returns only the bit can omit this step.
 
 ## Build
 
@@ -131,15 +147,7 @@ python3 compiler/evaluate_gemma4_task_reference.py \
   --output reference.json
 ```
 
-## Runtime cost
-
-The warm run processed 493 prompt tokens in 823.854 seconds and 12 extra label-token decode steps in 19.339 seconds. Peak RSS remained below 1 GiB with no swap.
-
-At the measured aggregate rates, logical matrix access was approximately 575 MB/s during prefill and 596 MB/s during the extra decode step. These are bytes visited by the runtime, not storage-throughput measurements. The model image must remain resident; paging the image from flash for every token is not viable.
-
-The cold case incurred 325 major page faults and 1,886,584 filesystem input blocks before reaching the same logits as the warm case. On Linux, interpreting those blocks as 512-byte units gives approximately 966 MB, close to the complete image size.
-
-## Validation
+## Verification procedure
 
 ```sh
 make test
