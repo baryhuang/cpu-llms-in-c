@@ -103,6 +103,21 @@ That leaves llama.cpp as the only stack that runs at all, and kernels are not wh
 
 These estimates become results only through the recorded baseline run; llama.cpp's on-device numbers land alongside ours.
 
+## Where the differentiation is
+
+The section above compares stacks on the same board. This one compares boards: the value of this repository falls monotonically with hardware price, because expensive edge hardware already has a solved LLM story. Prices are street prices observed 2026-08, not pinned quotes.
+
+| Tier | Representative hardware | Street price | Existing LLM story | Value of this repository |
+|---|---|---:|---|---|
+| High-end edge | Jetson Orin Nano Super, 67 TOPS | $249 kit | mature — CUDA/TensorRT/Ollama, sub-1B models at 25-40 tokens/s | ~none |
+| Mid SoC | RK3588S / RK3576, 6 TOPS NPU | $75-220 board | RKLLM works (27.05 / 18.79 tokens/s external baseline) | weak — kept as external reference baselines only |
+| Low with NPU | RK3562, 1 TOPS NPU | ~$20-40 class | RKLLM supported, but Qwen3.5-0.8B w8a8 needs 1,021 MB — a 1 GB board cannot host it | real — Q4 CPU path is the only one that fits 1 GB |
+| Low, no NPU path | A113X, RK3566-class | $10-20 SoC | none: no vendor stack targets these chips for LLMs | all of it |
+
+The battleground is the bottom two rows: low-cost boxes already deployed in the field (smart-home hubs, gateways), 1 GB RAM, A53/A55 cores, hardware no vendor LLM stack serves or plans to serve. A $249 Jetson cannot reach a $20 BOM, and RKLLM requires chips and memory these boxes do not have — a dependency-free Q4 C runtime with ~30 MB overhead is the only path onto them.
+
+Consequences for target priority: A113X stays first. RK3588S and RK3576 remain external reference baselines with no kernel investment. RK3562 is the interesting middle case — the same A53 kernels as the A113X apply unchanged, and one board can host the CPU-versus-NPU comparison directly — queued after the A113X baseline lands.
+
 ## Build and test
 
 ```sh
