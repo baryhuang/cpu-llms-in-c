@@ -19,7 +19,7 @@ To finalize: cache sizes, measured memory bandwidth, page size, and thermal beha
 
 In order of execution. Estimates are analytical; none is a benchmark result.
 
-1. **Scalar baseline first.** Cross-compile the unmodified C11 runtime, run the probe and the artifact on the device, and record the first `results.json` here. Every later step is measured against this.
+1. **Scalar baseline first.** Cross-compile the unmodified C11 runtime, run the probe and the artifact on the device, and record the first `results.json` here. Every later step is measured against this. The same baseline run also measures off-the-shelf llama.cpp on the device for the rewrite-versus-stack comparison in the top-level [`README.md`](../../../../README.md).
 2. **NEON TBL lookup kernel.** The T-MAC table-lookup formulation of low-bit GEMV maps directly onto NEON's TBL instruction: a 16-entry per-input table fits one 128-bit register, eliminating scalar nibble unpacking and multiplication. Published 4-bit single-thread speedups are ~3x on ARM cores.
 3. **Multi-token lookup prefill.** Vec-LUT-style vectorization: reuse each precomputed table across the batched prompt tokens so prefill saturates bandwidth instead of repeating per-token lookups.
 4. **Four-thread static partition.** Fixed row partitions per core with deterministic reductions (versus the current 2-thread OpenMP loop); expected up to ~2x, capped by DRAM bandwidth.

@@ -123,6 +123,24 @@ Optimizations split along the two repository axes and stack. Model-axis steps ho
 
 Details and ordering: model axis in [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md), CPU axis in [`models/qwen3.5-0.8b/targets/a113x/README.md`](models/qwen3.5-0.8b/targets/a113x/README.md). Each step lands only after the tensor-level correctness tests for the code it touches.
 
+## Rewrite versus off-the-shelf stacks (theoretical)
+
+The comparison target is Qwen3.5-0.8B on the provisional A113X device (4x Cortex-A53, 1-2 GB RAM). All numbers are analytical, not measurements.
+
+| Stack | Runs on the 1 GB board | Decode traffic per token | Per-decision head cost | Overhead beyond weights | Qwen3.5 hybrid support |
+|---|---|---:|---:|---:|---|
+| This C runtime (plan) | yes (~420 MB image + ~30 MB) | ~290 MB | a few head rows | ~30 MB, zero dependencies | own DeltaNet implementation, tensor-verified |
+| llama.cpp (Q4 GGUF) | yes (~0.5 GB + context/scratch) | ~290 MB + 130 MB full head every token | full 248K-row head | ~100-300 MB, single binary | GATED_DELTA_NET op landed 2026, basic vector CPU path |
+| PyTorch + Transformers | no — BF16 weights alone ~1.6 GB | ~1.6 GB | full head | Python + PyTorch, ~1 GB+ | reference implementation (the oracle) |
+| ONNX Runtime | no practical path | — | — | — | zero non-softmax attention operators as of 2026 |
+
+What the table implies:
+
+- **PyTorch and ONNX are not candidates on this class of device.** PyTorch does not fit the memory; ONNX cannot express the DeltaNet layers without decomposing into tens of primitive ops per step.
+- **The real off-the-shelf competitor is llama.cpp**, and honesty requires saying: its NEON kernels will beat our scalar baseline at first. Both stacks face the same DRAM bandwidth wall, so the theoretical steady-state decode gap is modest.
+- The rewrite's structural advantages are elsewhere: per-call answer-set scoring skips ~130 MB of head traffic per decision (~1.4x on decision latency, more on short prompts); roughly 3-10x smaller non-weight RSS leaves headroom on the 1 GB board; a dependency-free ~100 KB static binary; a tensor-verified DeltaNet path instead of a freshly landed one; and full control of the kernel and layout for roadmap steps 4-6, which an upstream project cannot specialize per target.
+- If off-the-shelf llama.cpp on the device meets the latency and memory gates, that result is recorded too — the baseline measurement includes it.
+
 ## Current limits
 
 - no runtime tokenizer or arbitrary free-text input;
