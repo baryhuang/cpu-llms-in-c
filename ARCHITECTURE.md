@@ -62,6 +62,8 @@ These removals require proof from the input contract. A free-text field normally
 
 The current Gemma 4 artifact is more restricted: it stores twelve complete token sequences and accepts only their numeric case indices. See [`REVIEW.html`](REVIEW.html).
 
+For a binary label set, the application output contains one bit. A diagnostic runtime may retain both logits. A decision-only compiler may instead store `W_1 - W_0` and compare one raw score with zero when the removed output transform is monotonic. Any post-decision label-token decode is optional unless another generated token is part of the output contract.
+
 ## Model-adapter requirements
 
 - verify tensor names, shapes, data types, and hashes;
@@ -111,9 +113,8 @@ Smoke examples are recorded as smoke examples. They do not establish product qua
 ## Repository contract
 
 ```text
-include/   public C interfaces
-src/       C runtimes
-tools/     offline compiler and reference tools
+runtime/   C runtime and headers
+compiler/  offline compiler and reference tools
 models/    one directory per model family or checkpoint
 tests/     committed small fixtures and tests
 ```

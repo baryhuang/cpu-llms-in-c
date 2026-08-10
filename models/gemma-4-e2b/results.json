@@ -35,6 +35,17 @@
     "binary_difference": "post-run input validation and error-path cleanup; arithmetic hot path unchanged",
     "framework_runtime_dependencies": []
   },
+  "output_contract": {
+    "semantic_output": "one binary decision bit",
+    "encoding": {
+      "safe": 0,
+      "danger": 1
+    },
+    "current_head": "two FP32 label rows and two diagnostic logits",
+    "current_decision": "danger_logit > safe_logit",
+    "exact_unimplemented_rewrite": "store W_danger - W_safe and compare one raw score with zero",
+    "decode_measurement": "post-decision label-token forward; not required to return the binary decision"
+  },
   "quality": {
     "cases": 12,
     "safe_cases": 6,

@@ -49,7 +49,15 @@ class ReviewReportTest(unittest.TestCase):
     def test_runtime_boundary_is_explicit(self):
         self.assertIn("IMAGE [CASE_INDEX|all]", self.html)
         self.assertIn("does not accept arbitrary text", self.html)
-        runtime_source = (REPOSITORY / "src/gemma4_task.c").read_text()
+        self.assertEqual(
+            self.results["output_contract"]["encoding"], {"safe": 0, "danger": 1}
+        )
+        self.assertEqual(
+            self.results["output_contract"]["semantic_output"],
+            "one binary decision bit",
+        )
+        self.assertIn("one bit", self.html)
+        runtime_source = (REPOSITORY / "runtime/gemma4_task.c").read_text()
         self.assertIn('strcmp(argv[2], "all")', runtime_source)
         self.assertIn("strtoul(argv[2]", runtime_source)
 

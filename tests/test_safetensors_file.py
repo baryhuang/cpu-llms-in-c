@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.safetensors_file import SafetensorsFile
+from compiler.safetensors_file import SafetensorsFile
 
 
 def write_file(path, header, payload):

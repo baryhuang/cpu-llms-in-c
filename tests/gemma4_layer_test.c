@@ -1,4 +1,4 @@
-#include "cpu_llms/gemma4_layer.h"
+#include "gemma4_layer.h"
 
 #include <errno.h>
 #include <math.h>

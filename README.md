@@ -15,9 +15,9 @@ The first complete prototype specializes Gemma 4 E2B for a two-label hazard smok
 | Peak RSS, warm run | 948,224 KiB (926 MiB) |
 | Swap | 0 |
 | Warm prefill | 0.598 tokens/s |
-| Warm decision step | 0.621 tokens/s |
+| Warm extra label-token decode | 0.621 tokens/s |
 | Cold prefill | 0.528 tokens/s |
-| Cold decision step | 0.576 tokens/s |
+| Cold extra label-token decode | 0.576 tokens/s |
 | Q4 decisions against written labels | 12/12 |
 | BF16-reference decisions against written labels | 11/12 |
 | Q4/BF16 decision agreement | 11/12 |
@@ -37,7 +37,7 @@ make test
 Compile the task image on a machine that holds the pinned checkpoint:
 
 ```sh
-python3 tools/compile_gemma4_task_image.py \
+python3 compiler/compile_gemma4_task_image.py \
   --checkpoint /path/to/model.safetensors \
   --config /path/to/config.json \
   --tokenizer /path/to/tokenizer.json \
@@ -72,18 +72,23 @@ checkpoint + tokenizer + task profile
                  v
          mmap C11 runtime
                  |
-      safe/danger logits and timing
+       one-bit decision + diagnostic logits
 ```
 
 The C runtime implements the full specialized text path: local and global RoPE, 15 physical K/V states, late shared K/V, double-wide late MLPs, PLE, final normalization, and the constrained LM head. The current matrix kernel is scalar Q4 GEMV with optional OpenMP.
+
+## Output contract
+
+The application result is one bit: `0 = safe`, `1 = danger`. The current diagnostic runtime computes two FP32 logits and compares them. Because the final soft cap is monotonic, a decision-only compiler can replace the two output rows with one exact difference row, `W_danger - W_safe`, and test one score against zero.
+
+The measured decode step feeds the selected label token through another 35 layers. That step is for decode measurement; the binary decision is already available after prefill and does not require it.
 
 ## Repository
 
 | Path | Contents |
 |---|---|
-| [`include/`](include/) | Public C interfaces |
-| [`src/`](src/) | C runtimes |
-| [`tools/`](tools/) | Offline compiler, reference evaluator, and hardware probe |
+| [`runtime/`](runtime/) | C runtime, headers, layer reference, and hardware probe |
+| [`compiler/`](compiler/) | Offline compiler and independent reference tools |
 | [`models/`](models/) | Model-specific profile, pins, results, and implementation notes |
 | [`tests/`](tests/) | Synthetic and real-weight correctness tests |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Cross-model compiler/runtime contract |

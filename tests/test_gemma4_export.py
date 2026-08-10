@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from tools.export_gemma4_layer_fixture import (
+from compiler.export_gemma4_layer_fixture import (
     apply_rope,
     bf16_scalar,
     gelu_pytorch_tanh,

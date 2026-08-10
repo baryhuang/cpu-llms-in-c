@@ -1,4 +1,4 @@
-"""Minimal, selective safetensors reader used by the offline compiler tools."""
+"""Minimal, selective safetensors reader used by the offline compiler."""
 
 from __future__ import annotations
 

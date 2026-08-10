@@ -1,6 +1,6 @@
 import unittest
 
-from tools.fetch_safetensors_ranges import coalesce, split_ranges, tensor_slice_range
+from compiler.fetch_safetensors_ranges import coalesce, split_ranges, tensor_slice_range
 
 
 class SafetensorsRangesTest(unittest.TestCase):

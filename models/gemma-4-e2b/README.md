@@ -12,9 +12,9 @@ The measurement used the pinned official checkpoint, a generated Q4 image, the C
 | Peak RSS, warm run | 948,224 KiB (926 MiB) |
 | Swap | 0 |
 | Warm prefill | 0.598 tokens/s |
-| Warm one-step decision | 0.621 tokens/s |
+| Warm extra label-token decode | 0.621 tokens/s |
 | Cold prefill | 0.528 tokens/s |
-| Cold one-step decision | 0.576 tokens/s |
+| Cold extra label-token decode | 0.576 tokens/s |
 | Q4 decisions / written labels | 12/12 |
 | BF16-reference decisions / written labels | 11/12 |
 | Q4/BF16 agreement | 11/12 |
@@ -80,12 +80,36 @@ The compiler applies only transformations used by this artifact:
 
 The deployed runtime does not tokenize, search kernels, allocate a model graph, or load Python.
 
+## Output semantics
+
+The task has two labels but one bit of application information:
+
+```text
+0 = safe
+1 = danger
+```
+
+The current runtime retains two 1,536-value FP32 output rows, calculates `safe_logit` and `danger_logit`, then returns `danger_logit > safe_logit`. The JSON logits are diagnostic output; they are not two application bits.
+
+For decision-only execution, the compiler can apply this exact rewrite:
+
+```text
+delta_weight = W_danger - W_safe
+score = delta_weight · normalized_hidden
+score > 0  -> danger
+score <= 0 -> safe
+```
+
+Gemma's final `30 * tanh(logit / 30)` soft cap is monotonic, so comparing the raw projections preserves the selected label. This reduces two head rows to one. It does not reduce the 35-layer body.
+
+The recorded `decode_seconds` is an additional benchmark step: after making the decision, the runtime feeds the selected label token through all 35 layers. A deployment that returns only the bit can omit this step. For case 0, classification was available after 62.786325 seconds; the additional 1.436223-second label-token decode was not required for the classification.
+
 ## Build
 
 Compiler dependencies are Python, NumPy, and `tokenizers`. They are not runtime dependencies.
 
 ```sh
-python3 tools/compile_gemma4_task_image.py \
+python3 compiler/compile_gemma4_task_image.py \
   --checkpoint /path/to/model.safetensors \
   --config /path/to/config.json \
   --tokenizer /path/to/tokenizer.json \
@@ -99,7 +123,7 @@ OMP_NUM_THREADS=2 build/gemma4-task hazard-v1.g4task all
 Run the independent BF16-weight reference:
 
 ```sh
-python3 tools/evaluate_gemma4_task_reference.py \
+python3 compiler/evaluate_gemma4_task_reference.py \
   --checkpoint /path/to/model.safetensors \
   --config /path/to/config.json \
   --tokenizer /path/to/tokenizer.json \
@@ -109,9 +133,9 @@ python3 tools/evaluate_gemma4_task_reference.py \
 
 ## Runtime cost
 
-The warm run processed 493 prompt tokens in 823.854 seconds and 12 decision steps in 19.339 seconds. Peak RSS remained below 1 GiB with no swap.
+The warm run processed 493 prompt tokens in 823.854 seconds and 12 extra label-token decode steps in 19.339 seconds. Peak RSS remained below 1 GiB with no swap.
 
-At the measured aggregate rates, logical matrix access was approximately 575 MB/s during prefill and 596 MB/s during the decision step. These are bytes visited by the runtime, not storage-throughput measurements. The model image must remain resident; paging the image from flash for every token is not viable.
+At the measured aggregate rates, logical matrix access was approximately 575 MB/s during prefill and 596 MB/s during the extra decode step. These are bytes visited by the runtime, not storage-throughput measurements. The model image must remain resident; paging the image from flash for every token is not viable.
 
 The cold case incurred 325 major page faults and 1,886,584 filesystem input blocks before reaching the same logits as the warm case. On Linux, interpreting those blocks as 512-byte units gives approximately 966 MB, close to the complete image size.
 

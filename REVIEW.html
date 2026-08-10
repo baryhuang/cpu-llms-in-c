@@ -117,7 +117,7 @@
 
   <section id="boundary" class="panel verdict">
     <strong>Review conclusion: the runtime does not accept arbitrary text.</strong>
-    It accepts <code>IMAGE [CASE_INDEX|all]</code>. The compiler tokenizes the twelve observations below and writes those token sequences into the model image. At runtime, the second argument selects one stored sequence; it is parsed as an integer or the literal <code>all</code>. There is no text or stdin input path.
+    It accepts <code>IMAGE [CASE_INDEX|all]</code>. The compiler tokenizes the twelve observations below and writes those token sequences into the model image. At runtime, the second argument selects one stored sequence; it is parsed as an integer or the literal <code>all</code>. There is no text or stdin input path. The application output is one bit: <code>0 = safe</code>, <code>1 = danger</code>.
   </section>
 
   <section aria-labelledby="summary-title">
@@ -125,9 +125,25 @@
     <div class="metrics">
       <div class="metric"><span>Q4 / written labels</span><b>12 / 12</b><small>6 safe, 6 danger</small></div>
       <div class="metric"><span>Q4 / BF16 agreement</span><b>11 / 12</b><small>one decision boundary crossed</small></div>
-      <div class="metric"><span>Warm throughput</span><b>0.598 / 0.621</b><small>prefill / decision tokens per second</small></div>
+      <div class="metric"><span>Warm throughput</span><b>0.598 / 0.621</b><small>prefill / extra label-token decode</small></div>
       <div class="metric"><span>Resident memory</span><b>926 MiB</b><small>peak RSS; no swap</small></div>
     </div>
+  </section>
+
+  <section class="panel" aria-labelledby="output-title">
+    <h2 id="output-title">What the output actually is</h2>
+    <pre>Current diagnostic path:
+  safe_logit:   FP32
+  danger_logit: FP32
+  decision:     danger_logit &gt; safe_logit ? 1 : 0
+
+Application output:
+  one bit       0 = safe, 1 = danger
+
+Exact decision-only rewrite:
+  score = (W_danger - W_safe) · normalized_hidden
+  score &gt; 0 ? 1 : 0</pre>
+    <p class="note">The final soft cap is monotonic, so it does not change which raw projection is larger. The recorded extra decode feeds the selected label token through 35 layers for measurement; it is not required to return the bit.</p>
   </section>
 
   <section id="method" aria-labelledby="method-title">
@@ -135,7 +151,7 @@
     <div class="cols">
       <div class="panel">
         <h3>1. Compile the fixed profile</h3>
-        <pre>python3 tools/compile_gemma4_task_image.py \
+        <pre>python3 compiler/compile_gemma4_task_image.py \
   --checkpoint /path/to/model.safetensors \
   --config /path/to/config.json \
   --tokenizer /path/to/tokenizer.json \
@@ -209,7 +225,7 @@ case index is outside the image</pre>
           <tr>
             <th># / ID</th><th>Observation</th><th>Expected</th><th>BF16</th><th>Q4</th>
             <th>BF16 logits<br>safe / danger</th><th>Q4 logits<br>safe / danger</th>
-            <th>Tokens</th><th>Prefill<br>s / tok/s</th><th>Decision<br>s / tok/s</th>
+            <th>Tokens</th><th>Prefill<br>s / tok/s</th><th>Extra decode<br>s / tok/s</th>
           </tr>
         </thead>
         <tbody>
@@ -284,9 +300,9 @@ case index is outside the image</pre>
     <ul class="source-list">
       <li><a href="models/gemma-4-e2b/profile.json">Exact input profile</a></li>
       <li><a href="models/gemma-4-e2b/results.json">Unrounded result JSON</a></li>
-      <li><a href="tools/compile_gemma4_task_image.py">Offline compiler</a></li>
-      <li><a href="tools/evaluate_gemma4_task_reference.py">BF16 reference evaluator and canonical prompt</a></li>
-      <li><a href="src/gemma4_task.c">C runtime and case-index parser</a></li>
+      <li><a href="compiler/compile_gemma4_task_image.py">Offline compiler</a></li>
+      <li><a href="compiler/evaluate_gemma4_task_reference.py">BF16 reference evaluator and canonical prompt</a></li>
+      <li><a href="runtime/gemma4_task.c">C runtime and case-index parser</a></li>
       <li><a href="models/gemma-4-e2b/pins.json">Checkpoint, tokenizer, and reference pins</a></li>
     </ul>
   </section>

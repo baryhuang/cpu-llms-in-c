@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "cpu_llms/gemma4_task.h"
+#include "gemma4_task.h"
 
 #include <errno.h>
 #include <fcntl.h>

@@ -20,14 +20,14 @@ The official layer-0 result is recorded in [`../models/gemma-4-e2b/layer0-valida
 ## Complete task reproduction
 
 ```sh
-python3 tools/evaluate_gemma4_task_reference.py \
+python3 compiler/evaluate_gemma4_task_reference.py \
   --checkpoint /path/to/model.safetensors \
   --config /path/to/config.json \
   --tokenizer /path/to/tokenizer.json \
   --profile models/gemma-4-e2b/profile.json \
   --output reference.json
 
-python3 tools/compile_gemma4_task_image.py \
+python3 compiler/compile_gemma4_task_image.py \
   --checkpoint /path/to/model.safetensors \
   --config /path/to/config.json \
   --tokenizer /path/to/tokenizer.json \

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from tools.gemma4_task_reference import apply_rope
+from compiler.gemma4_task_reference import apply_rope
 
 
 class Gemma4TaskReferenceTest(unittest.TestCase):
