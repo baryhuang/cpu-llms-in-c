@@ -28,14 +28,16 @@ $(TARGET_PROBE): runtime/target_probe.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
 
-$(GEMMA4_LAYER_TEST): tests/gemma4_layer_test.c runtime/gemma4_layer.c runtime/gemma4_layer.h
+GEMMA4_GENERIC := models/gemma-4-e2b/targets/generic
+
+$(GEMMA4_LAYER_TEST): tests/gemma4_layer_test.c $(GEMMA4_GENERIC)/gemma4_layer.c $(GEMMA4_GENERIC)/gemma4_layer.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Iruntime tests/gemma4_layer_test.c runtime/gemma4_layer.c \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(GEMMA4_GENERIC) tests/gemma4_layer_test.c $(GEMMA4_GENERIC)/gemma4_layer.c \
 		-o $@ $(LDFLAGS) -lm
 
-$(GEMMA4_TASK): runtime/gemma4_task.c runtime/gemma4_task.h
+$(GEMMA4_TASK): $(GEMMA4_GENERIC)/gemma4_task.c $(GEMMA4_GENERIC)/gemma4_task.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -Iruntime runtime/gemma4_task.c \
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(GEMMA4_GENERIC) $(GEMMA4_GENERIC)/gemma4_task.c \
 		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
 $(GEMMA4_LAYER_FIXTURE): compiler/generate_gemma4_layer_fixture.py

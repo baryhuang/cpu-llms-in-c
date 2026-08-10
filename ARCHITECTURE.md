@@ -115,16 +115,19 @@ Smoke examples are recorded as smoke examples. They do not establish product qua
 A released artifact is one point in a cross product with two axes: one pinned model and one pinned CPU target. The classification order is fixed — model first, CPU second:
 
 ```text
-runtime/                        C runtime and headers
-compiler/                       offline compiler and reference tools
-models/<model>/                 model axis: profile, pins, graph record, reference outputs
-models/<model>/targets/<cpu>/   CPU axis under its model: CPU pin, kernel and layout
-                                choices, and results measured for this model x CPU pair
-tests/                          committed small fixtures and tests
+runtime/                          shared model-independent runtime tooling (hardware probe)
+compiler/                         offline compiler and reference tools
+models/<model>/                   model axis: profile, pins, graph record, reference outputs
+models/<model>/targets/generic/   the model's C runtime with model-axis optimizations only,
+                                  portable to any CPU
+models/<model>/targets/<cpu>/     CPU axis: CPU pin, CPU-specialized kernels and layouts, and
+                                  results measured for this model x CPU pair
+tests/                            committed small fixtures and tests
 ```
 
 - The model directory holds everything independent of the CPU: input profile, checkpoint and tokenizer pins, graph constants, and reference outputs.
-- Each `targets/<cpu>/` directory holds everything specific to one model x CPU combination: the CPU pin (ISA, cores, caches, RAM, storage), kernel, layout, and schedule choices, and the benchmarks measured on that CPU.
+- `targets/generic/` holds the model's runtime source carrying only model-axis optimizations; it is the portable starting point every pinned CPU target builds from.
+- Each `targets/<cpu>/` directory holds everything specific to one model x CPU combination: the CPU pin (ISA, cores, caches, RAM, storage), CPU-specialized kernel, layout, and schedule choices, and the benchmarks measured on that CPU.
 - Changing either axis creates a new combination that requires its own validation. Results never transfer between combinations.
 
 No CPU target has been selected yet. The current Gemma 4 E2B results under `models/gemma-4-e2b/` were measured on an unpinned two-vCPU development machine; they move into the first `targets/<cpu>/` directory when a target is selected.

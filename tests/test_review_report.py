@@ -100,7 +100,7 @@ class ReviewReportTest(unittest.TestCase):
             "one binary decision bit",
         )
         self.assertIn("one bit", self.html)
-        runtime_source = (REPOSITORY / "runtime/gemma4_task.c").read_text()
+        runtime_source = (REPOSITORY / "models/gemma-4-e2b/targets/generic/gemma4_task.c").read_text()
         self.assertIn('strcmp(argv[2], "all")', runtime_source)
         self.assertIn("strtoul(argv[2]", runtime_source)
 

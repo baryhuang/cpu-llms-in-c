@@ -8,10 +8,11 @@ Everything is classified along two axes, model first, CPU second. A released art
 
 | Path | Contents |
 |---|---|
-| [`runtime/`](runtime/) | C runtime, headers, layer reference, hardware probe |
+| [`runtime/`](runtime/) | Shared model-independent tooling (hardware probe) |
 | [`compiler/`](compiler/) | Offline compiler and independent reference tools |
 | `models/<model>/` | Model axis: pins, profile, graph record, reference outputs, model-only optimizations |
-| `models/<model>/targets/<cpu>/` | CPU axis: CPU pin, kernels, and results measured for that pair |
+| `models/<model>/targets/generic/` | The model's C runtime with model-axis optimizations only, portable to any CPU |
+| `models/<model>/targets/<cpu>/` | CPU axis: CPU pin, CPU-specialized kernels, and results measured for that pair |
 | [`tests/`](tests/) | Committed correctness tests (`make test`) |
 
 Checkpoints, generated images, binaries, and credentials are never committed.
