@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "profile_id": "hazard-v1-qwen35",
+  "role": "evaluation data for the prompt-defined runtime; nothing here is compiled into the image",
+  "system_prompt": "Classify the observation. Reply with exactly safe or danger.",
+  "answers": ["safe", "danger"],
+  "cases": [
+    {
+      "id": "safe_power_isolated",
+      "expected": "safe",
+      "observation": "The machine is stopped, electrical power is isolated, and the safety guard is closed."
+    },
+    {
+      "id": "safe_empty_zone",
+      "expected": "safe",
+      "observation": "The hazard zone is empty and the locked gate remains closed during operation."
+    },
+    {
+      "id": "safe_maintenance_lockout",
+      "expected": "safe",
+      "observation": "Maintenance is in progress with lockout and tagout applied and zero stored energy verified."
+    },
+    {
+      "id": "safe_robot_idle",
+      "expected": "safe",
+      "observation": "The robot is in a verified idle state and no person is inside its fenced workspace."
+    },
+    {
+      "id": "safe_pressure_released",
+      "expected": "safe",
+      "observation": "The pressure vessel is isolated, depressurized, and confirmed at zero pressure before access."
+    },
+    {
+      "id": "safe_conveyor_clear",
+      "expected": "safe",
+      "observation": "The conveyor is stopped and cleared, and its emergency stop has been tested before inspection."
+    },
+    {
+      "id": "danger_person_moving_machine",
+      "expected": "danger",
+      "observation": "A person is inside the hazard zone while the machine is moving."
+    },
+    {
+      "id": "danger_guard_bypassed",
+      "expected": "danger",
+      "observation": "The safety guard is open and its interlock has been bypassed while the motor is energized."
+    },
+    {
+      "id": "danger_uncontrolled_pressure",
+      "expected": "danger",
+      "observation": "A worker is loosening a fitting while the line remains pressurized."
+    },
+    {
+      "id": "danger_robot_entry",
+      "expected": "danger",
+      "observation": "A worker entered the robot cell while automatic motion is enabled."
+    },
+    {
+      "id": "danger_exposed_wires",
+      "expected": "danger",
+      "observation": "Exposed live conductors are within reach and electrical power has not been isolated."
+    },
+    {
+      "id": "danger_conveyor_reach",
+      "expected": "danger",
+      "observation": "An operator is reaching into a running conveyor to remove a jam."
+    }
+  ]
+}

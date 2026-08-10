@@ -75,6 +75,32 @@ Same gates as the Gemma record: independent NumPy BF16 reference with per-tensor
 
 **Quantization sensitivity finding.** With every matrix at min/max Q4, smoke decisions flip against the BF16 reference (danger scored below safe on an obvious danger case), and MSE-optimal Q4 scales do not recover them. Class ablation over the NumPy reference isolates the damage: promoting only the DeltaNet projections (`in_proj_qkv`, `in_proj_z`, `out_proj`) to Q8 restores 4/4 smoke decisions with margins >= 1.0; promoting attention instead leaves thin margins (+0.18) and promoting the MLPs still fails a case. The Q4-quantized embedding/head is harmless. This matches the expectation that the recurrent DeltaNet state amplifies weight noise. Four smoke cases are a signal, not an evaluation; the 12-case set and logit deltas run once the C runtime executes the image.
 
+## Verification (12-case smoke evaluation)
+
+Verification is separate from benchmark timing. Full per-case logits: [`results.json`](results.json).
+
+| Check | Result |
+|---|---|
+| Image (Q4/Q8) decisions / written labels | 10/12 — two false negatives on danger cases, margins -0.18 and -0.05 |
+| BF16-reference decisions / written labels | 10/12 — two false positives on safe cases, margins +0.29 and +0.05 |
+| Image / reference decision agreement | 8/12 — every disagreement is a case where one side sits within ±0.3 |
+| Two-shot prompt mitigation | recovers `danger_robot_entry`, narrows `danger_uncontrolled_pressure` to -0.04, leaves a safe control unchanged — a caller-side fix consistent with prompt-defined outputs |
+
+The 0.8B model is marginal zero-shot on this smoke set (the BF16 reference itself misses two cases); quantization moves borderline cases across the line rather than degrading clear ones. Twelve obvious cases are a smoke signal, not an evaluation.
+
+## Benchmark (development machine — informal)
+
+Warm single-process run over all 12 cases, 4 threads, scalar kernels, unpinned x86-64 dev machine. These are not target-CPU numbers; the A113X baseline supersedes them.
+
+| Quantity | Value |
+|---|---:|
+| Total prompt tokens | 488 |
+| Total classification duration | 53.29 s |
+| Aggregate throughput | 9.16 tokens/s |
+| Peak RSS | 377,888 KiB (369 MiB) |
+
+Peak RSS sits below the 470 MiB image because untouched embedding rows are never faulted in — a direct effect of per-call answer-set scoring.
+
 ## Verified facts
 
 | Check | Result |

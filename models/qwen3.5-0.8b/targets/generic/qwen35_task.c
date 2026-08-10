@@ -973,6 +973,68 @@ static int encode_text(const struct tokenizer *tokenizer, const char *input, uin
     return count;
 }
 
+/* Run one prompt through the graph and print one JSON result line. */
+static int run_one(const struct model *model, const uint32_t *token_ids, int token_count,
+                   const uint32_t *answer_ids, int answer_count, int case_index)
+{
+    struct state state;
+    struct workspace *ws = calloc(1, sizeof(struct workspace));
+    if (ws == NULL || allocate_state(&state, (size_t)token_count + 1U) != 0) {
+        free(ws);
+        return -1;
+    }
+    ws->scores = malloc(((size_t)token_count + 1U) * sizeof(float));
+    if (ws->scores == NULL) {
+        free(ws);
+        free_state(&state);
+        return -1;
+    }
+
+    const double start = monotonic_seconds();
+    for (int position = 0; position < token_count; ++position) {
+        forward_token(model, &state, ws, token_ids[position], (size_t)position);
+    }
+    rms_norm_one_plus(ws->hidden, f32_data(&model->image, model->final_norm), ws->normed,
+                      HIDDEN);
+
+    float best_logit = -INFINITY;
+    int best_index = 0;
+    float logits[MAX_ANSWERS];
+    float row[HIDDEN];
+    for (int index = 0; index < answer_count; ++index) {
+        dequantize_q4_row(&model->image, model->embed, answer_ids[index], row);
+        double sum = 0.0;
+        for (uint32_t i = 0; i < HIDDEN; ++i) {
+            sum += (double)ws->normed[i] * row[i];
+        }
+        logits[index] = (float)sum;
+        if (logits[index] > best_logit) {
+            best_logit = logits[index];
+            best_index = index;
+        }
+    }
+    const double elapsed = monotonic_seconds() - start;
+
+    printf("{");
+    if (case_index >= 0) {
+        printf("\"case\":%d,", case_index);
+    }
+    printf("\"tokens\":%d,\"answers\":[", token_count);
+    for (int index = 0; index < answer_count; ++index) {
+        printf("%s{\"id\":%u,\"logit\":%.9g}", index == 0 ? "" : ",", answer_ids[index],
+               logits[index]);
+    }
+    printf("],\"chosen\":%u,\"chosen_index\":%d,\"prefill_seconds\":%.6f,"
+           "\"prefill_tokens_per_second\":%.6f}\n",
+           answer_ids[best_index], best_index, elapsed, (double)token_count / elapsed);
+    fflush(stdout);
+
+    free(ws->scores);
+    free(ws);
+    free_state(&state);
+    return 0;
+}
+
 static int parse_id_list(const char *text, uint32_t *values, int capacity)
 {
     int count = 0;
@@ -998,8 +1060,9 @@ int main(int argc, char **argv)
     const char *answers_text = NULL;
     const char *prompt_text = NULL;
     const char *answer_words = NULL;
+    const char *prompts_file = NULL;
     int encode_only = 0;
-    const char *usage = "usage: %s IMAGE (--prompt TEXT | --ids ID,...) "
+    const char *usage = "usage: %s IMAGE (--prompt TEXT | --ids ID,... | --prompts-file PATH) "
                         "(--answers-text WORD,... | --answers ID,...)\n";
     for (int index = 1; index < argc; ++index) {
         if (strcmp(argv[index], "--ids") == 0 && index + 1 < argc) {
@@ -1010,6 +1073,8 @@ int main(int argc, char **argv)
             prompt_text = argv[++index];
         } else if (strcmp(argv[index], "--answers-text") == 0 && index + 1 < argc) {
             answer_words = argv[++index];
+        } else if (strcmp(argv[index], "--prompts-file") == 0 && index + 1 < argc) {
+            prompts_file = argv[++index];
         } else if (strcmp(argv[index], "--encode-only") == 0) {
             encode_only = 1;
         } else if (image_path == NULL) {
@@ -1019,7 +1084,8 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-    if (image_path == NULL || (ids_text == NULL && prompt_text == NULL) ||
+    if (image_path == NULL ||
+        (ids_text == NULL && prompt_text == NULL && prompts_file == NULL) ||
         (answers_text == NULL && answer_words == NULL)) {
         fprintf(stderr, usage, argv[0]);
         return 2;
@@ -1030,18 +1096,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "invalid or unsupported task image: %s\n", image_path);
         return 2;
     }
-    if ((prompt_text != NULL || answer_words != NULL) && !model.tokenizer.present) {
+    if ((prompt_text != NULL || answer_words != NULL || prompts_file != NULL) &&
+        !model.tokenizer.present) {
         fprintf(stderr, "image carries no tokenizer tables; pass --ids/--answers\n");
         return 2;
     }
 
     static uint32_t token_ids[MAX_TOKENS];
     static uint32_t answer_ids[MAX_ANSWERS];
-    int token_count;
+    int token_count = 0;
     int answer_count = 0;
     if (ids_text != NULL) {
         token_count = parse_id_list(ids_text, token_ids, MAX_TOKENS);
-    } else {
+    } else if (prompt_text != NULL) {
         token_count = encode_text(&model.tokenizer, prompt_text, token_ids, MAX_TOKENS);
     }
     if (answers_text != NULL) {
@@ -1070,9 +1137,53 @@ int main(int argc, char **argv)
             cursor = comma ? comma + 1 : cursor + size;
         }
     }
-    if (token_count <= 0 || answer_count <= 0) {
+    if (answer_count <= 0 || (prompts_file == NULL && token_count <= 0)) {
         fprintf(stderr, "invalid prompt or answer list\n");
         return 2;
+    }
+    if (prompts_file != NULL) {
+#ifdef _OPENMP
+        omp_set_dynamic(0);
+#endif
+        FILE *file = fopen(prompts_file, "rb");
+        if (file == NULL) {
+            fprintf(stderr, "cannot open %s\n", prompts_file);
+            return 2;
+        }
+        fseek(file, 0, SEEK_END);
+        const long file_size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        char *data = malloc((size_t)file_size + 1U);
+        if (data == NULL || fread(data, 1, (size_t)file_size, file) != (size_t)file_size) {
+            fprintf(stderr, "cannot read %s\n", prompts_file);
+            fclose(file);
+            return 2;
+        }
+        fclose(file);
+        data[file_size] = '\0';
+
+        int case_index = 0;
+        size_t position = 0;
+        while (position < (size_t)file_size) {
+            const char *record = data + position;
+            const size_t record_length = strlen(record);
+            if (record_length > 0) {
+                const int count = encode_text(&model.tokenizer, record, token_ids, MAX_TOKENS);
+                if (count <= 0 ||
+                    run_one(&model, token_ids, count, answer_ids, answer_count,
+                            case_index) != 0) {
+                    fprintf(stderr, "case %d failed\n", case_index);
+                    free(data);
+                    return 2;
+                }
+                case_index += 1;
+            }
+            position += record_length + 1U;
+        }
+        free(data);
+        munmap((void *)model.image.base, model.image.bytes);
+        close(model.image.fd);
+        return 0;
     }
     if (encode_only) {
         for (int index = 0; index < token_count; ++index) {
@@ -1094,57 +1205,13 @@ int main(int argc, char **argv)
         }
     }
 
-    struct state state;
-    struct workspace *ws = calloc(1, sizeof(struct workspace));
-    if (ws == NULL || allocate_state(&state, (size_t)token_count + 1U) != 0) {
-        fprintf(stderr, "allocation failed\n");
-        return 2;
-    }
-    ws->scores = malloc(((size_t)token_count + 1U) * sizeof(float));
-    if (ws->scores == NULL) {
-        fprintf(stderr, "allocation failed\n");
-        return 2;
-    }
 #ifdef _OPENMP
     omp_set_dynamic(0);
 #endif
-
-    const double start = monotonic_seconds();
-    for (int position = 0; position < token_count; ++position) {
-        forward_token(&model, &state, ws, token_ids[position], (size_t)position);
+    if (run_one(&model, token_ids, token_count, answer_ids, answer_count, -1) != 0) {
+        fprintf(stderr, "execution failed\n");
+        return 2;
     }
-    rms_norm_one_plus(ws->hidden, f32_data(&model.image, model.final_norm), ws->normed, HIDDEN);
-
-    float best_logit = -INFINITY;
-    int best_index = 0;
-    float logits[MAX_ANSWERS];
-    float row[HIDDEN];
-    for (int index = 0; index < answer_count; ++index) {
-        dequantize_q4_row(&model.image, model.embed, answer_ids[index], row);
-        double sum = 0.0;
-        for (uint32_t i = 0; i < HIDDEN; ++i) {
-            sum += (double)ws->normed[i] * row[i];
-        }
-        logits[index] = (float)sum;
-        if (logits[index] > best_logit) {
-            best_logit = logits[index];
-            best_index = index;
-        }
-    }
-    const double elapsed = monotonic_seconds() - start;
-
-    printf("{\"tokens\":%d,\"answers\":[", token_count);
-    for (int index = 0; index < answer_count; ++index) {
-        printf("%s{\"id\":%u,\"logit\":%.9g}", index == 0 ? "" : ",", answer_ids[index],
-               logits[index]);
-    }
-    printf("],\"chosen\":%u,\"chosen_index\":%d,\"prefill_seconds\":%.6f,"
-           "\"prefill_tokens_per_second\":%.6f}\n",
-           answer_ids[best_index], best_index, elapsed, (double)token_count / elapsed);
-
-    free(ws->scores);
-    free(ws);
-    free_state(&state);
     munmap((void *)model.image.base, model.image.bytes);
     close(model.image.fd);
     return 0;
