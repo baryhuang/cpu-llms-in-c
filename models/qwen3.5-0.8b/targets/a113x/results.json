@@ -26,6 +26,14 @@
     "image_bytes": 492962304,
     "image_sha256": "00bb5a62214f1db44722731f895eeb9d9d28a27b0201bdd9287485671e5fd474"
   },
+  "increment_method": {
+    "stage_order": ["generic_scalar", "a113x_neon_gemv", "a113x_neon_gemv_deltanet"],
+    "stages_are_cumulative": true,
+    "increment_over_previous": "current throughput divided by immediately preceding stage throughput for the same workload",
+    "increment_over_baseline": "current throughput divided by generic-scalar throughput for the same workload",
+    "cross_workload_ratios_forbidden": true,
+    "verification_excluded_from_duration": true
+  },
   "benchmark": {
     "scope": "warm single-process on-device measurements; verification excluded",
     "command_contract": "OMP_NUM_THREADS=4; same 12 NUL-separated prompts; answer set safe,danger",
@@ -80,6 +88,8 @@
     "command_contract": "OMP_NUM_THREADS=4; --generate 24; stop at <|im_end|>",
     "binary_sha256": "c3a12f6b702a1bac7b91884f4e4ada189d53c91ef1ad551153dfb9a2a9fefe5a",
     "binary_bytes": 948688,
+    "stage_id": "a113x_neon_gemv_deltanet",
+    "unmeasured_stage_ids": ["generic_scalar", "a113x_neon_gemv"],
     "prompt": "<|im_start|>system\nYou are a concise assistant.<|im_end|>\n<|im_start|>user\nName three primary colors.<|im_end|>\n<|im_start|>assistant\n",
     "prompt_tokens": 24,
     "requested_tokens": 24,

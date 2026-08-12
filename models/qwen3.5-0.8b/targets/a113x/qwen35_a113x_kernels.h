@@ -4,7 +4,9 @@
 #include <arm_neon.h>
 
 #define QWEN35_HAVE_TARGET_GROUP_DOT 1
+#ifndef QWEN35_DISABLE_TARGET_DELTANET
 #define QWEN35_HAVE_TARGET_DELTANET_HEAD 1
+#endif
 
 /* Cortex-A53 has ARMv8.0 NEON but no dot-product extension. Widen signed
  * bytes four lanes at a time, convert to float, and accumulate with NEON. */

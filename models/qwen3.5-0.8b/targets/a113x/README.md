@@ -20,6 +20,27 @@ Year evidence: [Amlogic OpenLinux release notes mirror](https://manuals.plus/m/6
 
 The board exposes no temperature node through the tested `/sys/class/hwmon` paths. Frequency scaling ranges from 100 MHz to 1,416 MHz under the `ondemand` governor.
 
+## Unified result table
+
+Rows are cumulative implementation stages. Columns are separate workloads: classification prefill and free-generation decode are not divided by or compared with each other. An incremental factor is always `current stage throughput / previous stage throughput` inside the same column; cumulative factor is `current stage throughput / scalar throughput` inside the same column.
+
+| Stage | Cumulative CPU implementation | Classification prefill | Increment | Cumulative | Steady greedy decode | Increment | Cumulative | Peak RSS: classification / generation | Output gate |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 0 | Generic scalar | 0.8230 prompt tokens/s | 1.00x | 1.00x | not measured | — | — | 375,764 KiB / not measured | classification decisions match x86 12/12 |
+| 1 | Stage 0 + Cortex-A53 NEON Q4/Q8 GEMV | 2.4297 prompt tokens/s | **2.95x** | **2.95x** | not measured | — | — | 375,972 KiB / not measured | classification decisions match x86 12/12 |
+| 2 | Stage 1 + contiguous NEON DeltaNet state + four-thread head partition | **3.6353 prompt tokens/s** | **1.50x** | **4.42x** | **2.6005 generated tokens/s** | baseline pending | baseline pending | 376,152 KiB / 499,968 KiB | classification 12/12; generation IDs match generic C 19/19 |
+
+The missing Stage 0 and Stage 1 decode cells require runs of the same generation prompt on the device. They are left explicit rather than inferred from classification measurements.
+
+## Increment composition
+
+| Stage | What changes | What does not change |
+|---|---|---|
+| 0 → 1 | Q4 nibble unpack and Q4/Q8 dot products become Cortex-A53 NEON kernels | model image, quantization, graph, prompt, tokenizer, answer set, thread count |
+| 1 → 2 | DeltaNet state traversal becomes contiguous and its 16 independent heads are statically partitioned across four cores | Stage 1 NEON GEMV remains enabled; model and workload inputs remain unchanged |
+
+The stages are additive, not three unrelated builds. Every reported increment uses the immediately preceding cumulative stage as its denominator. Verification is a gate after each implementation change and is excluded from benchmark duration.
+
 ## Incremental benchmark
 
 Benchmark and verification are separate. Every row below is a warm single-process run over the same 488 prompt tokens in 12 cases with `OMP_NUM_THREADS=4`. `Duration` is model classification time summed from the runtime; `Wall` comes from `/usr/bin/time -v`. Throughput is prompt prefill/classification throughput, not free-generation decode throughput.
