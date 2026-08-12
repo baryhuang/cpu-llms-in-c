@@ -305,6 +305,9 @@ static int bind_decoder_layer(const cllm_whisper_small_image *image,
 static int bind_decoder(const cllm_whisper_small_image *image,
                         cllm_whisper_decoder_weights *decoder)
 {
+    const struct descriptor *token_offsets;
+    const struct descriptor *token_bytes;
+    const struct descriptor *token_special;
     memset(decoder, 0, sizeof(*decoder));
     if (bind_decoder_matrix(image, "decoder.embed_tokens.weight", 51864U, 768U,
                             &decoder->token_embedding) != 0)
@@ -320,6 +323,19 @@ static int bind_decoder(const cllm_whisper_small_image *image,
         return -1;
     for (size_t layer = 0U; layer < 12U; ++layer)
         if (bind_decoder_layer(image, layer, &decoder->layers[layer]) != 0) return -1;
+    token_offsets = find_descriptor(image, "tokenizer.offsets");
+    token_bytes = find_descriptor(image, "tokenizer.bytes");
+    token_special = find_descriptor(image, "tokenizer.special");
+    if (token_offsets == NULL || token_offsets->kind != 2U || token_offsets->rank != 1U ||
+        token_offsets->shape[0] != 51865U || token_offsets->byte_count != 51865U * 4U ||
+        token_bytes == NULL || token_bytes->kind != 3U || token_bytes->rank != 1U ||
+        token_special == NULL || token_special->kind != 3U || token_special->rank != 1U ||
+        token_special->shape[0] != 51864U || token_special->byte_count != 51864U)
+        return -1;
+    decoder->token_offsets = (const uint32_t *)(const void *)(image->base + token_offsets->offset);
+    decoder->token_bytes = image->base + token_bytes->offset;
+    decoder->token_special = image->base + token_special->offset;
+    if (decoder->token_offsets[51864U] != token_bytes->byte_count) return -1;
     return 0;
 }
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Compile the pinned Whisper small.en encoder into an mmap-ready F32 image.
+"""Compile the pinned Whisper small.en graph into an mmap-ready image.
 
-This is the exact correctness image. It intentionally performs no quantization.
-Derived Q4 and structurally reduced images must be compared against this boundary.
+Encoder-only F32 is the exact correctness image. Full-graph images also carry
+the decoder and byte-level tokenizer tables. Quantized images remain derived
+artifacts that must be evaluated against the exact boundary.
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ except ImportError:
 
 MAGIC = b"WHSENC01"
 KIND_F32 = 1
+KIND_U32 = 2
+KIND_U8 = 3
 KIND_Q4_GROUPED = 4
 KIND_Q8_GROUPED = 5
 HEADER = struct.Struct("<8s8I4Q")
@@ -78,11 +81,53 @@ def matrix_kind(name: str, shape: tuple[int, ...], precision: str) -> int:
     return KIND_F32
 
 
+def bytes_to_unicode() -> dict[int, str]:
+    values = (list(range(ord("!"), ord("~") + 1)) +
+              list(range(0xA1, 0xAD)) + list(range(0xAE, 0x100)))
+    mapped = values[:]
+    extra = 0
+    for byte in range(256):
+        if byte not in values:
+            values.append(byte)
+            mapped.append(256 + extra)
+            extra += 1
+    return {byte: chr(codepoint) for byte, codepoint in zip(values, mapped)}
+
+
+def tokenizer_payloads(path: Path) -> list[Entry]:
+    spec = json.loads(path.read_text())
+    if spec["model"]["type"] != "BPE":
+        raise ValueError("expected Whisper BPE tokenizer")
+    inverse = {character: byte for byte, character in bytes_to_unicode().items()}
+    token_count = 51864
+    pieces: list[bytes] = [b""] * token_count
+    special = np.zeros(token_count, dtype=np.uint8)
+    for piece, token_id in spec["model"]["vocab"].items():
+        pieces[token_id] = bytes(inverse[character] for character in piece)
+    for token in spec.get("added_tokens", []):
+        token_id = token["id"]
+        if token_id < token_count:
+            pieces[token_id] = token["content"].encode("utf-8")
+            special[token_id] = 1 if token.get("special") else 0
+    offsets = np.zeros(token_count + 1, dtype="<u4")
+    for index, piece in enumerate(pieces):
+        offsets[index + 1] = offsets[index] + len(piece)
+    blob = b"".join(pieces)
+    return [
+        Entry("tokenizer.offsets", (token_count + 1,), kind=KIND_U32,
+              payload=offsets.tobytes()),
+        Entry("tokenizer.bytes", (len(blob),), kind=KIND_U8, payload=blob),
+        Entry("tokenizer.special", (token_count,), kind=KIND_U8,
+              payload=special.tobytes()),
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--mel-filters", required=True, type=Path)
+    parser.add_argument("--tokenizer", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--precision", choices=("f32", "q4", "mixed-q4-q8"), default="f32")
@@ -91,6 +136,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.precision == "mixed-q4-q8" and args.graph != "full":
         raise ValueError("mixed-q4-q8 is defined only for the full graph")
+    if args.graph == "full" and args.tokenizer is None:
+        raise ValueError("--tokenizer is required for the full graph")
 
     repository = Path(__file__).resolve().parents[1]
     pins = json.loads((repository / "models/whisper-small.en/pins.json").read_text())
@@ -105,6 +152,11 @@ def main() -> None:
         raise ValueError("config does not match the pin")
     if sha256_file(args.mel_filters) != pins["model"]["reference_files"]["whisper/assets/mel_filters.npz"]:
         raise ValueError("mel filter file does not match the pin")
+    if args.tokenizer is not None:
+        tokenizer_pin = source_pin["files"]["tokenizer.json"]
+        if (args.tokenizer.stat().st_size != tokenizer_pin["bytes"] or
+                sha256_file(args.tokenizer) != tokenizer_pin["sha256"]):
+            raise ValueError("tokenizer does not match the pin")
 
     config = json.loads(args.config.read_text())
     required = {
@@ -126,6 +178,8 @@ def main() -> None:
 
     started = time.monotonic()
     entries = [Entry("frontend.mel_80", tuple(mel.shape), payload=mel.tobytes())]
+    if args.graph == "full":
+        entries.extend(tokenizer_payloads(args.tokenizer))
     with SafetensorsFile(args.checkpoint) as source:
         for full_name in sorted(source.tensors):
             if not (full_name.startswith("model.encoder.") or
@@ -206,6 +260,7 @@ def main() -> None:
         "checkpoint_revision": source_pin["revision"],
         "checkpoint_sha256": checkpoint_pin["sha256"],
         "mel_filters_sha256": sha256_file(args.mel_filters),
+        "tokenizer_sha256": (sha256_file(args.tokenizer) if args.tokenizer else None),
         "image_bytes": args.output.stat().st_size,
         "image_sha256": sha256_file(args.output),
         "tensor_count": len(entries),

@@ -224,18 +224,19 @@ void cllm_whisper_decoder_state_free(cllm_whisper_decoder_state *state)
     memset(state, 0, sizeof(*state));
 }
 
-int cllm_whisper_decoder_step(const cllm_whisper_decoder_weights *weights,
-                              cllm_whisper_decoder_state *state,
-                              uint32_t token,
-                              uint32_t *next_token,
-                              float *next_logit,
-                              float *hidden_out,
-                              cllm_whisper_decoder_metrics *metrics)
+static int decoder_step_internal(const cllm_whisper_decoder_weights *weights,
+                                 cllm_whisper_decoder_state *state,
+                                 uint32_t token,
+                                 const unsigned char *suppressed_tokens,
+                                 uint32_t *next_token,
+                                 float *next_logit,
+                                 float *hidden_out,
+                                 cllm_whisper_decoder_metrics *metrics)
 {
     float *hidden, *norm, *query, *key, *value, *context, *temporary, *hidden_mlp, *scores;
     size_t position;
     double started;
-    if (weights == NULL || state == NULL || next_token == NULL || next_logit == NULL ||
+    if (weights == NULL || state == NULL ||
         metrics == NULL || token >= CLLM_WHISPER_SMALL_VOCABULARY ||
         state->token_count >= state->maximum_tokens || state->workspace == NULL)
         return -1;
@@ -306,11 +307,17 @@ int cllm_whisper_decoder_step(const cllm_whisper_decoder_weights *weights,
     if (hidden_out != NULL) memcpy(hidden_out, norm, WIDTH * sizeof(float));
     metrics->step_seconds = monotonic_seconds() - started;
 
+    if (next_token == NULL || next_logit == NULL) {
+        state->token_count += 1U;
+        return 0;
+    }
+
     started = monotonic_seconds();
     *next_token = 0U;
     *next_logit = -INFINITY;
     if (weights->token_embedding.f32 != NULL) {
         for (size_t row = 0U; row < CLLM_WHISPER_SMALL_VOCABULARY; ++row) {
+            if (suppressed_tokens != NULL && suppressed_tokens[row]) continue;
             double logit = 0.0;
             const float *embedding = weights->token_embedding.f32 + row * WIDTH;
             for (size_t column = 0U; column < WIDTH; ++column)
@@ -323,6 +330,7 @@ int cllm_whisper_decoder_step(const cllm_whisper_decoder_weights *weights,
     } else if (weights->token_embedding.q4 != NULL) {
         const size_t row_bytes = (WIDTH / Q4_GROUP) * Q4_RECORD;
         for (size_t row = 0U; row < CLLM_WHISPER_SMALL_VOCABULARY; ++row) {
+            if (suppressed_tokens != NULL && suppressed_tokens[row]) continue;
             const float logit = q4_dot(weights->token_embedding.q4 + row * row_bytes, norm, WIDTH);
             if (logit > *next_logit) {
                 *next_logit = logit;
@@ -332,6 +340,7 @@ int cllm_whisper_decoder_step(const cllm_whisper_decoder_weights *weights,
     } else {
         const size_t row_bytes = (WIDTH / Q4_GROUP) * Q8_RECORD;
         for (size_t row = 0U; row < CLLM_WHISPER_SMALL_VOCABULARY; ++row) {
+            if (suppressed_tokens != NULL && suppressed_tokens[row]) continue;
             const float logit = q8_dot(weights->token_embedding.q8 + row * row_bytes, norm, WIDTH);
             if (logit > *next_logit) {
                 *next_logit = logit;
@@ -342,4 +351,39 @@ int cllm_whisper_decoder_step(const cllm_whisper_decoder_weights *weights,
     metrics->output_head_seconds = monotonic_seconds() - started;
     state->token_count += 1U;
     return 0;
+}
+
+int cllm_whisper_decoder_step(const cllm_whisper_decoder_weights *weights,
+                              cllm_whisper_decoder_state *state,
+                              uint32_t token,
+                              uint32_t *next_token,
+                              float *next_logit,
+                              float *hidden_out,
+                              cllm_whisper_decoder_metrics *metrics)
+{
+    return decoder_step_internal(weights, state, token, NULL, next_token,
+                                 next_logit, hidden_out, metrics);
+}
+
+int cllm_whisper_decoder_consume(const cllm_whisper_decoder_weights *weights,
+                                 cllm_whisper_decoder_state *state,
+                                 uint32_t token,
+                                 float *hidden_out,
+                                 cllm_whisper_decoder_metrics *metrics)
+{
+    return decoder_step_internal(weights, state, token, NULL, NULL, NULL,
+                                 hidden_out, metrics);
+}
+
+int cllm_whisper_decoder_step_filtered(const cllm_whisper_decoder_weights *weights,
+                                       cllm_whisper_decoder_state *state,
+                                       uint32_t token,
+                                       const unsigned char *suppressed_tokens,
+                                       uint32_t *next_token,
+                                       float *next_logit,
+                                       float *hidden_out,
+                                       cllm_whisper_decoder_metrics *metrics)
+{
+    return decoder_step_internal(weights, state, token, suppressed_tokens,
+                                 next_token, next_logit, hidden_out, metrics);
 }

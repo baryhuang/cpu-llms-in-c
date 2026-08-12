@@ -20,6 +20,10 @@
         "config.json": {
           "bytes": 1943,
           "sha256": "3441094addfb2a31ef62ea117e95bd6e437bbad8e93d3697fe420a4a6d3603a5"
+        },
+        "tokenizer.json": {
+          "bytes": 2405679,
+          "sha256": "5eb60cec1e77aeeb6869a2bb5a8e01a84c3fe5d072d75369343021fe6f5310d0"
         }
       },
       "role": "framework-free compiler input; weights are equivalent to the pinned small.en graph"

@@ -51,6 +51,9 @@ typedef struct {
     const float *final_norm_weight;
     const float *final_norm_bias;
     cllm_whisper_decoder_layer_weights layers[CLLM_WHISPER_SMALL_DECODER_LAYERS];
+    const uint32_t *token_offsets;
+    const unsigned char *token_bytes;
+    const unsigned char *token_special;
 } cllm_whisper_decoder_weights;
 
 typedef struct {
@@ -92,5 +95,20 @@ int cllm_whisper_decoder_step(const cllm_whisper_decoder_weights *weights,
                               float *next_logit,
                               float *hidden_out,
                               cllm_whisper_decoder_metrics *metrics);
+
+int cllm_whisper_decoder_step_filtered(const cllm_whisper_decoder_weights *weights,
+                                       cllm_whisper_decoder_state *state,
+                                       uint32_t token,
+                                       const unsigned char *suppressed_tokens,
+                                       uint32_t *next_token,
+                                       float *next_logit,
+                                       float *hidden_out,
+                                       cllm_whisper_decoder_metrics *metrics);
+
+int cllm_whisper_decoder_consume(const cllm_whisper_decoder_weights *weights,
+                                 cllm_whisper_decoder_state *state,
+                                 uint32_t token,
+                                 float *hidden_out,
+                                 cllm_whisper_decoder_metrics *metrics);
 
 #endif
