@@ -203,6 +203,13 @@ int main(int argc, char **argv)
     if (cllm_whisper_small_encode_mel(&model, mel, input_frames, 12U,
                                       encoder, &encoder_metrics) != 0)
         goto cleanup;
+    printf("section=encoder boundary=stem duration_seconds=%.6f\n",
+           encoder_metrics.stem_seconds);
+    for (size_t layer = 0U; layer < 12U; ++layer)
+        printf("section=encoder boundary=layer layer=%zu duration_seconds=%.6f\n",
+               layer, encoder_metrics.layer_seconds[layer]);
+    printf("section=encoder boundary=final_norm duration_seconds=%.6f\n",
+           encoder_metrics.final_norm_seconds);
     encoder_seconds = encoder_metrics.stem_seconds + encoder_metrics.final_norm_seconds;
     for (size_t layer = 0U; layer < 12U; ++layer) encoder_seconds += encoder_metrics.layer_seconds[layer];
     if (cllm_whisper_decoder_state_init(&model.decoder, encoder, output_frames,
@@ -237,15 +244,19 @@ int main(int argc, char **argv)
         if (text == NULL) goto cleanup_state;
     }
     total_seconds = monotonic_seconds() - run_started;
+    const size_t generated_tokens = decoder_state.token_count - 2U;
+    const double decoder_total_seconds = decoder_seconds + output_head_seconds;
     printf("section=result window=%s audio_seconds=%.6f input_frames=%zu output_frames=%zu "
            "frontend_seconds=%.6f encoder_seconds=%.6f decoder_core_seconds=%.6f "
            "output_head_seconds=%.6f total_seconds=%.6f rtf=%.6f "
-           "decoder_cache_bytes=%zu generated_tokens=%zu\n",
+           "decoder_cache_bytes=%zu generated_tokens=%zu "
+           "decoder_text_tokens_per_second=%.6f overall_text_tokens_per_second=%.6f\n",
            compact_window ? "compact" : "fixed30", audio_seconds,
            input_frames, output_frames, frontend_seconds,
            encoder_seconds, decoder_seconds, output_head_seconds,
            total_seconds, total_seconds / audio_seconds,
-           decoder_state.allocated_bytes, decoder_state.token_count - 2U);
+           decoder_state.allocated_bytes, generated_tokens,
+           generated_tokens / decoder_total_seconds, generated_tokens / total_seconds);
     printf("transcript_utf8_bytes=%zu\n", text_length);
     printf("TRANSCRIPT: ");
     fwrite(text, 1U, text_length, stdout);
