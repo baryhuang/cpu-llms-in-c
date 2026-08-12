@@ -32,6 +32,46 @@ Benchmark and verification are separate. Every row below is a warm single-proces
 
 The final CPU layer removes 77.36% of baseline classification duration without changing the image or task contract. RSS changes by 388 KiB and all runs use zero swap.
 
+## Free-generation decode benchmark
+
+This is a separate greedy generation run. Unlike answer-set scoring, every generated token scans all 248,320 rows of the tied output head. The runtime stops at `<|im_end|>`.
+
+Input:
+
+```text
+<|im_start|>system
+You are a concise assistant.<|im_end|>
+<|im_start|>user
+Name three primary colors.<|im_end|>
+<|im_start|>assistant
+```
+
+Output:
+
+```text
+<think>
+
+</think>
+
+The primary colors are **Red**, **Blue**, and **Yellow**.
+```
+
+| Quantity | Result |
+|---|---:|
+| Prompt | 24 tokens |
+| Requested / generated | 24 / 19 tokens; stopped on EOS |
+| Prefill duration / throughput | 6.6597 s / 3.6038 prompt tokens/s |
+| Full-head duration for first token | 0.1104 s |
+| Time to first token | 6.7701 s |
+| Steady decode | 18 tokens / 6.9218 s = **2.6005 tokens/s** |
+| Generation after prefill, including first token | 19 tokens / 7.0322 s = 2.7018 tokens/s |
+| Wall duration | 13.77 s |
+| CPU | 386% |
+| Peak RSS | 499,968 KiB (~488 MiB) |
+| Swap | 0 |
+
+The complete 19-token ID sequence matches the local generic C runtime 19/19. Full per-token durations and IDs are in [`results.json`](results.json). This is one functional decode measurement, not a latency distribution.
+
 ## Verification
 
 Verification time is not included in the benchmark table.
@@ -57,6 +97,9 @@ gcc -O3 -std=c11 -Wall -Wextra -Wpedantic -fopenmp -static \
 
 OMP_NUM_THREADS=4 ./qwen35-task-a113x qwen35-v2.qtask \
   --prompts-file hazard-v1.prompts --answers-text safe,danger
+
+OMP_NUM_THREADS=4 ./qwen35-task-a113x qwen35-v2.qtask \
+  --prompt "$PROMPT" --generate 24
 ```
 
 ## CPU-axis status
@@ -74,4 +117,4 @@ Measured steps are not estimates. Future steps remain unmeasured.
 ## Feasibility notes
 
 - Measured four-thread read bandwidth is 3.591 GiB/s. The final runtime remains compute-bound: it uses 3.84 cores while staying far below the bandwidth-only ceiling.
-- The 470 MiB mapped image produces only ~367 MiB peak RSS because answer-set scoring does not touch the full embedding/head table. The 2 GiB board keeps zero swap throughout.
+- The answer-set run uses ~367 MiB peak RSS because it does not touch the full embedding/head table. Free generation touches the whole tied head and raises peak RSS to ~488 MiB. Both remain at zero swap on the 2 GiB board.

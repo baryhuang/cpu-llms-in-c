@@ -3,9 +3,9 @@
  * Executes the QW35TSK1 image: full 24-layer hybrid text graph with
  * Gated-DeltaNet linear layers, gated full attention, and the tied
  * Q4 embedding/output table. Inputs are token ids until the C
- * tokenizer lands; the caller may pass an answer set whose rows are
- * scored after prefill (prompt-defined outputs), and no other head
- * rows are touched.
+ * tokenizer lands. The caller may pass an answer set whose rows are
+ * scored after prefill (prompt-defined outputs), or request greedy free
+ * generation, which scans the full tied output head on every token.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -35,7 +35,8 @@ enum {
     Q4_RECORD = 66,
     Q8_RECORD = 130,
     MAX_ANSWERS = 64,
-    MAX_TOKENS = 4096
+    MAX_TOKENS = 4096,
+    MAX_GENERATE = 256
 };
 
 #pragma pack(push, 1)
@@ -1058,6 +1059,198 @@ static int run_one(const struct model *model, const uint32_t *token_ids, int tok
     return 0;
 }
 
+static uint32_t greedy_full_head(const struct model *model, struct workspace *ws,
+                                 float *logits)
+{
+    rms_norm_one_plus(ws->hidden, f32_data(&model->image, model->final_norm), ws->normed,
+                      HIDDEN);
+    q4_gemv(&model->image, model->embed, ws->normed, logits);
+    uint32_t best_id = 0;
+    float best_logit = logits[0];
+    for (uint32_t token_id = 1; token_id < model->image.header->vocab_rows; ++token_id) {
+        if (logits[token_id] > best_logit) {
+            best_logit = logits[token_id];
+            best_id = token_id;
+        }
+    }
+    return best_id;
+}
+
+static int tokenizer_is_special(const struct tokenizer *tokenizer, uint32_t token_id)
+{
+    for (uint32_t index = 0; index < tokenizer->special_count; ++index) {
+        if (tokenizer->special_ids[index] == token_id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int tokenizer_is_end(const struct tokenizer *tokenizer, uint32_t token_id)
+{
+    static const char marker[] = "<|im_end|>";
+    if (token_id >= tokenizer->token_count) {
+        return 0;
+    }
+    const uint32_t begin = tokenizer->token_offsets[token_id];
+    const uint32_t end = tokenizer->token_offsets[token_id + 1U];
+    return end - begin == sizeof(marker) - 1U &&
+           memcmp(tokenizer->token_bytes + begin, marker, sizeof(marker) - 1U) == 0;
+}
+
+static void print_json_bytes(const uint8_t *bytes, size_t length)
+{
+    putchar('"');
+    for (size_t index = 0; index < length; ++index) {
+        const uint8_t byte = bytes[index];
+        switch (byte) {
+        case '"':
+            fputs("\\\"", stdout);
+            break;
+        case '\\':
+            fputs("\\\\", stdout);
+            break;
+        case '\b':
+            fputs("\\b", stdout);
+            break;
+        case '\f':
+            fputs("\\f", stdout);
+            break;
+        case '\n':
+            fputs("\\n", stdout);
+            break;
+        case '\r':
+            fputs("\\r", stdout);
+            break;
+        case '\t':
+            fputs("\\t", stdout);
+            break;
+        default:
+            if (byte < 0x20) {
+                printf("\\u%04x", (unsigned)byte);
+            } else {
+                putchar((int)byte);
+            }
+            break;
+        }
+    }
+    putchar('"');
+}
+
+static int run_generate(const struct model *model, const uint32_t *prompt_ids,
+                        int prompt_count, int requested_tokens)
+{
+    struct state state;
+    struct workspace *ws = calloc(1, sizeof(struct workspace));
+    float *logits = malloc((size_t)model->image.header->vocab_rows * sizeof(float));
+    uint32_t generated[MAX_GENERATE];
+    double token_seconds[MAX_GENERATE];
+    if (ws == NULL || logits == NULL ||
+        allocate_state(&state, (size_t)prompt_count + (size_t)requested_tokens) != 0) {
+        free(logits);
+        free(ws);
+        return -1;
+    }
+    ws->scores = malloc(((size_t)prompt_count + (size_t)requested_tokens) * sizeof(float));
+    if (ws->scores == NULL) {
+        free(logits);
+        free(ws);
+        free_state(&state);
+        return -1;
+    }
+
+    const double prefill_start = monotonic_seconds();
+    for (int position = 0; position < prompt_count; ++position) {
+        forward_token(model, &state, ws, prompt_ids[position], (size_t)position);
+    }
+    const double prefill_seconds = monotonic_seconds() - prefill_start;
+
+    int generated_count = 0;
+    const double first_start = monotonic_seconds();
+    generated[generated_count] = greedy_full_head(model, ws, logits);
+    token_seconds[generated_count] = monotonic_seconds() - first_start;
+    generated_count += 1;
+
+    while (generated_count < requested_tokens &&
+           !tokenizer_is_end(&model->tokenizer, generated[generated_count - 1])) {
+        const double step_start = monotonic_seconds();
+        forward_token(model, &state, ws, generated[generated_count - 1],
+                      (size_t)prompt_count + (size_t)generated_count - 1U);
+        generated[generated_count] = greedy_full_head(model, ws, logits);
+        token_seconds[generated_count] = monotonic_seconds() - step_start;
+        generated_count += 1;
+    }
+
+    size_t text_bytes = 0;
+    for (int index = 0; index < generated_count; ++index) {
+        const uint32_t token_id = generated[index];
+        if (token_id < model->tokenizer.token_count &&
+            !tokenizer_is_special(&model->tokenizer, token_id)) {
+            text_bytes += model->tokenizer.token_offsets[token_id + 1U] -
+                          model->tokenizer.token_offsets[token_id];
+        }
+    }
+    uint8_t *text = malloc(text_bytes == 0 ? 1U : text_bytes);
+    if (text == NULL) {
+        free(ws->scores);
+        free(logits);
+        free(ws);
+        free_state(&state);
+        return -1;
+    }
+    size_t text_at = 0;
+    for (int index = 0; index < generated_count; ++index) {
+        const uint32_t token_id = generated[index];
+        if (token_id < model->tokenizer.token_count &&
+            !tokenizer_is_special(&model->tokenizer, token_id)) {
+            const uint32_t begin = model->tokenizer.token_offsets[token_id];
+            const uint32_t bytes = model->tokenizer.token_offsets[token_id + 1U] - begin;
+            memcpy(text + text_at, model->tokenizer.token_bytes + begin, bytes);
+            text_at += bytes;
+        }
+    }
+
+    double steady_seconds = 0.0;
+    for (int index = 1; index < generated_count; ++index) {
+        steady_seconds += token_seconds[index];
+    }
+    double generation_seconds = token_seconds[0] + steady_seconds;
+    printf("{\"mode\":\"greedy_generate\",\"prompt_tokens\":%d,"
+           "\"requested_tokens\":%d,\"generated_tokens\":%d,"
+           "\"stop_reason\":\"%s\",\"token_ids\":[",
+           prompt_count, requested_tokens, generated_count,
+           tokenizer_is_end(&model->tokenizer, generated[generated_count - 1]) ? "eos" :
+                                                                                 "length");
+    for (int index = 0; index < generated_count; ++index) {
+        printf("%s%u", index == 0 ? "" : ",", generated[index]);
+    }
+    printf("],\"text\":");
+    print_json_bytes(text, text_bytes);
+    printf(",\"prefill_seconds\":%.6f,\"prefill_tokens_per_second\":%.6f,"
+           "\"first_token_head_seconds\":%.6f,\"time_to_first_token_seconds\":%.6f,"
+           "\"steady_decode_tokens\":%d,\"steady_decode_seconds\":%.6f,"
+           "\"steady_decode_tokens_per_second\":%.6f,"
+           "\"generation_after_prefill_seconds\":%.6f,"
+           "\"generation_after_prefill_tokens_per_second\":%.6f,"
+           "\"per_generated_token_seconds\":[",
+           prefill_seconds, (double)prompt_count / prefill_seconds, token_seconds[0],
+           prefill_seconds + token_seconds[0], generated_count - 1, steady_seconds,
+           steady_seconds > 0.0 ? (double)(generated_count - 1) / steady_seconds : 0.0,
+           generation_seconds, (double)generated_count / generation_seconds);
+    for (int index = 0; index < generated_count; ++index) {
+        printf("%s%.6f", index == 0 ? "" : ",", token_seconds[index]);
+    }
+    printf("]}\n");
+    fflush(stdout);
+
+    free(text);
+    free(ws->scores);
+    free(logits);
+    free(ws);
+    free_state(&state);
+    return 0;
+}
+
 static int parse_id_list(const char *text, uint32_t *values, int capacity)
 {
     int count = 0;
@@ -1084,9 +1277,10 @@ int main(int argc, char **argv)
     const char *prompt_text = NULL;
     const char *answer_words = NULL;
     const char *prompts_file = NULL;
+    int generate_count = 0;
     int encode_only = 0;
     const char *usage = "usage: %s IMAGE (--prompt TEXT | --ids ID,... | --prompts-file PATH) "
-                        "(--answers-text WORD,... | --answers ID,...)\n";
+                        "((--answers-text WORD,... | --answers ID,...) | --generate N)\n";
     for (int index = 1; index < argc; ++index) {
         if (strcmp(argv[index], "--ids") == 0 && index + 1 < argc) {
             ids_text = argv[++index];
@@ -1098,6 +1292,14 @@ int main(int argc, char **argv)
             answer_words = argv[++index];
         } else if (strcmp(argv[index], "--prompts-file") == 0 && index + 1 < argc) {
             prompts_file = argv[++index];
+        } else if (strcmp(argv[index], "--generate") == 0 && index + 1 < argc) {
+            char *end = NULL;
+            const long parsed = strtol(argv[++index], &end, 10);
+            if (end == argv[index] || *end != '\0' || parsed < 1 || parsed > MAX_GENERATE) {
+                fprintf(stderr, usage, argv[0]);
+                return 2;
+            }
+            generate_count = (int)parsed;
         } else if (strcmp(argv[index], "--encode-only") == 0) {
             encode_only = 1;
         } else if (image_path == NULL) {
@@ -1107,9 +1309,10 @@ int main(int argc, char **argv)
             return 2;
         }
     }
+    const int answer_mode = answers_text != NULL || answer_words != NULL;
     if (image_path == NULL ||
         (ids_text == NULL && prompt_text == NULL && prompts_file == NULL) ||
-        (answers_text == NULL && answer_words == NULL)) {
+        answer_mode == (generate_count > 0) || (prompts_file != NULL && generate_count > 0)) {
         fprintf(stderr, usage, argv[0]);
         return 2;
     }
@@ -1136,7 +1339,7 @@ int main(int argc, char **argv)
     }
     if (answers_text != NULL) {
         answer_count = parse_id_list(answers_text, answer_ids, MAX_ANSWERS);
-    } else {
+    } else if (answer_words != NULL) {
         char buffer[512];
         const char *cursor = answer_words;
         while (*cursor != '\0' && answer_count >= 0) {
@@ -1160,7 +1363,7 @@ int main(int argc, char **argv)
             cursor = comma ? comma + 1 : cursor + size;
         }
     }
-    if (answer_count <= 0 || (prompts_file == NULL && token_count <= 0)) {
+    if ((answer_mode && answer_count <= 0) || (prompts_file == NULL && token_count <= 0)) {
         fprintf(stderr, "invalid prompt or answer list\n");
         return 2;
     }
@@ -1231,7 +1434,11 @@ int main(int argc, char **argv)
 #ifdef _OPENMP
     omp_set_dynamic(0);
 #endif
-    if (run_one(&model, token_ids, token_count, answer_ids, answer_count, -1) != 0) {
+    const int run_status = generate_count > 0
+                               ? run_generate(&model, token_ids, token_count, generate_count)
+                               : run_one(&model, token_ids, token_count, answer_ids,
+                                         answer_count, -1);
+    if (run_status != 0) {
         fprintf(stderr, "execution failed\n");
         return 2;
     }

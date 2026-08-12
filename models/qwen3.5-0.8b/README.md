@@ -6,7 +6,7 @@ Status: model runtime implemented and verified; the A113X target is measured and
 
 | Target | Chip year | CPU | Accelerator | Current evidence | Record |
 |---|---:|---|---|---|---|
-| Amlogic A113X | 2017 | 4x Cortex-A53 | CPU only for this project | 3.6353 prompt tokens/s classification prefill after two CPU increments; 367 MiB RSS; zero swap | [target](targets/a113x/README.md) · [raw results](targets/a113x/results.json) |
+| Amlogic A113X | 2017 | 4x Cortex-A53 | CPU only for this project | 3.6353 prompt tokens/s classification prefill; 2.6005 tokens/s steady greedy decode; zero swap | [target](targets/a113x/README.md) · [raw results](targets/a113x/results.json) |
 | Rockchip RK3588S | 2022 | 4x Cortex-A76 + 4x Cortex-A55 | 6 TOPS NPU | external RKLLM baseline; no repository run | [target](targets/rk3588s/README.md) |
 | Rockchip RK3576 | 2024 | 4x Cortex-A72 + 4x Cortex-A53 | 6 TOPS RKNN NPU | external RKLLM baseline; no repository run | [target](targets/rk3576/README.md) |
 
@@ -110,6 +110,8 @@ The A113X target runs the same image and 12 cases. This is prompt prefill/classi
 | + contiguous/parallel DeltaNet state | 134.241 s | **3.6353 token/s** | 1.50x | 376,152 KiB | 0 |
 
 The two CPU increments compose to 4.42x over the generic scalar runtime. Full machine fields, wall durations, output logits, and build hashes: [`targets/a113x/results.json`](targets/a113x/results.json).
+
+Free generation is also implemented. One measured greedy run scans the full 248,320-row head per generated token: 6.7701 s time to first token and **2.6005 tokens/s steady decode**, with 499,968 KiB peak RSS and zero swap. Input, output text, token IDs, and per-token durations are in the [A113X target record](targets/a113x/README.md#free-generation-decode-benchmark).
 
 ## Verified facts
 
