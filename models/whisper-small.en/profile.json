@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "profile_id": "caremojo-local-english-transcript-v1",
+  "role": "deployment and evaluation contract; no private audio or transcript is stored here",
+  "input": {
+    "media": "audio",
+    "sample_rate_hz": 16000,
+    "channels": 1,
+    "runtime_sample_types": ["signed-16-bit-pcm", "float32"],
+    "window_seconds": 30,
+    "primary_language": "en",
+    "non_english_is_out_of_contract": true,
+    "task": "transcribe",
+    "arbitrary_spoken_content_required": true
+  },
+  "output": {
+    "type": "ordered-segments",
+    "required_fields": ["start_ms", "end_ms", "text"],
+    "optional_fields": ["confidence", "speaker"],
+    "timestamps_required": true,
+    "arbitrary_natural_language_required": true
+  },
+  "privacy": {
+    "raw_audio_leaves_device": false,
+    "raw_transcript_leaves_device": false,
+    "benchmark_artifacts_must_be_public_or_synthetic": true
+  },
+  "acceptance": {
+    "real_time_factor_maximum": 1.0,
+    "real_time_factor_denominator": "original audio duration",
+    "relative_wer_increase_maximum": 0.10,
+    "quality_reference": "unmodified pinned OpenAI whisper-small.en using the same evaluation corpus and decoding policy",
+    "peak_rss_bytes_maximum": 1073741824,
+    "swap_bytes_maximum": 0
+  },
+  "benchmark": {
+    "primary_duration_seconds": 300,
+    "secondary_duration_seconds": 30,
+    "report": [
+      "audio_seconds",
+      "wall_seconds",
+      "real_time_factor",
+      "audio_seconds_per_wall_second",
+      "frontend_seconds",
+      "encoder_seconds",
+      "decoder_seconds",
+      "cpu_percent",
+      "peak_rss_kib",
+      "swap_kib",
+      "word_error_rate",
+      "relative_word_error_rate_increase",
+      "timestamp_error"
+    ]
+  }
+}

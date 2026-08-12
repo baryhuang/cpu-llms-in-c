@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "model": {
+    "name": "OpenAI Whisper small.en",
+    "repository": "openai/whisper",
+    "revision": "5f86d1d86363843179951550570367b37c5d6f78",
+    "checkpoint": {
+      "url": "https://openaipublic.azureedge.net/main/whisper/models/f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872/small.en.pt",
+      "bytes": 483615683,
+      "sha256": "f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872"
+    },
+    "architecture": {
+      "n_mels": 80,
+      "audio_context": 1500,
+      "audio_state": 768,
+      "audio_heads": 12,
+      "audio_layers": 12,
+      "vocabulary_size": 51864,
+      "text_context": 448,
+      "text_state": 768,
+      "text_heads": 12,
+      "text_layers": 12
+    },
+    "reference_files": {
+      "whisper/__init__.py": "79ecbed714783b6230931a3dba6d5da6d386e2d44f9fc27256e4fc72751e1f62",
+      "whisper/audio.py": "36ed287b2de3eaf40207cd2a44a8d45d57ea5c212a39df07401d4fcb4d5a5a1a",
+      "whisper/model.py": "f82b0f40e29076506f1e34607a8008782f0586750a8e8bd6d8e1cee5c41b9329",
+      "whisper/decoding.py": "94084fedc5af74cabf8e1883a85552700057081f00ea669ad49435ecb29039db",
+      "whisper/transcribe.py": "176f5ab30e961bec2a7872f5701a1f5bf3cbfc77946e50512f0f0cf00a1ceacf",
+      "whisper/tokenizer.py": "3b48e361a7e95b4ec0356ca6d72bba635778aa10269153136ee7bc34cae30b85",
+      "whisper/assets/mel_filters.npz": "7450ae70723a5ef9d341e3cee628c7cb0177f36ce42c44b7ed2bf3325f0f6d4c"
+    }
+  },
+  "portable_baseline": {
+    "repository": "ggml-org/whisper.cpp",
+    "revision": "41fc9dea6a4fe056424be86f61164413903fcff4",
+    "tag": "v1.8.0",
+    "role": "comparison and numerical reference only; it is not the intended deployed runtime"
+  }
+}

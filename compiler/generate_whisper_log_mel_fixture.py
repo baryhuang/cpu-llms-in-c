@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the pinned 128-bin Whisper large-v3 front-end fixture."""
+"""Generate a pinned OpenAI Whisper 80- or 128-bin front-end fixture."""
 
 import argparse
 import hashlib
@@ -19,7 +19,6 @@ FILTER_FILE_SHA256 = "7450ae70723a5ef9d341e3cee628c7cb0177f36ce42c44b7ed2bf3325f
 HEADER = struct.Struct("<8s7I")
 N_FFT = 400
 HOP = 160
-N_MELS = 128
 N_FREQ = N_FFT // 2 + 1
 
 
@@ -50,7 +49,7 @@ def reference_log_mel(audio: np.ndarray, filters: np.ndarray) -> np.ndarray:
     return ((log_spec + np.float32(4.0)) / np.float32(4.0)).astype("<f4")
 
 
-def load_filters(path: Path | None) -> np.ndarray:
+def load_filters(path: Path | None, n_mels: int) -> np.ndarray:
     if path is None:
         payload = urllib.request.urlopen(FILTER_URL, timeout=60).read()
     else:
@@ -59,9 +58,10 @@ def load_filters(path: Path | None) -> np.ndarray:
     if digest != FILTER_FILE_SHA256:
         raise ValueError(f"mel filter hash mismatch: {digest}")
     with np.load(io.BytesIO(payload), allow_pickle=False) as archive:
-        filters = archive["mel_128"].astype("<f4")
-    if filters.shape != (N_MELS, N_FREQ):
-        raise ValueError(f"unexpected mel_128 shape: {filters.shape}")
+        key = f"mel_{n_mels}"
+        filters = archive[key].astype("<f4")
+    if filters.shape != (n_mels, N_FREQ):
+        raise ValueError(f"unexpected mel_{n_mels} shape: {filters.shape}")
     return filters
 
 
@@ -83,14 +83,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--mel-filters", type=Path)
+    parser.add_argument("--n-mels", type=int, choices=(80, 128), default=128)
     args = parser.parse_args()
 
-    filters = load_filters(args.mel_filters)
+    filters = load_filters(args.mel_filters, args.n_mels)
     audio = build_audio()
     expected = reference_log_mel(audio, filters)
     frames = expected.shape[1]
     header = HEADER.pack(
-        b"WHMEL001", 1, len(audio), frames, N_FFT, HOP, N_MELS, N_FREQ
+        b"WHMEL001", 1, len(audio), frames, N_FFT, HOP, args.n_mels, N_FREQ
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(header + audio.tobytes() + filters.tobytes() + expected.tobytes())

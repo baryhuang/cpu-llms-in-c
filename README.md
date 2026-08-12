@@ -27,6 +27,8 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 | Qwen3.5-0.8B | Rockchip RK3576: 4x Cortex-A72 + 4x Cortex-A53, NPU | 2024 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3576/README.md) |
 | Whisper large-v3 | generic CPU | not pinned | model/deployment contract pinned; M1 scalar 128-bin log-Mel C boundary implemented | 768/768 fixture values pass, max abs `1.74e-5`; source and model hashes pinned | no large-v3 transcription measurement | [model](models/whisper-large-v3/README.md) · [generic target](models/whisper-large-v3/targets/generic/README.md) |
 | Whisper large-v3 | Amlogic A113X: 4x Cortex-A53 | 2017 | front-end boundary passes; encoder/decoder target stages planned; full model feasibility is poor | same 768-value C boundary passes; same-board `tiny.en` ASR reference is not large-v3 | tiny Q5_1 greedy: 0.757 RTF on 300 s; large-v3 unmeasured | [model](models/whisper-large-v3/README.md) · [target](models/whisper-large-v3/targets/a113x/README.md) · [raw reference](models/whisper-large-v3/targets/a113x/results-tiny-reference.json) |
+| Whisper small.en | generic CPU | not pinned | selected English real-time path; scalar 80-bin Mel, two-convolution encoder stem and one encoder Transformer block implemented | committed independent fixtures cover four reported C boundaries | no full transcription measurement | [model](models/whisper-small.en/README.md) · [decision record](models/whisper-small.en/DECISIONS.md) · [generic target](models/whisper-small.en/targets/generic/README.md) |
+| Whisper small.en-derived | Amlogic A113X: 4x Cortex-A53 | 2017 | research target: C/NEON plus teacher-guided structural reduction | acceptance gates defined; no small.en target artifact yet | target is sustained RTF `<=1.0`, relative WER increase `<=10%`, RSS `<1 GiB`, zero swap | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) |
 
 Chip year means first public MP release, official launch, or official development-board sale; it is not the board manufacture year. The evidence and exact event are recorded in each target file.
 
@@ -95,9 +97,13 @@ Measured and planned steps are labeled separately. Factors do not multiply clean
 
 Model-axis details: [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md). Target details: [A113X](models/qwen3.5-0.8b/targets/a113x/README.md) · [RK3588S](models/qwen3.5-0.8b/targets/rk3588s/README.md) · [RK3576](models/qwen3.5-0.8b/targets/rk3576/README.md).
 
-### Whisper large-v3 transcription path
+### Whisper transcription paths
 
 Transcript remains an open natural-language input to the downstream model. Whisper therefore retains its tokenizer, reachable output vocabulary and ordered timestamp segments. It is not compiled into a fixed classifier.
+
+The active A113X deployment challenge is now `small.en`-derived: English-only, continuous RTF `<=1.0`, less than or equal to 10% relative WER increase against the pinned unmodified `small.en`, peak RSS below 1 GiB and zero swap. `tiny.en` and `base.en` remain speed/quality controls. `medium.en` can be an offline English teacher; `large-v3` remains a multilingual quality oracle. The feature losses, size comparison and structural plan are recorded in the [`small.en` decision record](models/whisper-small.en/DECISIONS.md).
+
+The large-v3 rows below remain a separate multilingual research path; they are not the selected A113X deployment graph.
 
 | Step | Axis | Mechanism | Status / evidence |
 |---|---|---|---|
