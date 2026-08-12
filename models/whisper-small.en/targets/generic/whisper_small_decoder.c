@@ -187,6 +187,9 @@ static void attention(const float *query,
                       float *scores,
                       float *output)
 {
+#ifdef _OPENMP
+    (void)scores;
+#endif
     memset(output, 0, WIDTH * sizeof(float));
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -195,20 +198,26 @@ static void attention(const float *query,
         const size_t offset = head * HEAD_WIDTH;
         float maximum = -INFINITY;
         double denominator = 0.0;
+#ifdef _OPENMP
+        float private_scores[1500];
+        float *head_scores = private_scores;
+#else
+        float *head_scores = scores;
+#endif
         for (size_t frame = 0U; frame < frames; ++frame) {
             double sum = 0.0;
             for (size_t channel = 0U; channel < HEAD_WIDTH; ++channel)
                 sum += (double)query[offset + channel] *
                        key[frame * WIDTH + offset + channel];
-            scores[frame] = (float)sum * 0.125f;
-            if (scores[frame] > maximum) maximum = scores[frame];
+            head_scores[frame] = (float)sum * 0.125f;
+            if (head_scores[frame] > maximum) maximum = head_scores[frame];
         }
         for (size_t frame = 0U; frame < frames; ++frame) {
-            scores[frame] = expf(scores[frame] - maximum);
-            denominator += scores[frame];
+            head_scores[frame] = expf(head_scores[frame] - maximum);
+            denominator += head_scores[frame];
         }
         for (size_t frame = 0U; frame < frames; ++frame) {
-            const float probability = (float)(scores[frame] / denominator);
+            const float probability = (float)(head_scores[frame] / denominator);
             for (size_t channel = 0U; channel < HEAD_WIDTH; ++channel)
                 output[offset + channel] += probability *
                     value[frame * WIDTH + offset + channel];
