@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "status": "row_reuse_cpu_optimized_realtime_gate_failed_quality_suite_open",
+  "model": "OpenAI Whisper small.en",
+  "target": {
+    "soc": "Amlogic A113X",
+    "cpu": "4x Arm Cortex-A53",
+    "maximum_observed_clock_hz": 1416000000,
+    "threads": 4
+  },
+  "source": {
+    "repository_commit": "51c629a",
+    "transcribe_binary_bytes": 75632,
+    "transcribe_binary_sha256": "1abaa6dc63a2b64b1f50fba30f91ebc25fded92db83929d56af9c8ac203e1277",
+    "transcribe_source_sha256": "215832dd02c3da049f1e354ada07f6f84d81d08bc6e59ab557b882b2fb8f8ae4",
+    "q4_kernel_source_sha256": "fe7fe869451efa2bc6e4647accdfb555c83ea4be55955c4fbbd852429562142a",
+    "encoder_source_sha256": "a701c9d33e3df68d890860964bfb588ce31038ca8a66c3e14cb2449ba405366b",
+    "decoder_source_sha256": "6c5593c30dd2ad2f32655047c6fee1565a61388c901348ef8a9d67620352f95a"
+  },
+  "input": {
+    "file": "whisper.cpp samples/jfk.wav",
+    "sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+    "format": "mono PCM16 WAV",
+    "sample_rate_hz": 16000,
+    "audio_seconds": 11.0,
+    "window": "compact",
+    "input_frames": 1100,
+    "output_frames": 550
+  },
+  "command": "OMP_NUM_THREADS=4 OMP_DYNAMIC=FALSE /usr/bin/time -v ./build/whisper-small-transcribe-a113x small.en-full-mixed.whenc /root/whisper-bench-v1.8.0/whisper.cpp/samples/jfk.wav 64 compact",
+  "output": {
+    "transcript": " And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+    "normalized_word_edits": 0,
+    "normalized_reference_words": 22,
+    "smoke_case_wer": 0.0,
+    "generated_text_tokens": 25,
+    "eot_reached": true,
+    "relative_wer_increase": null,
+    "relative_wer_gate": "open",
+    "timestamps": "not emitted; no-timestamps decoding was selected"
+  },
+  "benchmark": {
+    "definition": "three complete process invocations; headline is median internal total duration",
+    "repetitions": 3,
+    "total_seconds": [45.810786, 44.872162, 45.046989],
+    "total_seconds_median": 45.046989,
+    "total_seconds_mean": 45.243312,
+    "total_seconds_sample_sd": 0.499160,
+    "total_seconds_cv_percent": 1.103279,
+    "rtf": [4.164617, 4.079287, 4.095181],
+    "rtf_median": 4.095181,
+    "frontend_seconds": [0.084131, 0.081672, 0.079188],
+    "encoder_seconds": [39.200258, 38.263763, 38.436764],
+    "decoder_core_seconds": [6.086109, 6.089001, 6.094089],
+    "output_head_seconds": [0.429966, 0.427758, 0.426832],
+    "overall_text_tokens_per_second": [0.545723, 0.557138, 0.554976],
+    "decoder_text_tokens_per_second": [3.836665, 3.836263, 3.833814],
+    "cpu_percent": [380, 388, 388],
+    "peak_rss_kib": [251276, 251488, 251396],
+    "process_swaps": [0, 0, 0]
+  },
+  "incremental": [
+    {
+      "stage": "E8",
+      "implementation": "compact window, 64-column Q4 block and fixed 4-output NEON dot",
+      "total_seconds": 48.214580,
+      "rtf": 4.383144,
+      "cumulative_vs_e1": 12.217380
+    },
+    {
+      "stage": "E9",
+      "implementation": "E8 plus 2-row by 4-output Q4 micro-kernel",
+      "total_seconds": 45.046989,
+      "duration_statistic": "median of three complete process invocations",
+      "rtf": 4.095181,
+      "increment_vs_previous": 1.070317,
+      "cumulative_vs_e1": 13.076476
+    }
+  ],
+  "canonical_resource_run": {
+    "role": "resource audit with device memory snapshots; excluded from the three-run duration statistic",
+    "total_seconds": 45.574120,
+    "rtf": 4.143102,
+    "cpu_percent": 388,
+    "user_cpu_seconds": 176.42,
+    "system_cpu_seconds": 0.86,
+    "peak_rss_kib": 251332,
+    "process_swaps": 0,
+    "device_swap_free_before_kib": 1005484,
+    "device_swap_free_after_kib": 1005484,
+    "exit_status": 0
+  },
+  "verification": {
+    "real_weight_fixture": "FINITE_MEASURED_NOT_QUALITY_GATE",
+    "stem_rmse": 3.11536603e-8,
+    "layer_0_rmse": 0.0605037052,
+    "layer_11_final_ln_rmse": 0.238280457,
+    "same_as_e8_fixture": true,
+    "transcript_identical_across_final_runs": true,
+    "normalized_words_match_reference": true
+  },
+  "raw_files": {
+    "row-reuse-run-1.stdout.txt": "dadb86e6a194415cd2f1bd111bde80988f777c323e3a23bfbf40705a229e322a",
+    "row-reuse-run-1.time.txt": "d140f213b009797ce5932d1972730c1582f8cb7ce35448bdf75df997b976fc89",
+    "row-reuse-run-2.stdout.txt": "aa7f968d53d0e90422336c7581b9e3df718a178f776ed262552d92ce7704b7f1",
+    "row-reuse-run-2.time.txt": "559472f87edefcde29ef4e7dcfe833d0a80e27edfa44b81b3bef6eb5bfb1c1a9",
+    "row-reuse-run-3.stdout.txt": "0e270537657dd42db83ae16811037ef1e040f45bd86dd887dcaf199e3566fe94",
+    "row-reuse-run-3.time.txt": "931bc95a9ea20241ebe777f85f8fa0b4b83fcd9b006a0a9746a389b6f6694562",
+    "row-reuse-canonical.stdout.txt": "0d88ced8d2595996f04817892859c10a261d3455f9d7144a0f23a01aba164d83",
+    "row-reuse-canonical.time.txt": "860a2d2237bb710ceb6eb22cca26e113959e72a8997d5fbc8958c9654b7ee3e5",
+    "row-reuse-canonical.memory-before.txt": "8f44228961c5b67a0bc81100734c143e18feb9bcbd16cc82f59663e13c54adfa",
+    "row-reuse-canonical.memory-after.txt": "9f34077d9168cf7423fc1cc82be6aa93822e8f13d995721d37f94a73c811aaa4"
+  }
+}

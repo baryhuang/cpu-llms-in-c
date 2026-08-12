@@ -40,7 +40,8 @@
     "repository_commit_cpu_stage_a3": "bed2af2",
     "repository_commit_end_to_end": "0a3193a",
     "repository_commit_compact_window": "a3dffc4",
-    "repository_commit_q4_blocking": "c8b022d"
+    "repository_commit_q4_blocking": "c8b022d",
+    "repository_commit_q4_row_reuse": "51c629a"
   },
   "verification": {
     "fixture_format": "WHREAL01",
@@ -290,6 +291,37 @@
         "relative_wer_increase": null,
         "timestamps": "not emitted; no-timestamps decoding was selected",
         "raw_record": "benchmarks/jfk-11s/compact-result.json"
+      },
+      {
+        "stage": "E9",
+        "implementation": "E8 plus two-row by four-output Q4 micro-kernel",
+        "input": "whisper.cpp samples/jfk.wav",
+        "input_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+        "audio_seconds": 11.0,
+        "window": "compact",
+        "input_frames": 1100,
+        "output_frames": 550,
+        "repetitions": 3,
+        "duration_statistic": "median",
+        "total_seconds": 45.046989,
+        "total_seconds_runs": [45.810786, 44.872162, 45.046989],
+        "rtf_against_original_audio": 4.095181,
+        "increment_vs_e8": 1.070317,
+        "increment_vs_e1": 13.076476,
+        "generated_text_tokens": 25,
+        "overall_text_tokens_per_second": 0.554976,
+        "decoder_text_tokens_per_second": 3.833814,
+        "cpu_percent_runs": [380, 388, 388],
+        "peak_rss_kib_runs": [251276, 251488, 251396],
+        "process_swap_runs": [0, 0, 0],
+        "device_swap_free_before_kib": 1005484,
+        "device_swap_free_after_kib": 1005484,
+        "transcript": " And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+        "quality_scope": "one public smoke case; not the relative-WER acceptance suite",
+        "normalized_smoke_case_wer": 0.0,
+        "relative_wer_increase": null,
+        "timestamps": "not emitted; no-timestamps decoding was selected",
+        "raw_record": "benchmarks/jfk-11s/row-reuse-result.json"
       }
     ]
   }

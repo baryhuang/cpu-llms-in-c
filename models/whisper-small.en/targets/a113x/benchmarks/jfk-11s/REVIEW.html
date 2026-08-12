@@ -39,12 +39,12 @@
   <p class="muted">One public 11-second speech sample. From-scratch C runtime. Greedy English transcription. No timestamps.</p>
 
   <div class="grid">
-    <div class="card"><span>Median duration</span><strong>48.215 s</strong></div>
-    <div class="card"><span>Median RTF</span><strong class="fail">4.3831</strong></div>
-    <div class="card"><span>Cumulative gain</span><strong>12.22x</strong></div>
-    <div class="card"><span>Median-run RSS</span><strong>251,496 KiB</strong></div>
-    <div class="card"><span>Decoder throughput</span><strong>3.847 tok/s</strong></div>
-    <div class="card"><span>Overall throughput</span><strong>0.519 tok/s</strong></div>
+    <div class="card"><span>Median duration</span><strong>45.047 s</strong></div>
+    <div class="card"><span>Median RTF</span><strong class="fail">4.0952</strong></div>
+    <div class="card"><span>Cumulative gain</span><strong>13.08x</strong></div>
+    <div class="card"><span>Median-run RSS</span><strong>251,396 KiB</strong></div>
+    <div class="card"><span>Decoder throughput</span><strong>3.834 tok/s</strong></div>
+    <div class="card"><span>Overall throughput</span><strong>0.555 tok/s</strong></div>
     <div class="card"><span>Smoke-case WER</span><strong class="pass">0 / 22</strong></div>
     <div class="card"><span>Process swap</span><strong class="pass">0</strong></div>
   </div>
@@ -68,16 +68,16 @@
   <p>Normalization lowercases ASCII words and removes punctuation and leading whitespace. The normalized sequences match: 0 substitutions, 0 insertions and 0 deletions over 22 reference words. This is one smoke case, not the required relative-WER evaluation suite.</p>
 
   <h2>Benchmark</h2>
-  <p>Benchmark duration does not include fixture verification. RTF uses the original 11 seconds. The compact headline is the median of three complete process invocations.</p>
+  <p>Benchmark duration does not include fixture verification. RTF uses the original 11 seconds. The E9 headline is the median of three complete process invocations.</p>
   <table>
     <thead><tr><th>Run</th><th class="num">Total</th><th class="num">RTF</th><th class="num">CPU</th><th class="num">Peak RSS</th><th class="num">Swap</th></tr></thead>
     <tbody>
-      <tr><td>compact 1</td><td class="num">48.808225 s</td><td class="num">4.437111</td><td class="num">388%</td><td class="num">251,232 KiB</td><td class="num">0</td></tr>
-      <tr><td>compact 2 / median</td><td class="num"><strong>48.214580 s</strong></td><td class="num"><strong>4.383144</strong></td><td class="num">388%</td><td class="num">251,496 KiB</td><td class="num">0</td></tr>
-      <tr><td>compact 3</td><td class="num">47.984083 s</td><td class="num">4.362189</td><td class="num">388%</td><td class="num">251,448 KiB</td><td class="num">0</td></tr>
+      <tr><td>E9 row reuse 1</td><td class="num">45.810786 s</td><td class="num">4.164617</td><td class="num">380%</td><td class="num">251,276 KiB</td><td class="num">0</td></tr>
+      <tr><td>E9 row reuse 2</td><td class="num">44.872162 s</td><td class="num">4.079287</td><td class="num">388%</td><td class="num">251,488 KiB</td><td class="num">0</td></tr>
+      <tr><td>E9 row reuse 3 / median</td><td class="num"><strong>45.046989 s</strong></td><td class="num"><strong>4.095181</strong></td><td class="num">388%</td><td class="num">251,396 KiB</td><td class="num">0</td></tr>
     </tbody>
   </table>
-  <p>Mean 48.335629 s; sample standard deviation 0.425197 s; coefficient of variation 0.880%.</p>
+  <p>Mean 45.243312 s; sample standard deviation 0.499160 s; coefficient of variation 1.103%.</p>
   <h2>Incremental result</h2>
   <table>
     <thead><tr><th>Stage</th><th>Cumulative implementation</th><th class="num">Duration</th><th class="num">RTF</th><th class="num">Increment</th><th class="num">Cumulative</th></tr></thead>
@@ -87,6 +87,7 @@
       <tr><td>E3</td><td>E2 + Q4 output-column cache block</td><td class="num">73.774966 s</td><td class="num">6.7068</td><td class="num">2.18x</td><td class="num">7.98x</td></tr>
       <tr><td>E4–E7</td><td>select 8 / 16 / 32 / 64-column block</td><td class="num">61.882 → 52.207 s</td><td class="num">5.6257 → 4.7461</td><td class="num">1.19–1.03x</td><td class="num">11.28x</td></tr>
       <tr><td>E8</td><td>E7 + fixed 4-output NEON dot</td><td class="num"><strong>48.214580 s median</strong></td><td class="num"><strong>4.3831</strong></td><td class="num">1.08x</td><td class="num"><strong>12.22x</strong></td></tr>
+      <tr><td>E9</td><td>E8 + 2-row × 4-output Q4 micro-kernel</td><td class="num"><strong>45.046989 s median</strong></td><td class="num"><strong>4.0952</strong></td><td class="num"><strong>1.07x</strong></td><td class="num"><strong>13.08x</strong></td></tr>
     </tbody>
   </table>
 
@@ -94,22 +95,23 @@
   <table>
     <thead><tr><th>Path</th><th class="num">Duration</th><th class="num">Share of total</th></tr></thead>
     <tbody>
-      <tr><td>Waveform → log-Mel</td><td class="num">0.080052 s</td><td class="num">0.17%</td></tr>
-      <tr><td>Stem + 12-layer encoder</td><td class="num">41.625532 s</td><td class="num">86.33%</td></tr>
-      <tr><td>Cross cache + decoder core</td><td class="num">6.076246 s</td><td class="num">12.60%</td></tr>
-      <tr><td>Tied output head</td><td class="num">0.422475 s</td><td class="num">0.88%</td></tr>
-      <tr><th>Total internal timer</th><th class="num">48.214580 s</th><th class="num">100%</th></tr>
+      <tr><td>Waveform → log-Mel</td><td class="num">0.079188 s</td><td class="num">0.18%</td></tr>
+      <tr><td>Stem + 12-layer encoder</td><td class="num">38.436764 s</td><td class="num">85.33%</td></tr>
+      <tr><td>Cross cache + decoder core</td><td class="num">6.094089 s</td><td class="num">13.53%</td></tr>
+      <tr><td>Tied output head</td><td class="num">0.426832 s</td><td class="num">0.95%</td></tr>
+      <tr><td>Measured runtime overhead</td><td class="num">0.010116 s</td><td class="num">0.02%</td></tr>
+      <tr><th>Total internal timer</th><th class="num">45.046989 s</th><th class="num">100%</th></tr>
     </tbody>
   </table>
 
-  <p>The resource counters below are from compact run 1, the canonical run with device memory snapshots. The headline duration and path table above use the three-run median (run 2).</p>
+  <p>The resource counters below are from a separate E9 canonical run with device memory snapshots. It is excluded from the three-run duration statistic; the headline and path table use run 3, the median run.</p>
   <table style="margin-top:12px">
     <thead><tr><th>Resource</th><th class="num">Measured</th></tr></thead>
     <tbody>
-      <tr><td>User CPU time</td><td class="num">189.00 s</td></tr>
-      <tr><td>System CPU time</td><td class="num">0.71 s</td></tr>
+      <tr><td>User CPU time</td><td class="num">176.42 s</td></tr>
+      <tr><td>System CPU time</td><td class="num">0.86 s</td></tr>
       <tr><td>Average CPU utilization</td><td class="num">388%</td></tr>
-      <tr><td>Maximum resident set</td><td class="num">251,232 KiB</td></tr>
+      <tr><td>Maximum resident set</td><td class="num">251,332 KiB</td></tr>
       <tr><td>Decoder cache</td><td class="num">45,308,056 bytes</td></tr>
       <tr><td>Process swaps</td><td class="num">0</td></tr>
       <tr><td>Device SwapFree before / after</td><td class="num">1,005,484 / 1,005,484 KiB</td></tr>
@@ -136,42 +138,42 @@
 
   <h2>Decode trace</h2>
   <details>
-    <summary>Show all 26 compact median-run decoder steps</summary>
+    <summary>Show all 26 E9 median-run decoder steps</summary>
     <pre>pos  input  next   decoder-core s  output-head s
- 1   50362    843       0.110766        0.018480
- 2     843    523       0.109203        0.015930
- 3     523    616       0.109627        0.016167
- 4     616   5891       0.107801        0.016137
- 5    5891   3399       0.109545        0.016053
- 6    3399     11       0.108873        0.015987
- 7      11   1265       0.108592        0.016299
- 8    1265    407       0.111631        0.016222
- 9     407    644       0.109299        0.016188
-10     644    534       0.109217        0.016258
-11     534   1499       0.110758        0.016314
-12    1499    460       0.110973        0.016172
-13     460    466       0.109880        0.016303
-14     466    329       0.109627        0.015990
-15     329    345       0.109556        0.016064
-16     345     11       0.112031        0.016053
-17      11   1265       0.110579        0.016125
-18    1265    644       0.110386        0.016027
-19     644    345       0.109872        0.016243
-20     345    460       0.109547        0.016368
-21     460    466       0.109948        0.016108
-22     466    329       0.109454        0.015933
-23     329    534       0.110668        0.015981
-24     534   1499       0.109692        0.016733
-25    1499     13       0.111140        0.016367
-26      13  50256       0.110531        0.015974</pre>
+ 1   50362    843       0.109676        0.018473
+ 2     843    523       0.112043        0.016235
+ 3     523    616       0.110859        0.017432
+ 4     616   5891       0.107891        0.016223
+ 5    5891   3399       0.110947        0.016040
+ 6    3399     11       0.110144        0.016086
+ 7      11   1265       0.109560        0.016527
+ 8    1265    407       0.109955        0.016359
+ 9     407    644       0.109808        0.016057
+10     644    534       0.110324        0.015854
+11     534   1499       0.109535        0.016644
+12    1499    460       0.109190        0.016208
+13     460    466       0.110354        0.015970
+14     466    329       0.110508        0.016258
+15     329    345       0.109632        0.016130
+16     345     11       0.109356        0.017089
+17      11   1265       0.112653        0.016273
+18    1265    644       0.109955        0.016142
+19     644    345       0.110045        0.016040
+20     345    460       0.110281        0.016285
+21     460    466       0.110486        0.016131
+22     466    329       0.110642        0.016128
+23     329    534       0.109672        0.016053
+24     534   1499       0.110010        0.017806
+25    1499     13       0.110812        0.016184
+26      13  50256       0.112365        0.016205</pre>
   </details>
 
   <h2>Artifact identity and limitations</h2>
   <table>
     <tr><th>Item</th><th>Exact value</th></tr>
-    <tr><td>Repository commit</td><td><code>544ddd3</code></td></tr>
+    <tr><td>Repository commit</td><td><code>51c629a</code></td></tr>
     <tr><td>Full mixed image</td><td>214,878,912 bytes; SHA-256 <code>8f34d629c5ec4b8a3af4c9de03252fd60ab08781538768c3a5171f6a74b82343</code></td></tr>
-    <tr><td>A113X transcribe binary</td><td>75,632 bytes; SHA-256 <code>7c4ff1b316a6f4887d97edf89d6d120267bba002c571ac1a6ab66fdddc09932f</code></td></tr>
+    <tr><td>A113X transcribe binary</td><td>75,632 bytes; SHA-256 <code>1abaa6dc63a2b64b1f50fba30f91ebc25fded92db83929d56af9c8ac203e1277</code></td></tr>
     <tr><td>Target</td><td>Amlogic A113X, 4x Cortex-A53, maximum observed 1.416 GHz, 2,059,239,424 bytes RAM</td></tr>
     <tr><td>Quantization</td><td>Encoder Transformer matrices Q4; decoder matrices and tied embedding/output Q8; other tensors F32</td></tr>
   </table>
@@ -179,6 +181,7 @@
 
   <h2>Raw files</h2>
   <p class="raw">
+    <a href="../../../../../../output/pdf/whisper-small-en-a113x-jfk-11s-review.pdf">PDF review</a>
     <a href="result.json">result.json</a>
     <a href="compact-result.json">compact-result.json</a>
     <a href="stdout.txt">stdout.txt</a>
@@ -197,6 +200,17 @@
     <a href="compact-canonical.time.txt">compact canonical resources</a>
     <a href="compact-canonical.memory-before.txt">compact memory before</a>
     <a href="compact-canonical.memory-after.txt">compact memory after</a>
+    <a href="row-reuse-result.json">E9 result</a>
+    <a href="row-reuse-run-1.stdout.txt">E9 run 1 stdout</a>
+    <a href="row-reuse-run-1.time.txt">E9 run 1 resources</a>
+    <a href="row-reuse-run-2.stdout.txt">E9 run 2 stdout</a>
+    <a href="row-reuse-run-2.time.txt">E9 run 2 resources</a>
+    <a href="row-reuse-run-3.stdout.txt">E9 run 3 stdout</a>
+    <a href="row-reuse-run-3.time.txt">E9 run 3 resources</a>
+    <a href="row-reuse-canonical.stdout.txt">E9 canonical stdout</a>
+    <a href="row-reuse-canonical.time.txt">E9 canonical resources</a>
+    <a href="row-reuse-canonical.memory-before.txt">E9 memory before</a>
+    <a href="row-reuse-canonical.memory-after.txt">E9 memory after</a>
   </p>
 </main></body>
 </html>
