@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3.5-0.8B free-generation review — Amlogic A113X</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211b;
+      --muted: #5d685f;
+      --line: #d8ded9;
+      --paper: #f4f6f3;
+      --panel: #fff;
+      --accent: #176b47;
+      --accent-bg: #e8f5ee;
+      --code: #142019;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    main { width: min(1120px, calc(100% - 32px)); margin: auto; padding: 32px 0 64px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 900px; margin-bottom: 8px; font-size: clamp(28px, 5vw, 48px); line-height: 1.06; letter-spacing: -.045em; }
+    h2 { margin: 0 0 14px; font-size: 21px; }
+    h3 { margin: 0 0 8px; font-size: 14px; }
+    section { margin-top: 28px; }
+    .lede { max-width: 900px; color: var(--muted); font-size: 16px; }
+    .panel { padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .verdict { border-left: 7px solid var(--accent); background: var(--accent-bg); }
+    .verdict strong { display: block; margin-bottom: 6px; font-size: 19px; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
+    .metric { min-height: 116px; padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
+    .metric span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+    .metric b { display: block; margin-top: 9px; font-size: 23px; line-height: 1.1; }
+    .metric small { display: block; margin-top: 7px; color: var(--muted); }
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      border-radius: 6px;
+      background: var(--code);
+      color: #e9f2eb;
+      font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+    .output { min-height: 178px; font-size: 15px; }
+    .note { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #e8ece8; color: #344039; white-space: nowrap; }
+    tbody tr:last-child td { border-bottom: 0; }
+    td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    td.piece { font-weight: 700; white-space: pre-wrap; }
+    details { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    summary { padding: 14px 18px; cursor: pointer; font-weight: 700; }
+    details > div { padding: 0 18px 18px; }
+    code { font-family: inherit; }
+    footer { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    @media (max-width: 850px) {
+      .cols { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 520px) {
+      main { width: calc(100% - 20px); padding-top: 20px; }
+      .metrics { grid-template-columns: 1fr; }
+    }
+    @media print {
+      body { background: #fff; }
+      main { width: 100%; padding: 0; }
+      .panel, .metric, .table-wrap, details { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Qwen3.5-0.8B free-generation review</h1>
+    <p class="lede">Human-readable input, generated output, and raw timing from the optimized C runtime on an Amlogic A113X. Measurement date: 2026-08-12.</p>
+  </header>
+
+  <section class="panel verdict">
+    <strong>Observed result: correct free-text generation at 2.600469 steady decode tokens/s.</strong>
+    This is greedy autoregressive generation. Every generated token scans the complete 248,320-row tied output head. It is not answer-set scoring and it is not a two-label classifier.
+  </section>
+
+  <section aria-labelledby="io-title">
+    <h2 id="io-title">Exact input and output</h2>
+    <div class="cols">
+      <div class="panel">
+        <h3>Exact input passed to the runtime</h3>
+        <pre>&lt;|im_start|&gt;system
+You are a concise assistant.&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+Name three primary colors.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+</pre>
+      </div>
+      <div class="panel">
+        <h3>Exact human-readable model output</h3>
+        <pre class="output">&lt;think&gt;
+
+&lt;/think&gt;
+
+The primary colors are **Red**, **Blue**, and **Yellow**.</pre>
+        <p class="note">The runtime then generated <code>&lt;|im_end|&gt;</code> and stopped. The stop marker is not displayed as answer text.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="timing-title">
+    <h2 id="timing-title">Measured timing</h2>
+    <div class="metrics">
+      <div class="metric"><span>Prompt prefill</span><b>6.659716 s</b><small>24 tokens; 3.603757 prompt tokens/s</small></div>
+      <div class="metric"><span>Time to first token</span><b>6.770135 s</b><small>prefill plus 0.110419 s first full-head scan</small></div>
+      <div class="metric"><span>Steady decode</span><b>2.600469 tok/s</b><small>18 tokens in 6.921828 s</small></div>
+      <div class="metric"><span>Generation after prefill</span><b>2.701839 tok/s</b><small>19 tokens in 7.032247 s, first token included</small></div>
+      <div class="metric"><span>Process wall time</span><b>13.77 s</b><small>complete invocation</small></div>
+      <div class="metric"><span>CPU utilization</span><b>386%</b><small>four Cortex-A53 cores</small></div>
+      <div class="metric"><span>Peak RSS</span><b>499,968 KiB</b><small>approximately 488 MiB</small></div>
+      <div class="metric"><span>Swap</span><b>0</b><small>no paging during the run</small></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="pieces-title">
+    <h2 id="pieces-title">Decoded output pieces and raw per-token durations</h2>
+    <p class="note">The first row is the output-head scan after prefill. Every later duration contains one generated-token forward pass plus the next complete output-head scan. Whitespace is shown explicitly where needed.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Human-readable decoded piece</th><th>Raw duration</th><th>Measurement boundary</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td class="piece">&lt;think&gt;</td><td class="num">0.110419 s</td><td>First full-head scan after prefill</td></tr>
+          <tr><td>2</td><td class="piece">\n\n</td><td class="num">0.384094 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>3</td><td class="piece">&lt;/think&gt;</td><td class="num">0.381324 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>4</td><td class="piece">\n\n</td><td class="num">0.383367 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>5</td><td class="piece">The</td><td class="num">0.382819 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>6</td><td class="piece">␠primary</td><td class="num">0.379589 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>7</td><td class="piece">␠colors</td><td class="num">0.386481 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>8</td><td class="piece">␠are</td><td class="num">0.383775 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>9</td><td class="piece">␠**</td><td class="num">0.387935 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>10</td><td class="piece">Red</td><td class="num">0.385697 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>11</td><td class="piece">**,</td><td class="num">0.382232 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>12</td><td class="piece">␠**</td><td class="num">0.383901 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>13</td><td class="piece">Blue</td><td class="num">0.384302 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>14</td><td class="piece">**,</td><td class="num">0.382768 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>15</td><td class="piece">␠and</td><td class="num">0.386204 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>16</td><td class="piece">␠**</td><td class="num">0.386165 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>17</td><td class="piece">Yellow</td><td class="num">0.386109 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>18</td><td class="piece">**.</td><td class="num">0.387623 s</td><td>Forward + full-head scan</td></tr>
+          <tr><td>19</td><td class="piece">&lt;|im_end|&gt;</td><td class="num">0.387442 s</td><td>Forward + full-head scan; stop marker</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="run-title">
+    <h2 id="run-title">Execution record</h2>
+    <div class="cols">
+      <div class="panel">
+        <h3>Runtime command</h3>
+        <pre>OMP_NUM_THREADS=4 ./qwen35-task-a113x \
+  qwen35-v2.qtask \
+  --prompt "$PROMPT" \
+  --generate 24</pre>
+      </div>
+      <div class="panel">
+        <h3>Machine and artifact</h3>
+        <pre>Board:       ThirdReality TRHub-V3
+SoC:         Amlogic A113X
+CPU:         4x Cortex-A53, max 1.416 GHz
+RAM:         2,059,239,424 bytes
+Image:       492,962,304 bytes
+Quantization: Q4 matrices; Q8 DeltaNet projections
+Sampling:    greedy
+Stop reason: EOS</pre>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="verification-title">
+    <h2 id="verification-title">Output verification</h2>
+    <div class="panel">
+      The A113X target and the local generic C runtime generated the same 19 output tokens in the same order, including the final EOS marker: <strong>19/19 agreement</strong>. This checks target-path consistency; it is not a broad language-quality evaluation.
+    </div>
+  </section>
+
+  <section>
+    <details>
+      <summary>Audit data: token IDs and binary hashes</summary>
+      <div>
+        <h3>Generated token IDs</h3>
+        <pre>248068, 271, 248069, 271, 760, 5839, 7736, 513, 2972,
+5844, 93868, 2972, 10025, 93868, 321, 2972, 46110,
+159034, 248046</pre>
+        <h3 style="margin-top:16px">Artifact hashes</h3>
+        <pre>runtime sha256:
+c3a12f6b702a1bac7b91884f4e4ada189d53c91ef1ad551153dfb9a2a9fefe5a
+
+model image sha256:
+00bb5a62214f1db44722731f895eeb9d9d28a27b0201bdd9287485671e5fd474</pre>
+      </div>
+    </details>
+  </section>
+
+  <footer>
+    Source record: <code>models/qwen3.5-0.8b/targets/a113x/results.json</code>. Benchmark and verification are reported separately. No network service, framework runtime, or GPU was used on the target.
+  </footer>
+</main>
+</body>
+</html>

@@ -111,7 +111,7 @@ The A113X target runs the same image and 12 cases. This is prompt prefill/classi
 
 The two CPU increments compose to 4.42x over the generic scalar runtime. Full machine fields, wall durations, output logits, and build hashes: [`targets/a113x/results.json`](targets/a113x/results.json).
 
-Free generation is also implemented. One measured greedy run scans the full 248,320-row head per generated token: 6.7701 s time to first token and **2.6005 tokens/s steady decode**, with 499,968 KiB peak RSS and zero swap. Input, output text, token IDs, and per-token durations are in the [A113X target record](targets/a113x/README.md#free-generation-decode-benchmark).
+Free generation is also implemented. One measured greedy run scans the full 248,320-row head per generated token: 6.7701 s time to first token and **2.6005 tokens/s steady decode**, with 499,968 KiB peak RSS and zero swap. The exact input, human-readable output, and timing are in the [generation review](targets/a113x/GENERATION_REVIEW.html); machine-readable fields remain in the [A113X target record](targets/a113x/results.json).
 
 ## Verified facts
 

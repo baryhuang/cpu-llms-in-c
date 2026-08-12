@@ -1,6 +1,6 @@
 # Target: Amlogic A113X (ThirdReality LinuxBox)
 
-Status: measured on the ThirdReality TRHub-V3. The generic scalar runtime and two cumulative A113X CPU increments use the same model image, 12 prompts, answer set, and four-thread process. Raw fields and per-case final outputs are in [`results.json`](results.json).
+Status: measured on the ThirdReality TRHub-V3. The generic scalar runtime and two cumulative A113X CPU increments use the same model image, 12 prompts, answer set, and four-thread process. Raw fields and per-case final outputs are in [`results.json`](results.json). The human-readable free-generation input, output, and timing are in [`GENERATION_REVIEW.html`](GENERATION_REVIEW.html).
 
 ## CPU pin
 
@@ -91,7 +91,7 @@ The primary colors are **Red**, **Blue**, and **Yellow**.
 | Peak RSS | 499,968 KiB (~488 MiB) |
 | Swap | 0 |
 
-The complete 19-token ID sequence matches the local generic C runtime 19/19. Full per-token durations and IDs are in [`results.json`](results.json). This is one functional decode measurement, not a latency distribution.
+The complete 19-token sequence matches the local generic C runtime 19/19. Review the exact English input, human-readable output, and per-token decoded pieces in [`GENERATION_REVIEW.html`](GENERATION_REVIEW.html). Machine-readable durations and IDs remain in [`results.json`](results.json). This is one functional decode measurement, not a latency distribution.
 
 ## Verification
 
