@@ -174,7 +174,7 @@ int main(int argc, char **argv)
                         "[fixed30|compact]\n", argv[0]);
         return 2;
     }
-    if (argc == 4) {
+    if (argc >= 4) {
         maximum_tokens = strtoul(argv[3], NULL, 10);
         if (maximum_tokens < 3U || maximum_tokens > 448U) return 2;
     }
