@@ -260,6 +260,13 @@ static int map_image(const char *path, struct mapped_image *image)
 
 /* --- kernels ------------------------------------------------------------ */
 
+/* A target wrapper may define QWEN35_TARGET_KERNELS to a quoted header path.
+ * The header supplies qwen35_q4_group_dot() and qwen35_q8_group_dot() and
+ * defines QWEN35_HAVE_TARGET_GROUP_DOT. The generic build stays scalar. */
+#ifdef QWEN35_TARGET_KERNELS
+#include QWEN35_TARGET_KERNELS
+#endif
+
 static void q4_gemv(const struct mapped_image *image, const struct descriptor *matrix,
                     const float *input, float *output)
 {
@@ -276,6 +283,9 @@ static void q4_gemv(const struct mapped_image *image, const struct descriptor *m
             const float scale = bf16_to_float(record);
             const uint8_t *packed = record + 2;
             const float *values = input + (uint64_t)group * GROUP;
+#ifdef QWEN35_HAVE_TARGET_GROUP_DOT
+            const float group_sum = qwen35_q4_group_dot(packed, values);
+#else
             float group_sum = 0.0f;
             for (uint32_t index = 0; index < GROUP / 2; ++index) {
                 const uint8_t byte = packed[index];
@@ -286,6 +296,7 @@ static void q4_gemv(const struct mapped_image *image, const struct descriptor *m
                 group_sum += values[index * 2] * (float)low;
                 group_sum += values[index * 2 + 1] * (float)high;
             }
+#endif
             sum += group_sum * scale;
             record += Q4_RECORD;
         }
@@ -309,10 +320,14 @@ static void q8_gemv(const struct mapped_image *image, const struct descriptor *m
             const float scale = bf16_to_float(record);
             const int8_t *values8 = (const int8_t *)(record + 2);
             const float *values = input + (uint64_t)group * GROUP;
+#ifdef QWEN35_HAVE_TARGET_GROUP_DOT
+            const float group_sum = qwen35_q8_group_dot(values8, values);
+#else
             float group_sum = 0.0f;
             for (uint32_t index = 0; index < GROUP; ++index) {
                 group_sum += values[index] * (float)values8[index];
             }
+#endif
             sum += group_sum * scale;
             record += Q8_RECORD;
         }
@@ -542,6 +557,9 @@ static void forward_token(const struct model *model, struct state *state,
 
             const float *a_log = f32_data(&model->image, lin->a_log);
             const float *dt_bias = f32_data(&model->image, lin->dt_bias);
+#if defined(_OPENMP) && defined(QWEN35_HAVE_TARGET_DELTANET_HEAD)
+#pragma omp parallel for schedule(static)
+#endif
             for (uint32_t head = 0; head < LV_HEADS; ++head) {
                 const float gate = -expf(a_log[head]) *
                                    log1pf(expf(ws->a[head] + dt_bias[head]));
@@ -551,7 +569,11 @@ static void forward_token(const struct model *model, struct state *state,
                 const float *q_vec = ws->queries + (size_t)head * LK_DIM;
                 const float *v_vec = values + (size_t)head * LV_DIM;
                 float *head_state = state->recurrent[index] + (size_t)head * LK_DIM * LV_DIM;
+                float *core = ws->core + (size_t)head * LV_DIM;
 
+#ifdef QWEN35_HAVE_TARGET_DELTANET_HEAD
+                qwen35_deltanet_head(head_state, k_vec, q_vec, v_vec, core, decay, beta);
+#else
                 for (uint32_t i = 0; i < LK_DIM * LV_DIM; ++i) {
                     head_state[i] *= decay;
                 }
@@ -570,8 +592,9 @@ static void forward_token(const struct model *model, struct state *state,
                     for (uint32_t ki = 0; ki < LK_DIM; ++ki) {
                         total += head_state[(size_t)ki * LV_DIM + vi] * q_vec[ki];
                     }
-                    ws->core[(size_t)head * LV_DIM + vi] = total;
+                    core[vi] = total;
                 }
+#endif
             }
 
             /* Gated RMSNorm per value head (plain weight), then out_proj. */

@@ -1,8 +1,8 @@
 # Target: Amlogic A113X (ThirdReality LinuxBox)
 
-Status: planned. The CPU pin below is provisional until `target_probe` runs on the device; no measurements exist yet.
+Status: measured on the ThirdReality TRHub-V3. The generic scalar runtime and two cumulative A113X CPU increments use the same model image, 12 prompts, answer set, and four-thread process. Raw fields and per-case final outputs are in [`results.json`](results.json).
 
-## Provisional CPU pin
+## CPU pin
 
 | Field | Value |
 |---|---|
@@ -10,44 +10,68 @@ Status: planned. The CPU pin below is provisional until `target_probe` runs on t
 | Chip year | 2017 — OpenLinux MP release for A113D/A113X on 2017-08-31 |
 | Cores | 4x ARM Cortex-A53 (ARMv8-A, AArch64) |
 | SIMD | NEON/ASIMD 128-bit, includes TBL byte table lookup |
-| RAM | 1 GB or 2 GB depending on board variant — to be pinned |
-| Storage | eMMC 8/32 GB |
-| OS | Armbian (Debian bookworm) |
+| RAM | 2,059,239,424 physical bytes (~1.92 GiB) |
+| Storage | 6.9 GiB root eMMC filesystem |
+| OS | Armbian / Debian bookworm, Linux 6.6.120-current-meson64 |
+| Page size | 4,096 bytes |
+| Measured read bandwidth | 1.753 GiB/s one thread; 3.591 GiB/s four threads |
 
 Year evidence: [Amlogic OpenLinux release notes mirror](https://manuals.plus/m/66778c57bce54f4fd8afa6ff632d78c9ded060489bae66094d81b01c8d0b215a.pdf). The year identifies the chip software MP release, not the LinuxBox board revision.
 
-To finalize: cache sizes, measured memory bandwidth, page size, and thermal behavior from an on-device probe. Gates (RSS ceiling, zero swap, latency targets) are set after the first baseline run.
+The board exposes no temperature node through the tested `/sys/class/hwmon` paths. Frequency scaling ranges from 100 MHz to 1,416 MHz under the `ondemand` governor.
 
-## Pre-device verification (done on the dev machine)
+## Incremental benchmark
+
+Benchmark and verification are separate. Every row below is a warm single-process run over the same 488 prompt tokens in 12 cases with `OMP_NUM_THREADS=4`. `Duration` is model classification time summed from the runtime; `Wall` comes from `/usr/bin/time -v`.
+
+| Cumulative implementation | Duration | Wall | Throughput | Increment vs previous | Increment vs baseline | CPU | Peak RSS | Swap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Generic scalar baseline | 592.942 s | 593.10 s | 0.8230 token/s | 1.00x | 1.00x | 340% | 375,764 KiB | 0 |
+| + Cortex-A53 NEON Q4/Q8 GEMV | 200.846 s | 201.04 s | 2.4297 token/s | **2.95x** | **2.95x** | 269% | 375,972 KiB | 0 |
+| + contiguous NEON DeltaNet state kernel and static head partition | 134.241 s | 134.44 s | **3.6353 token/s** | **1.50x** | **4.42x** | 384% | 376,152 KiB | 0 |
+
+The final CPU layer removes 77.36% of baseline classification duration without changing the image or task contract. RSS changes by 388 KiB and all runs use zero swap.
+
+## Verification
+
+Verification time is not included in the benchmark table.
 
 | Check | Result |
 |---|---|
-| Cross-compile, runtime + probe | clean with `-Wall -Wextra -Wpedantic`, static aarch64 binaries (musl toolchain) |
-| Probe under qemu-aarch64 | runs; reports the aarch64 ISA path (`asimd/asimddp/sve` reflect qemu, not the A53) |
-| Runtime under qemu-aarch64 | full inference on the compiled image; logits match the x86 build to ~1e-5, correct decision — emulated timing is meaningless and not recorded |
+| Final A113X decisions vs x86 C runtime | 12/12 equal |
+| Maximum absolute answer-logit delta vs x86 | 1.72e-5 |
+| Decisions vs written smoke labels | 10/12 |
+| Wrong cases | `danger_uncontrolled_pressure`, `danger_robot_entry` — the x86 image makes the same decisions |
 
-Cross-compile recipe (single-file static binaries, no libc dependency on the device):
+This is prompt-defined answer scoring: `safe,danger` is supplied for this run. Neither the target runtime nor the CPU kernels hard-code a binary classifier.
+
+## Build and run
+
+The measured optimized binary was compiled on the target with GCC 12.2:
 
 ```sh
-aarch64-linux-musl-gcc -O3 -std=c11 -static -fopenmp \
-  models/qwen3.5-0.8b/targets/generic/qwen35_task.c -o qwen35-task-aarch64 -lm
-aarch64-linux-musl-gcc -O3 -std=c11 -static tools/target_probe.c \
-  -o target-probe-aarch64 -lpthread
+gcc -O3 -std=c11 -Wall -Wextra -Wpedantic -fopenmp -static \
+  -mcpu=cortex-a53 -mtune=cortex-a53 \
+  models/qwen3.5-0.8b/targets/a113x/qwen35_task.c \
+  -o qwen35-task-a113x -lm
+
+OMP_NUM_THREADS=4 ./qwen35-task-a113x qwen35-v2.qtask \
+  --prompts-file hazard-v1.prompts --answers-text safe,danger
 ```
 
-## CPU-axis optimizations (this target only)
+## CPU-axis status
 
-In order of execution. Estimates are analytical; none is a benchmark result.
+Measured steps are not estimates. Future steps remain unmeasured.
 
-1. **Scalar baseline first.** Cross-compile the model's `targets/generic/` runtime unchanged, run the probe and the artifact on the device, and record the first `results.json` here. Every later step is measured against this. The same baseline run also measures off-the-shelf llama.cpp on the device for the rewrite-versus-stack comparison in the top-level [`README.md`](../../../../README.md).
-2. **NEON vectorized Q4 GEMV.** Import the proven ggml/llama.cpp kernel technique for the ARMv8.0 baseline: vector nibble unpacking (`vand`/`vshr`) and 16-lane multiply-accumulate. Existing off-the-shelf kernels are a source of CPU-axis techniques, not a fixed advantage of another stack; this step absorbs the one that applies to this core. Expected ~3-5x over the scalar baseline.
-3. **NEON TBL lookup kernel.** The T-MAC table-lookup formulation of low-bit GEMV maps onto NEON's TBL instruction (also ARMv8.0): a 16-entry per-input table fits one 128-bit register, eliminating unpacking and multiplication entirely. Measured against step 2 on the device; the faster kernel is kept.
-4. **Multi-token lookup prefill.** Vec-LUT-style vectorization: reuse each precomputed table across the batched prompt tokens so prefill saturates bandwidth instead of repeating per-token lookups.
-5. **Four-thread static partition.** Fixed row partitions per core with deterministic reductions (versus the current 2-thread OpenMP loop); expected up to ~2x, capped by DRAM bandwidth.
-6. **Weight layout for the A53.** Offline reordering of Q4 records for sequential DRAM access in kernel visit order, tile sizes fitted to the small L1/L2, and software prefetch distances tuned on-device.
-7. **Experimental: lower-bit LUT.** The lookup kernel's cost scales linearly down with bit width; a Q3/Q2 variant would cut traffic a further 25-50% if task quality survives — measured, not assumed.
+1. **Done — scalar baseline:** 0.8230 token/s.
+2. **Done — NEON Q4/Q8 GEMV:** signed nibble unpacking and 16-lane float multiply-accumulate; 2.4297 token/s, 2.95x incremental.
+3. **Done — DeltaNet state kernel:** contiguous `state[key][value]` row traversal plus 16 independent heads statically partitioned across four cores; 3.6353 token/s, 1.50x incremental.
+4. **Next — NEON TBL lookup:** compare a table-lookup low-bit GEMV with the current multiply kernel; keep it only after full logit and 12-case gates.
+5. **Next — multi-token prefill:** reuse weights or lookup tables across prompt tokens. DeltaNet recurrence stays ordered, but projections and MLPs can batch.
+6. **Next — A53 weight layout and prefetch:** reorder Q4 records offline for the measured cache and DRAM path.
+7. **Experimental — Q3/Q2:** reduce traffic only if a larger held-out quality set passes.
 
 ## Feasibility notes
 
-- Estimated usable DRAM bandwidth on A53-class parts is 1.5-3 GB/s; at ~290 MB per decode token the analytical ceiling is roughly 5-10 tokens/s, before overheads.
-- The ~420 MB Q4 image plus ~18 MB DeltaNet state and small KV fits the 1 GB board with headroom; the 2 GB board would also fit Qwen3.5-2B (~1.05 GB image) at roughly 2.5-3x lower speed.
+- Measured four-thread read bandwidth is 3.591 GiB/s. The final runtime remains compute-bound: it uses 3.84 cores while staying far below the bandwidth-only ceiling.
+- The 470 MiB mapped image produces only ~367 MiB peak RSS because answer-set scoring does not touch the full embedding/head table. The 2 GiB board keeps zero swap throughout.

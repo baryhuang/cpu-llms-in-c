@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-12",
+  "model": "Qwen3.5-0.8B",
+  "target": "Amlogic A113X",
+  "classification": "prompt-defined smoke benchmark; not a product safety evaluation",
+  "device": {
+    "board": "ThirdReality TRHub-V3",
+    "hostname": "linuxbox-hubv3",
+    "cpu": "4x ARM Cortex-A53",
+    "maximum_frequency_mhz": 1416,
+    "isa": ["AArch64", "ASIMD"],
+    "physical_memory_bytes": 2059239424,
+    "os": "Armbian / Debian Bookworm",
+    "kernel": "6.6.120-current-meson64"
+  },
+  "probe": {
+    "page_size_bytes": 4096,
+    "asimddp": false,
+    "sve": false,
+    "one_thread_read_gib_per_second": 1.753,
+    "four_thread_read_gib_per_second": 3.591
+  },
+  "artifact": {
+    "format": "QW35TSK1 version 2",
+    "image_bytes": 492962304,
+    "image_sha256": "00bb5a62214f1db44722731f895eeb9d9d28a27b0201bdd9287485671e5fd474"
+  },
+  "benchmark": {
+    "scope": "warm single-process on-device measurements; verification excluded",
+    "command_contract": "OMP_NUM_THREADS=4; same 12 NUL-separated prompts; answer set safe,danger",
+    "total_prompt_tokens": 488,
+    "stages": [
+      {
+        "id": "generic_scalar",
+        "change": "generic scalar Q4/Q8 GEMV",
+        "binary_sha256": "8f7145fa4e2e0e655b2845254bcd74dfa3542f806ed594c4338fed470cef8b31",
+        "binary_bytes": 959024,
+        "classification_duration_seconds": 592.941842,
+        "wall_duration_seconds": 593.10,
+        "aggregate_tokens_per_second": 0.823015,
+        "increment_over_previous": 1.0,
+        "increment_over_baseline": 1.0,
+        "cpu_percent": 340,
+        "maximum_resident_kib": 375764,
+        "swaps": 0
+      },
+      {
+        "id": "a113x_neon_gemv",
+        "change": "Cortex-A53 NEON Q4/Q8 GEMV",
+        "binary_sha256": "1fe855f81939e45705584c1c4be3ebe5182d90a09d9ab84f91ef84b59df66806",
+        "binary_bytes": 948272,
+        "classification_duration_seconds": 200.845637,
+        "wall_duration_seconds": 201.04,
+        "aggregate_tokens_per_second": 2.429727,
+        "increment_over_previous": 2.952227,
+        "increment_over_baseline": 2.952227,
+        "cpu_percent": 269,
+        "maximum_resident_kib": 375972,
+        "swaps": 0
+      },
+      {
+        "id": "a113x_neon_gemv_deltanet",
+        "change": "NEON GEMV plus contiguous DeltaNet state kernel and static four-thread head partition",
+        "binary_sha256": "46ea5c523745b943fe37e0d21083efbfd036911bfbcbf873b720476969e2eb72",
+        "binary_bytes": 948296,
+        "classification_duration_seconds": 134.240731,
+        "wall_duration_seconds": 134.44,
+        "aggregate_tokens_per_second": 3.635260,
+        "increment_over_previous": 1.496160,
+        "increment_over_baseline": 4.417004,
+        "cpu_percent": 384,
+        "maximum_resident_kib": 376152,
+        "swaps": 0
+      }
+    ]
+  },
+  "verification": {
+    "scope": "output checks; excluded from benchmark duration",
+    "written_label_accuracy": "10/12",
+    "x86_decision_agreement": "12/12",
+    "maximum_x86_logit_absolute_delta": 0.0000172,
+    "misclassified_case_ids": [
+      "danger_uncontrolled_pressure",
+      "danger_robot_entry"
+    ],
+    "final_stage_cases": [
+      {"id":"safe_power_isolated","expected":"safe","tokens":42,"safe_logit":20.175499,"danger_logit":19.1602116,"chosen":"safe","duration_seconds":11.466843,"tokens_per_second":3.662734},
+      {"id":"safe_empty_zone","expected":"safe","tokens":39,"safe_logit":20.3376122,"danger_logit":19.229084,"chosen":"safe","duration_seconds":10.611230,"tokens_per_second":3.675351},
+      {"id":"safe_maintenance_lockout","expected":"safe","tokens":42,"safe_logit":20.1177711,"danger_logit":18.8657341,"chosen":"safe","duration_seconds":11.488809,"tokens_per_second":3.655732},
+      {"id":"safe_robot_idle","expected":"safe","tokens":42,"safe_logit":21.2328396,"danger_logit":18.8303814,"chosen":"safe","duration_seconds":11.473389,"tokens_per_second":3.660645},
+      {"id":"safe_pressure_released","expected":"safe","tokens":43,"safe_logit":19.8119812,"danger_logit":19.0974731,"chosen":"safe","duration_seconds":11.760636,"tokens_per_second":3.656265},
+      {"id":"safe_conveyor_clear","expected":"safe","tokens":42,"safe_logit":20.5371628,"danger_logit":19.0394268,"chosen":"safe","duration_seconds":11.476085,"tokens_per_second":3.659785},
+      {"id":"danger_person_moving_machine","expected":"danger","tokens":38,"safe_logit":19.5615768,"danger_logit":21.1194992,"chosen":"danger","duration_seconds":10.326681,"tokens_per_second":3.679788},
+      {"id":"danger_guard_bypassed","expected":"danger","tokens":45,"safe_logit":19.3677444,"danger_logit":20.8195457,"chosen":"danger","duration_seconds":12.313273,"tokens_per_second":3.654593},
+      {"id":"danger_uncontrolled_pressure","expected":"danger","tokens":40,"safe_logit":20.8098507,"danger_logit":20.6310749,"chosen":"safe","duration_seconds":10.915876,"tokens_per_second":3.664388},
+      {"id":"danger_robot_entry","expected":"danger","tokens":37,"safe_logit":20.8507481,"danger_logit":20.8030357,"chosen":"safe","duration_seconds":11.184807,"tokens_per_second":3.308059},
+      {"id":"danger_exposed_wires","expected":"danger","tokens":40,"safe_logit":19.0405579,"danger_logit":20.2818985,"chosen":"danger","duration_seconds":10.897825,"tokens_per_second":3.670457},
+      {"id":"danger_conveyor_reach","expected":"danger","tokens":38,"safe_logit":19.9634018,"danger_logit":20.4653416,"chosen":"danger","duration_seconds":10.325277,"tokens_per_second":3.680289}
+    ]
+  }
+}

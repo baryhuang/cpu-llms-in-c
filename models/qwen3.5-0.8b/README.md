@@ -1,12 +1,12 @@
 # Qwen3.5-0.8B
 
-Status: planned. Source pins exist; no artifact or target measurement exists yet. This file lists model-axis optimizations that hold on every target. Each target file pins one CPU/SoC and records only the optimizations and measurements for that combination.
+Status: model runtime implemented and verified; the A113X target is measured and CPU-specialized. This file lists model-axis optimizations that hold on every target. Each target file pins one CPU/SoC and records only the optimizations and measurements for that combination.
 
 ## Target matrix
 
 | Target | Chip year | CPU | Accelerator | Current evidence | Record |
 |---|---:|---|---|---|---|
-| Amlogic A113X | 2017 | 4x Cortex-A53 | CPU only for this project | analytical estimate only | [target](targets/a113x/README.md) |
+| Amlogic A113X | 2017 | 4x Cortex-A53 | CPU only for this project | 3.6353 token/s after two CPU increments; 367 MiB RSS; zero swap | [target](targets/a113x/README.md) · [raw results](targets/a113x/results.json) |
 | Rockchip RK3588S | 2022 | 4x Cortex-A76 + 4x Cortex-A55 | 6 TOPS NPU | external RKLLM baseline; no repository run | [target](targets/rk3588s/README.md) |
 | Rockchip RK3576 | 2024 | 4x Cortex-A72 + 4x Cortex-A53 | 6 TOPS RKNN NPU | external RKLLM baseline; no repository run | [target](targets/rk3576/README.md) |
 
@@ -88,9 +88,9 @@ Verification is separate from benchmark timing. Full per-case logits: [`results.
 
 The 0.8B model is marginal zero-shot on this smoke set (the BF16 reference itself misses two cases); quantization moves borderline cases across the line rather than degrading clear ones. Twelve obvious cases are a smoke signal, not an evaluation.
 
-## Benchmark (development machine — informal)
+## Benchmarks
 
-Warm single-process run over all 12 cases, 4 threads, scalar kernels, unpinned x86-64 dev machine. These are not target-CPU numbers; the A113X baseline supersedes them.
+The unpinned x86-64 development run is retained only as implementation evidence:
 
 | Quantity | Value |
 |---|---:|
@@ -100,6 +100,16 @@ Warm single-process run over all 12 cases, 4 threads, scalar kernels, unpinned x
 | Peak RSS | 377,888 KiB (369 MiB) |
 
 Peak RSS sits below the 470 MiB image because untouched embedding rows are never faulted in — a direct effect of per-call answer-set scoring.
+
+The A113X target runs the same image and 12 cases. These rows are cumulative so the CPU-axis increment is visible:
+
+| A113X implementation | Total classification duration | Throughput | Increment vs previous | Peak RSS | Swap |
+|---|---:|---:|---:|---:|---:|
+| Generic scalar | 592.942 s | 0.8230 token/s | 1.00x | 375,764 KiB | 0 |
+| + NEON Q4/Q8 GEMV | 200.846 s | 2.4297 token/s | 2.95x | 375,972 KiB | 0 |
+| + contiguous/parallel DeltaNet state | 134.241 s | **3.6353 token/s** | 1.50x | 376,152 KiB | 0 |
+
+The two CPU increments compose to 4.42x over the generic scalar runtime. Full machine fields, wall durations, output logits, and build hashes: [`targets/a113x/results.json`](targets/a113x/results.json).
 
 ## Verified facts
 
@@ -115,6 +125,7 @@ Peak RSS sits below the 470 MiB image because untouched embedding rows are never
 
 ## Open items
 
-- Formal 12-case evaluation harness writing `results.json` (benchmark/verification separation as in the Gemma record).
-- Cross-compile and measure the A113X baseline; llama.cpp measured alongside.
+- Run a larger held-out application-quality evaluation; the current 12 cases remain smoke evidence.
+- Measure an equivalent llama.cpp build on the same board before making a measured stack-to-stack performance claim.
+- Evaluate TBL lookup and multi-token prefill against the recorded A113X CPU increments.
 - The tokenizer pretokenizer approximates `\p{L}\p{N}` with ASCII classes plus treating all non-ASCII bytes as letters; exact on the parity corpus, but non-ASCII punctuation may split differently — extend the corpus before relying on exotic scripts.

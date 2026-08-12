@@ -14,12 +14,17 @@ GEMMA4_LAYER_FIXTURE := tests/fixtures/gemma4_layer_v1.bin
 QWEN35_GENERIC := models/qwen3.5-0.8b/targets/generic
 QWEN35_LAYER_TEST := $(BUILD_DIR)/qwen35-layer-test
 QWEN35_LAYER_FIXTURE := tests/fixtures/qwen35_layer_v1.bin
+QWEN35_A113X := models/qwen3.5-0.8b/targets/a113x
+QWEN35_TASK := $(BUILD_DIR)/qwen35-task
+QWEN35_A113X_TASK := $(BUILD_DIR)/qwen35-task-a113x
 
-.PHONY: all clean fixture linux-tools test
+.PHONY: all a113x clean fixture linux-tools test
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
 linux-tools: $(TARGET_PROBE)
+
+a113x: $(QWEN35_A113X_TASK)
 
 fixture: $(GEMMA4_LAYER_FIXTURE)
 
@@ -55,11 +60,15 @@ $(QWEN35_LAYER_TEST): tests/qwen35_layer_test.c $(QWEN35_GENERIC)/qwen35_layer.c
 $(QWEN35_LAYER_FIXTURE): compiler/generate_qwen35_layer_fixture.py
 	python3 $< --output $@
 
-QWEN35_TASK := $(BUILD_DIR)/qwen35-task
-
 $(QWEN35_TASK): $(QWEN35_GENERIC)/qwen35_task.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) $< -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
+$(QWEN35_A113X_TASK): $(QWEN35_A113X)/qwen35_task.c $(QWEN35_A113X)/qwen35_a113x_kernels.h $(QWEN35_GENERIC)/qwen35_task.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 $< \
+		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
 clean:
-	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
+	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK) $(QWEN35_LAYER_TEST) \
+		$(QWEN35_TASK) $(QWEN35_A113X_TASK)
