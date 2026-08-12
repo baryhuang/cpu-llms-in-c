@@ -107,6 +107,10 @@ static void linear_q4(const float *input,
                       size_t output_width,
                       float *output)
 {
+#ifdef WHISPER_SMALL_HAVE_Q4_GEMM
+    whisper_small_q4_gemm(weight, input, rows, input_width,
+                          output_width, bias, output);
+#else
     const size_t groups = input_width / Q4_GROUP_SIZE;
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -126,6 +130,7 @@ static void linear_q4(const float *input,
             output[row * output_width + output_column] = sum;
         }
     }
+#endif
 }
 
 static void linear_any(const float *input,
