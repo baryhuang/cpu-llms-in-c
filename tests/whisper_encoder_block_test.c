@@ -142,7 +142,7 @@ int main(int argc, char **argv)
     workspace.query = malloc(state_count * sizeof(float));
     workspace.key = malloc(state_count * sizeof(float));
     workspace.value = malloc(state_count * sizeof(float));
-    workspace.attention_scores = malloc(n_heads * frames * frames * sizeof(float));
+    workspace.attention_scores = malloc(frames * sizeof(float));
     workspace.attention_context = malloc(state_count * sizeof(float));
     workspace.mlp_hidden = malloc(frames * n_mlp * sizeof(float));
     after_attention = malloc(state_count * sizeof(float));

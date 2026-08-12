@@ -158,30 +158,34 @@ class SafetensorsFile:
         return payload
 
     def read_float32(self, name: str) -> list[float]:
-        """Convert a small F32 or BF16 tensor to Python float values."""
+        """Convert a small F32, F16 or BF16 tensor to Python float values."""
 
         info = self.tensors[name]
         payload = self.read_bytes(name)
         if info.dtype == "F32":
             return list(struct.unpack(f"<{info.element_count}f", payload))
+        if info.dtype == "F16":
+            return [value[0] for value in struct.iter_unpack("<e", payload)]
         if info.dtype == "BF16":
             values = []
             for (bits,) in struct.iter_unpack("<H", payload):
                 values.append(struct.unpack("<f", struct.pack("<I", bits << 16))[0])
             return values
-        raise ValueError(f"tensor {name} is {info.dtype}, not F32 or BF16")
+        raise ValueError(f"tensor {name} is {info.dtype}, not F32, F16 or BF16")
 
     def read_float32_range(self, name: str, element_offset: int, element_count: int) -> list[float]:
         info = self.tensors[name]
         payload = self.read_element_bytes(name, element_offset, element_count)
         if info.dtype == "F32":
             return list(struct.unpack(f"<{element_count}f", payload))
+        if info.dtype == "F16":
+            return [value[0] for value in struct.iter_unpack("<e", payload)]
         if info.dtype == "BF16":
             values = []
             for (bits,) in struct.iter_unpack("<H", payload):
                 values.append(struct.unpack("<f", struct.pack("<I", bits << 16))[0])
             return values
-        raise ValueError(f"tensor {name} is {info.dtype}, not F32 or BF16")
+        raise ValueError(f"tensor {name} is {info.dtype}, not F32, F16 or BF16")
 
     def find_unique_suffix(self, suffix: str) -> str:
         matches = [name for name in self.tensors if name.endswith(suffix)]

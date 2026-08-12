@@ -9,6 +9,21 @@
       "bytes": 483615683,
       "sha256": "f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872"
     },
+    "compiler_checkpoint": {
+      "repository": "openai/whisper-small.en",
+      "revision": "e8727524f962ee844a7319d92be39ac1bd25655a",
+      "files": {
+        "model.safetensors": {
+          "bytes": 966992008,
+          "sha256": "6014ac49b506df900f66f4aca6b0801eed7245594ace97bcaf73e0ae5b863066"
+        },
+        "config.json": {
+          "bytes": 1943,
+          "sha256": "3441094addfb2a31ef62ea117e95bd6e437bbad8e93d3697fe420a4a6d3603a5"
+        }
+      },
+      "role": "framework-free compiler input; weights are equivalent to the pinned small.en graph"
+    },
     "architecture": {
       "n_mels": 80,
       "audio_context": 1500,

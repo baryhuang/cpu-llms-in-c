@@ -27,14 +27,17 @@ WHISPER_ENCODER_STEM_TEST := $(BUILD_DIR)/whisper-encoder-stem-test
 WHISPER_ENCODER_STEM_FIXTURE := tests/fixtures/whisper_encoder_stem_v1.bin
 WHISPER_ENCODER_BLOCK_TEST := $(BUILD_DIR)/whisper-encoder-block-test
 WHISPER_ENCODER_BLOCK_FIXTURE := tests/fixtures/whisper_encoder_block_v1.bin
+WHISPER_SMALL_ENCODER_CHECK := $(BUILD_DIR)/whisper-small-encoder-check
 
-.PHONY: all a113x clean fixture linux-tools test
+.PHONY: all a113x clean fixture linux-tools test whisper-small-tools
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
 linux-tools: $(TARGET_PROBE)
 
 a113x: $(QWEN35_A113X_TASK)
+
+whisper-small-tools: $(WHISPER_SMALL_ENCODER_CHECK)
 
 fixture: $(GEMMA4_LAYER_FIXTURE)
 
@@ -122,8 +125,18 @@ $(WHISPER_ENCODER_BLOCK_TEST): tests/whisper_encoder_block_test.c \
 $(WHISPER_ENCODER_BLOCK_FIXTURE): compiler/generate_whisper_encoder_block_fixture.py
 	python3 $< --output $@
 
+$(WHISPER_SMALL_ENCODER_CHECK): tools/whisper_small_encoder_check.c \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_encoder.h \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_check.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) -lm
+
 clean:
 	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK) $(QWEN35_LAYER_TEST) \
 		$(QWEN35_TASK) $(QWEN35_A113X_TASK) $(WHISPER_LOG_MEL_TEST) \
 		$(WHISPER_SMALL_LOG_MEL_TEST) $(WHISPER_ENCODER_STEM_TEST) \
-		$(WHISPER_ENCODER_BLOCK_TEST)
+		$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_SMALL_ENCODER_CHECK)

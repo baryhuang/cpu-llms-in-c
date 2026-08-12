@@ -38,8 +38,8 @@ typedef struct {
  * Portable scalar OpenAI Whisper encoder block.
  *
  * input, after_attention and output are [frames, n_state]. Linear weights
- * use PyTorch [output, input] layout. attention_scores is
- * [n_heads, frames, frames]. All memory is caller-owned.
+ * use PyTorch [output, input] layout. attention_scores is a reusable
+ * [frames] softmax row. All memory is caller-owned.
  */
 int cllm_whisper_encoder_block(
     const float *input,

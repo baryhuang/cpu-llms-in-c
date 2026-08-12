@@ -72,7 +72,7 @@ static void self_attention(size_t frames,
         for (size_t query_frame = 0U; query_frame < frames; ++query_frame) {
             float maximum = -INFINITY;
             double denominator = 0.0;
-            float *score_row = scores + (head * frames + query_frame) * frames;
+            float *score_row = scores;
 
             for (size_t key_frame = 0U; key_frame < frames; ++key_frame) {
                 double dot = 0.0;

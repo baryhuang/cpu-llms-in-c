@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Compile the pinned Whisper small.en encoder into an mmap-ready F32 image.
+
+This is the exact correctness image. It intentionally performs no quantization.
+Derived Q4 and structurally reduced images must be compared against this boundary.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import struct
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+try:
+    from .q4_image import align, sha256_file
+    from .safetensors_file import SafetensorsFile
+except ImportError:
+    from q4_image import align, sha256_file
+    from safetensors_file import SafetensorsFile
+
+
+MAGIC = b"WHSENC01"
+VERSION = 1
+KIND_F32 = 1
+HEADER = struct.Struct("<8s8I4Q")
+DESCRIPTOR = struct.Struct("<96sII4IQQQ")
+MODEL_PREFIX = "model."
+
+
+@dataclass
+class Entry:
+    name: str
+    shape: tuple[int, ...]
+    payload: bytes | None = None
+    source_name: str | None = None
+    offset: int = 0
+    byte_count: int = 0
+
+
+def descriptor_bytes(entry: Entry) -> bytes:
+    encoded = entry.name.encode("utf-8")
+    if len(encoded) >= 96 or len(entry.shape) > 4:
+        raise ValueError(f"tensor cannot be represented: {entry.name} {entry.shape}")
+    shape = list(entry.shape) + [0] * (4 - len(entry.shape))
+    return DESCRIPTOR.pack(
+        encoded, KIND_F32, len(entry.shape), *shape,
+        entry.offset, entry.byte_count, 0,
+    )
+
+
+def sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", required=True, type=Path)
+    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--mel-filters", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--skip-checkpoint-hash", action="store_true")
+    args = parser.parse_args()
+
+    repository = Path(__file__).resolve().parents[1]
+    pins = json.loads((repository / "models/whisper-small.en/pins.json").read_text())
+    source_pin = pins["model"]["compiler_checkpoint"]
+    checkpoint_pin = source_pin["files"]["model.safetensors"]
+    config_pin = source_pin["files"]["config.json"]
+    if args.checkpoint.stat().st_size != checkpoint_pin["bytes"]:
+        raise ValueError("checkpoint byte count does not match the pin")
+    if not args.skip_checkpoint_hash and sha256_file(args.checkpoint) != checkpoint_pin["sha256"]:
+        raise ValueError("checkpoint digest does not match the pin")
+    if args.config.stat().st_size != config_pin["bytes"] or sha256_file(args.config) != config_pin["sha256"]:
+        raise ValueError("config does not match the pin")
+    if sha256_file(args.mel_filters) != pins["model"]["reference_files"]["whisper/assets/mel_filters.npz"]:
+        raise ValueError("mel filter file does not match the pin")
+
+    config = json.loads(args.config.read_text())
+    required = {
+        "d_model": 768,
+        "encoder_attention_heads": 12,
+        "encoder_ffn_dim": 3072,
+        "encoder_layers": 12,
+        "max_source_positions": 1500,
+        "num_mel_bins": 80,
+    }
+    for key, value in required.items():
+        if config.get(key) != value:
+            raise ValueError(f"unexpected config value: {key}={config.get(key)!r}")
+
+    with np.load(args.mel_filters) as archive:
+        mel = np.ascontiguousarray(archive["mel_80"], dtype="<f4")
+    if mel.shape != (80, 201):
+        raise ValueError(f"unexpected mel_80 shape: {mel.shape}")
+
+    started = time.monotonic()
+    entries = [Entry("frontend.mel_80", tuple(mel.shape), payload=mel.tobytes())]
+    with SafetensorsFile(args.checkpoint) as source:
+        for full_name in sorted(source.tensors):
+            if not full_name.startswith("model.encoder."):
+                continue
+            info = source.tensors[full_name]
+            if info.dtype != "F32":
+                raise ValueError(f"exact encoder image requires F32: {full_name} is {info.dtype}")
+            entries.append(
+                Entry(full_name[len(MODEL_PREFIX):], tuple(info.shape),
+                      source_name=full_name, byte_count=info.byte_count)
+            )
+
+        directory_offset = HEADER.size
+        data_offset = align(directory_offset + len(entries) * DESCRIPTOR.size)
+        cursor = data_offset
+        for entry in entries:
+            if entry.payload is not None:
+                entry.byte_count = len(entry.payload)
+            entry.offset = cursor
+            cursor = align(cursor + entry.byte_count)
+        file_bytes = cursor
+
+        temporary = args.output.with_suffix(args.output.suffix + ".tmp")
+        temporary.parent.mkdir(parents=True, exist_ok=True)
+        with temporary.open("w+b") as output:
+            output.truncate(file_bytes)
+            output.write(HEADER.pack(
+                MAGIC, VERSION, len(entries), 12, 80, 768, 12, 3072, 1500,
+                directory_offset, data_offset, file_bytes, 0,
+            ))
+            output.seek(directory_offset)
+            for entry in entries:
+                output.write(descriptor_bytes(entry))
+            for index, entry in enumerate(entries, 1):
+                payload = entry.payload if entry.payload is not None else source.read_bytes(entry.source_name)
+                if len(payload) != entry.byte_count:
+                    raise AssertionError(f"payload length mismatch: {entry.name}")
+                output.seek(entry.offset)
+                output.write(payload)
+                if index % 24 == 0 or index == len(entries):
+                    print(f"copied tensors={index}/{len(entries)} elapsed_seconds={time.monotonic() - started:.3f}", flush=True)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, args.output)
+
+    manifest = {
+        "schema_version": 1,
+        "format": MAGIC.decode(),
+        "precision": "float32 exact correctness baseline",
+        "checkpoint_repository": source_pin["repository"],
+        "checkpoint_revision": source_pin["revision"],
+        "checkpoint_sha256": checkpoint_pin["sha256"],
+        "mel_filters_sha256": sha256_file(args.mel_filters),
+        "image_bytes": args.output.stat().st_size,
+        "image_sha256": sha256_file(args.output),
+        "tensor_count": len(entries),
+        "payload_bytes": sum(entry.byte_count for entry in entries),
+        "padding_and_directory_bytes": args.output.stat().st_size - sum(entry.byte_count for entry in entries),
+        "elapsed_seconds": time.monotonic() - started,
+    }
+    manifest_path = args.manifest or args.output.with_suffix(args.output.suffix + ".json")
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(json.dumps(manifest, indent=2))
+
+
+if __name__ == "__main__":
+    main()

@@ -6,3 +6,5 @@ __pycache__/
 *.safetensors.ranges.json
 *.g4task
 *.g4task.json
+*.whenc
+*.whenc.json
