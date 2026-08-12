@@ -6,6 +6,7 @@
 
 #define WHISPER_SMALL_HAVE_Q4_GROUP_DOT 1
 #define WHISPER_SMALL_HAVE_Q4_GEMM 1
+#define WHISPER_SMALL_HAVE_SELF_ATTENTION 1
 
 static inline float whisper_small_dot_s8_f32_16(int8x16_t weights,
                                                  const float *values)
@@ -106,6 +107,71 @@ static inline void whisper_small_q4_gemm(const unsigned char *weights,
                     whisper_small_dot_f32_128(
                         input + row * input_width + group * 128U, decoded);
             record += 66U;
+        }
+    }
+}
+
+static inline float whisper_small_dot_f32_64(const float *left,
+                                              const float *right)
+{
+    float32x4_t sum0 = vdupq_n_f32(0.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    for (uint32_t index = 0U; index < 64U; index += 8U) {
+        sum0 = vfmaq_f32(sum0, vld1q_f32(left + index), vld1q_f32(right + index));
+        sum1 = vfmaq_f32(sum1, vld1q_f32(left + index + 4U),
+                        vld1q_f32(right + index + 4U));
+    }
+    return vaddvq_f32(vaddq_f32(sum0, sum1));
+}
+
+static inline void whisper_small_self_attention(size_t frames,
+                                                 size_t n_state,
+                                                 size_t n_heads,
+                                                 const float *query,
+                                                 const float *key,
+                                                 const float *value,
+                                                 float *scores,
+                                                 float *context)
+{
+    const size_t head_width = n_state / n_heads;
+    const float scale = 1.0f / sqrtf((float)head_width);
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+    for (size_t head = 0U; head < n_heads; ++head) {
+        for (size_t query_frame = 0U; query_frame < frames; ++query_frame) {
+#ifdef _OPENMP
+            float *score_row = scores + (size_t)omp_get_thread_num() * frames;
+#else
+            float *score_row = scores;
+#endif
+            const size_t head_offset = head * head_width;
+            const float *query_head = query + query_frame * n_state + head_offset;
+            float *context_head = context + query_frame * n_state + head_offset;
+            float maximum = -INFINITY;
+            float denominator = 0.0f;
+
+            for (size_t key_frame = 0U; key_frame < frames; ++key_frame) {
+                score_row[key_frame] = scale * whisper_small_dot_f32_64(
+                    query_head, key + key_frame * n_state + head_offset);
+                if (score_row[key_frame] > maximum) maximum = score_row[key_frame];
+            }
+            for (size_t key_frame = 0U; key_frame < frames; ++key_frame) {
+                score_row[key_frame] = expf(score_row[key_frame] - maximum);
+                denominator += score_row[key_frame];
+            }
+            for (size_t channel = 0U; channel < head_width; channel += 4U)
+                vst1q_f32(context_head + channel, vdupq_n_f32(0.0f));
+            for (size_t key_frame = 0U; key_frame < frames; ++key_frame) {
+                const float32x4_t probability =
+                    vdupq_n_f32(score_row[key_frame] / denominator);
+                const float *value_head = value + key_frame * n_state + head_offset;
+                for (size_t channel = 0U; channel < head_width; channel += 4U) {
+                    vst1q_f32(context_head + channel,
+                              vfmaq_f32(vld1q_f32(context_head + channel),
+                                        vld1q_f32(value_head + channel), probability));
+                }
+            }
         }
     }
 }

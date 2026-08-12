@@ -14,6 +14,7 @@
 
 enum { Q4_GROUP_SIZE = 128, Q4_RECORD_BYTES = 66 };
 
+#ifndef WHISPER_SMALL_HAVE_Q4_GEMM
 static float bf16_to_float(const unsigned char *bytes)
 {
     uint32_t bits = ((uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8U)) << 16U;
@@ -21,6 +22,7 @@ static float bf16_to_float(const unsigned char *bytes)
     memcpy(&value, &bits, sizeof(value));
     return value;
 }
+#endif
 
 #ifndef WHISPER_SMALL_HAVE_Q4_GROUP_DOT
 static float whisper_small_q4_group_dot(const unsigned char *packed, const float *values)
@@ -157,6 +159,10 @@ static void self_attention(size_t frames,
                            float *scores,
                            float *context)
 {
+#ifdef WHISPER_SMALL_HAVE_SELF_ATTENTION
+    whisper_small_self_attention(frames, n_state, n_heads, query, key, value,
+                                 scores, context);
+#else
     const size_t head_width = n_state / n_heads;
     const float qk_scale = 1.0f / sqrtf((float)head_width);
 
@@ -199,6 +205,7 @@ static void self_attention(size_t frames,
             }
         }
     }
+#endif
 }
 
 int cllm_whisper_encoder_block(
