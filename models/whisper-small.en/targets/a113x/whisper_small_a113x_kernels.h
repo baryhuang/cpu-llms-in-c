@@ -87,26 +87,40 @@ static inline void whisper_small_q4_gemm(const unsigned char *weights,
                                          const float *bias,
                                          float *output)
 {
+    enum { OUTPUT_TILE = 8 };
     const size_t groups = input_width / 128U;
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
-    for (size_t output_column = 0U; output_column < output_width; ++output_column) {
-        const unsigned char *record = weights + output_column * groups * 66U;
-        float decoded[128];
-        for (size_t row = 0U; row < rows; ++row)
-            output[row * output_width + output_column] =
-                bias == NULL ? 0.0f : bias[output_column];
+    for (size_t output_block = 0U; output_block < output_width;
+         output_block += OUTPUT_TILE) {
+        const size_t tile = output_width - output_block < OUTPUT_TILE ?
+                            output_width - output_block : OUTPUT_TILE;
+        float decoded[OUTPUT_TILE][128];
+        for (size_t row = 0U; row < rows; ++row) {
+            for (size_t column = 0U; column < tile; ++column) {
+                output[row * output_width + output_block + column] =
+                    bias == NULL ? 0.0f : bias[output_block + column];
+            }
+        }
         for (size_t group = 0U; group < groups; ++group) {
-            uint32_t bits = ((uint32_t)record[0] | ((uint32_t)record[1] << 8U)) << 16U;
-            float scale;
-            memcpy(&scale, &bits, sizeof(scale));
-            whisper_small_decode_q4_group(record + 2U, scale, decoded);
-            for (size_t row = 0U; row < rows; ++row)
-                output[row * output_width + output_column] +=
-                    whisper_small_dot_f32_128(
-                        input + row * input_width + group * 128U, decoded);
-            record += 66U;
+            for (size_t column = 0U; column < tile; ++column) {
+                const unsigned char *record = weights +
+                    ((output_block + column) * groups + group) * 66U;
+                const uint32_t bits = ((uint32_t)record[0] |
+                                       ((uint32_t)record[1] << 8U)) << 16U;
+                float scale;
+                memcpy(&scale, &bits, sizeof(scale));
+                whisper_small_decode_q4_group(record + 2U, scale,
+                                               decoded[column]);
+            }
+            for (size_t row = 0U; row < rows; ++row) {
+                const float *input_group = input + row * input_width + group * 128U;
+                for (size_t column = 0U; column < tile; ++column) {
+                    output[row * output_width + output_block + column] +=
+                        whisper_small_dot_f32_128(input_group, decoded[column]);
+                }
+            }
         }
     }
 }
