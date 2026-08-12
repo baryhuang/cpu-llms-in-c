@@ -1,6 +1,6 @@
 # Whisper small.en
 
-Status: selected A113X real-time research path. The scalar C 80-bin log-Mel front end, two-convolution encoder stem and one portable encoder Transformer block are implemented as correctness boundaries. The 12-layer graph, decoder, tokenizer, packed weights and `small.en` target benchmark are not implemented.
+Status: selected A113X real-time research path. The scalar 80-bin log-Mel front end and complete 12-layer encoder run from compiler-generated F32 and Q4 images. Real-weight F32 boundaries pass; the Q4 encoder and Cortex-A53 kernels are measured on A113X. The decoder and tokenizer are not implemented.
 
 ## Pinned architecture
 
@@ -36,9 +36,10 @@ The target is a derived model optimized jointly with the C runtime. It is not re
 |---|---|---|
 | Log-Mel | centered scalar STFT, pinned `mel_80` filterbank, log clamp and normalization | committed synthetic fixture generated independently in Python |
 | Encoder stem | Conv1D 80→768, exact GELU, stride-2 Conv1D 768→768, exact GELU, position addition | miniature independent fixture checks the graph and layout |
-| Encoder block | pre-LayerNorm, multi-head self-attention, projection/residual, second LayerNorm, exact-GELU FFN/residual | miniature independent fixture checks post-attention and final output |
+| Encoder | stem, position addition, 12 pre-LayerNorm attention/FFN blocks and final LayerNorm | real pinned weights checked at stem, layer 0 and final output against independent NumPy |
+| Image compiler | selective safetensors import; exact F32 image or group-128 Q4 Transformer matrices | image and source SHA-256 pins; weights excluded from Git |
 
-The scalar DFT and convolution loops are correctness code, not target kernels. A113X FFT, Conv1D, quantized matrix and threading work lands only after the respective output boundary exists.
+The A113X Q4 encoder image is 56,763,776 bytes. Its final measured CPU stage uses 125,056 KiB peak RSS and zero process swap, but takes 556.218 seconds for a 30-second encoder window: encoder-only RTF 18.541. The full-attention topology fails the compute gate before decoder work. Exact increments and per-layer durations are in the [A113X target record](targets/a113x/README.md).
 
 ## Build and test
 

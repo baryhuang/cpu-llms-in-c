@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "status": "encoder_only_decoder_and_wer_unavailable",
+  "artifact": {
+    "model": "OpenAI Whisper small.en",
+    "checkpoint_repository": "openai/whisper-small.en",
+    "checkpoint_revision": "e8727524f962ee844a7319d92be39ac1bd25655a",
+    "checkpoint_sha256": "6014ac49b506df900f66f4aca6b0801eed7245594ace97bcaf73e0ae5b863066",
+    "image_format": "WHSENC01 version 2",
+    "image_precision": "signed Q4 group 128 with BF16 scales for 72 Transformer matrices; other tensors F32",
+    "image_bytes": 56763776,
+    "image_sha256": "4ac8031884f1cc4d8eae215507713bf750633c793902f6f1ec095b82d91201d5",
+    "tensor_count": 188,
+    "q4_matrix_count": 72,
+    "q4_matrix_bytes": 43794432
+  },
+  "target": {
+    "soc": "Amlogic A113X",
+    "cpu": "4x Arm Cortex-A53",
+    "maximum_observed_clock_hz": 1416000000,
+    "physical_ram_bytes": 2059239424,
+    "repository_commit_cpu_stage_a2": "85591aa",
+    "repository_commit_cpu_stage_a3": "bed2af2"
+  },
+  "verification": {
+    "fixture_format": "WHREAL01",
+    "fixture_sha256": "73dee6fdf3b5de1b582213620e9fdb924907bb03f1adfa978ce994c8897aec1e",
+    "input": "deterministic synthetic log-Mel; 4 input frames; real pinned weights",
+    "f32_x86": {
+      "stem_max_abs": 4.76837158e-7,
+      "layer_0_max_abs": 5.36441803e-7,
+      "layer_11_final_ln_max_abs": 3.81469727e-6,
+      "verdict": "pass"
+    },
+    "q4_x86": {
+      "stem_rmse": 3.08908489e-8,
+      "layer_0_rmse": 0.0605037104,
+      "layer_11_final_ln_rmse": 0.238280437,
+      "verdict": "finite_measured_not_quality_gate"
+    },
+    "q4_a113x_stage_a3": {
+      "stem_rmse": 3.11536603e-8,
+      "layer_0_rmse": 0.0605037052,
+      "layer_11_final_ln_rmse": 0.238280457,
+      "verdict": "finite_measured_not_quality_gate"
+    }
+  },
+  "benchmarks": {
+    "definition": {
+      "audio_seconds": "input log-Mel frame count multiplied by 0.01 seconds",
+      "timed_path": "log-Mel input through convolution stem, selected encoder blocks and final LayerNorm",
+      "excluded": ["waveform-to-log-Mel", "decoder", "tokenizer", "timestamps", "verification"],
+      "layers": 12,
+      "repetitions": 1
+    },
+    "short_window": [
+      {
+        "stage": "G0",
+        "implementation": "generic scalar Q4",
+        "repository_commit": "85591aa",
+        "input_frames": 100,
+        "output_frames": 50,
+        "audio_seconds": 1.0,
+        "duration_seconds": 32.716950,
+        "wall_seconds": 32.73,
+        "encoder_rtf": 32.716950,
+        "increment_vs_previous": 1.0,
+        "cumulative_vs_g0": 1.0,
+        "cpu_percent": 98,
+        "peak_rss_kib": 54784,
+        "process_swap": 0,
+        "workspace_bytes": 2150600,
+        "checksum": -5352.40555,
+        "layer_seconds": [2.649111, 2.643822, 2.641134, 2.648674, 2.644198, 2.643741, 2.655941, 2.652153, 2.649180, 2.647581, 2.653551, 2.653430]
+      },
+      {
+        "stage": "A1",
+        "implementation": "G0 plus A53 NEON Q4 GEMM with frame reuse, one thread",
+        "repository_commit": "85591aa",
+        "input_frames": 100,
+        "output_frames": 50,
+        "audio_seconds": 1.0,
+        "duration_seconds": 12.479286,
+        "wall_seconds": 12.49,
+        "encoder_rtf": 12.479286,
+        "increment_vs_previous": 2.6217,
+        "cumulative_vs_g0": 2.6217,
+        "cpu_percent": 98,
+        "peak_rss_kib": 54912,
+        "process_swap": 0,
+        "workspace_bytes": 2150600,
+        "checksum": -5352.40810,
+        "layer_seconds": [0.969668, 0.958602, 0.970205, 0.968794, 0.978830, 0.954712, 0.957737, 0.956556, 0.958738, 0.959059, 0.956908, 0.953573]
+      },
+      {
+        "stage": "A2",
+        "implementation": "A1 plus four-thread Conv, GEMM, normalization and scalar-attention schedule",
+        "repository_commit": "85591aa",
+        "input_frames": 100,
+        "output_frames": 50,
+        "audio_seconds": 1.0,
+        "duration_seconds": 3.442861,
+        "wall_seconds": 3.45,
+        "encoder_rtf": 3.442861,
+        "increment_vs_previous": 3.6247,
+        "cumulative_vs_g0": 9.5029,
+        "cpu_percent": 378,
+        "peak_rss_kib": 54656,
+        "process_swap": 0,
+        "workspace_bytes": 2151200,
+        "checksum": -5352.40810,
+        "layer_seconds": [0.266862, 0.257618, 0.258811, 0.257880, 0.258649, 0.259287, 0.273781, 0.263548, 0.298436, 0.259389, 0.271005, 0.258091]
+      },
+      {
+        "stage": "A3",
+        "implementation": "A2 plus A53 NEON full-attention dot and context kernels",
+        "repository_commit": "bed2af2",
+        "input_frames": 100,
+        "output_frames": 50,
+        "audio_seconds": 1.0,
+        "duration_seconds": 3.156888,
+        "wall_seconds": 3.17,
+        "encoder_rtf": 3.156888,
+        "increment_vs_previous": 1.0906,
+        "cumulative_vs_g0": 10.363,
+        "cpu_percent": 379,
+        "peak_rss_kib": 54656,
+        "process_swap": 0,
+        "workspace_bytes": 2151200,
+        "checksum": -5352.40621,
+        "layer_seconds": [0.242803, 0.237548, 0.244358, 0.238104, 0.240574, 0.241370, 0.238168, 0.243596, 0.244353, 0.244555, 0.251547, 0.241581]
+      }
+    ],
+    "full_window": [
+      {
+        "stage": "A2",
+        "repository_commit": "85591aa",
+        "input_frames": 3000,
+        "output_frames": 1500,
+        "audio_seconds": 30.0,
+        "duration_seconds": 1465.221181,
+        "wall_seconds": 1465.28,
+        "encoder_rtf": 48.840706,
+        "increment_vs_previous_full_window": 1.0,
+        "cpu_percent": 386,
+        "peak_rss_kib": 125184,
+        "process_swap": 0,
+        "device_swap_free_before_kib": 1004972,
+        "device_swap_free_after_kib": 1004972,
+        "workspace_bytes": 64536000,
+        "stem_seconds": 13.274241,
+        "final_norm_seconds": 0.021995,
+        "checksum": -31979.6719,
+        "layer_seconds": [120.605425, 120.589466, 120.801377, 120.899549, 121.607570, 120.710617, 121.605553, 120.745410, 120.941359, 120.925876, 121.183849, 121.290530]
+      },
+      {
+        "stage": "A3",
+        "repository_commit": "bed2af2",
+        "input_frames": 3000,
+        "output_frames": 1500,
+        "audio_seconds": 30.0,
+        "duration_seconds": 556.217968,
+        "wall_seconds": 556.28,
+        "encoder_rtf": 18.540599,
+        "increment_vs_previous_full_window": 2.6342,
+        "cpu_percent": 382,
+        "peak_rss_kib": 125056,
+        "process_swap": 0,
+        "device_swap_free_before_kib": 1004972,
+        "device_swap_free_after_kib": 1004972,
+        "workspace_bytes": 64536000,
+        "stem_seconds": 12.810740,
+        "final_norm_seconds": 0.022473,
+        "checksum": -31979.5771,
+        "layer_seconds": [45.421374, 45.386132, 45.505894, 45.448636, 44.670796, 45.870231, 45.161237, 45.001946, 45.446680, 45.365116, 45.096133, 44.991781]
+      }
+    ]
+  }
+}
