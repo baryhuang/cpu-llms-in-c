@@ -17,6 +17,9 @@ QWEN35_LAYER_FIXTURE := tests/fixtures/qwen35_layer_v1.bin
 QWEN35_A113X := models/qwen3.5-0.8b/targets/a113x
 QWEN35_TASK := $(BUILD_DIR)/qwen35-task
 QWEN35_A113X_TASK := $(BUILD_DIR)/qwen35-task-a113x
+WHISPER_GENERIC := models/whisper-large-v3/targets/generic
+WHISPER_LOG_MEL_TEST := $(BUILD_DIR)/whisper-log-mel-test
+WHISPER_LOG_MEL_FIXTURE := tests/fixtures/whisper_log_mel_128_v1.bin
 
 .PHONY: all a113x clean fixture linux-tools test
 
@@ -28,10 +31,12 @@ a113x: $(QWEN35_A113X_TASK)
 
 fixture: $(GEMMA4_LAYER_FIXTURE)
 
-test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35_LAYER_FIXTURE)
+test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35_LAYER_FIXTURE) \
+	$(WHISPER_LOG_MEL_TEST) $(WHISPER_LOG_MEL_FIXTURE)
 	python3 -m unittest discover -s tests -p 'test_*.py'
 	$(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE)
 	$(QWEN35_LAYER_TEST) $(QWEN35_LAYER_FIXTURE)
+	$(WHISPER_LOG_MEL_TEST) $(WHISPER_LOG_MEL_FIXTURE)
 
 $(TARGET_PROBE): tools/target_probe.c
 	mkdir -p $(BUILD_DIR)
@@ -69,6 +74,14 @@ $(QWEN35_A113X_TASK): $(QWEN35_A113X)/qwen35_task.c $(QWEN35_A113X)/qwen35_a113x
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 $< \
 		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
+$(WHISPER_LOG_MEL_TEST): tests/whisper_log_mel_test.c $(WHISPER_GENERIC)/whisper_frontend.c $(WHISPER_GENERIC)/whisper_frontend.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_GENERIC) tests/whisper_log_mel_test.c \
+		$(WHISPER_GENERIC)/whisper_frontend.c -o $@ $(LDFLAGS) -lm
+
+$(WHISPER_LOG_MEL_FIXTURE): compiler/generate_whisper_log_mel_fixture.py
+	python3 $< --output $@
+
 clean:
 	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK) $(QWEN35_LAYER_TEST) \
-		$(QWEN35_TASK) $(QWEN35_A113X_TASK)
+		$(QWEN35_TASK) $(QWEN35_A113X_TASK) $(WHISPER_LOG_MEL_TEST)

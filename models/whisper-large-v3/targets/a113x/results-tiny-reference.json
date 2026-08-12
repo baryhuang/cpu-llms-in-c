@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "record_id": "whisper-tiny-a113x-feasibility-2026-08-12",
+  "role": "same-target ASR feasibility reference; these are not Whisper large-v3 measurements",
+  "target": {
+    "soc": "Amlogic A113X",
+    "cpu": "4x Cortex-A53",
+    "max_observed_hz": 1416000000,
+    "ram_bytes": 2059239424,
+    "governor": "ondemand",
+    "isa_present": ["neon", "asimd", "fma"],
+    "isa_absent": ["dotprod", "i8mm", "sve"]
+  },
+  "runtime": {
+    "repository": "ggml-org/whisper.cpp",
+    "revision": "41fc9dea6a4fe056424be86f61164413903fcff4",
+    "tag": "v1.8.0",
+    "compiler": "GCC/G++ 12.2.0",
+    "binary_bytes": 929160,
+    "binary_sha256": "06479031f655d0018e1b956f486622ba4fc3f8a4d15b72a7e2d84f0802d7e6f4",
+    "backend": "CPU",
+    "compiled_cpu": "cortex-a53+crypto+nodotprod+noi8mm+nosve"
+  },
+  "models": {
+    "tiny.en-q5_1": {
+      "bytes": 32166155,
+      "sha256": "c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b"
+    },
+    "tiny.en-f16": {
+      "bytes": 77704715,
+      "sha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f"
+    }
+  },
+  "audio": {
+    "source": "whisper.cpp samples/jfk.wav, public speech",
+    "sample_rate_hz": 16000,
+    "channels": 1,
+    "source_seconds": 11,
+    "source_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+    "loop_30s_sha256": "712169d8a78022fdda7d946aa478e3bbeea7f7dc75608d7327b4cc2a65a266cb",
+    "loop_300s_sha256": "3373a2567555bcd2f98ff73388866395583136f15e5cf372ac36ccc798799479",
+    "private_data_used": false
+  },
+  "metric_definitions": {
+    "real_time_factor": "wall_seconds / original_audio_seconds; lower is better and values <= 1 keep up with input",
+    "audio_per_wall": "original_audio_seconds / wall_seconds; higher is better",
+    "cpu_percent": "GNU time process CPU percentage; four-core ceiling is approximately 400%"
+  },
+  "runs": [
+    {
+      "id": "q5-beam-jfk-11s-t4",
+      "model": "tiny.en-q5_1",
+      "audio_seconds": 11,
+      "threads": 4,
+      "decoder": {"beam_size": 5, "best_of": 5, "timestamps": false},
+      "wall_seconds": 20.31,
+      "real_time_factor": 1.8464,
+      "audio_per_wall": 0.5416,
+      "cpu_percent": 376,
+      "peak_rss_kib": 132956,
+      "swap_count": 0,
+      "encoder_seconds": 16.87042
+    },
+    {
+      "id": "q5-beam-loop-30s-t4",
+      "model": "tiny.en-q5_1",
+      "audio_seconds": 30,
+      "threads": 4,
+      "decoder": {"beam_size": 5, "best_of": 5, "timestamps": false},
+      "wall_seconds": 24.79,
+      "real_time_factor": 0.8263,
+      "audio_per_wall": 1.2102,
+      "cpu_percent": 372,
+      "peak_rss_kib": 135068,
+      "swap_count": 0,
+      "encoder_seconds": 16.93874
+    },
+    {
+      "id": "q5-beam-loop-300s-t4",
+      "model": "tiny.en-q5_1",
+      "audio_seconds": 300,
+      "threads": 4,
+      "decoder": {"beam_size": 5, "best_of": 5, "timestamps": false},
+      "wall_seconds": 261.75,
+      "real_time_factor": 0.8725,
+      "audio_per_wall": 1.1461,
+      "cpu_percent": 376,
+      "peak_rss_kib": 251472,
+      "swap_count": 0,
+      "encoder_seconds": 169.7382
+    },
+    {
+      "id": "q5-greedy-loop-30s-t4",
+      "model": "tiny.en-q5_1",
+      "audio_seconds": 30,
+      "threads": 4,
+      "decoder": {"beam_size": 1, "best_of": 1, "timestamps": false},
+      "wall_seconds": 19.62,
+      "real_time_factor": 0.654,
+      "audio_per_wall": 1.5291,
+      "cpu_percent": 373,
+      "peak_rss_kib": 105396,
+      "swap_count": 0
+    },
+    {
+      "id": "q5-greedy-loop-300s-t4",
+      "model": "tiny.en-q5_1",
+      "audio_seconds": 300,
+      "threads": 4,
+      "decoder": {"beam_size": 1, "best_of": 1, "timestamps": false},
+      "wall_seconds": 227.10,
+      "real_time_factor": 0.757,
+      "audio_per_wall": 1.321,
+      "cpu_percent": 378,
+      "peak_rss_kib": 223000,
+      "swap_count": 0,
+      "encoder_seconds": 168.49233
+    },
+    {
+      "id": "q5-beam-loop-30s-t3",
+      "model": "tiny.en-q5_1",
+      "audio_seconds": 30,
+      "threads": 3,
+      "decoder": {"beam_size": 5, "best_of": 5, "timestamps": false},
+      "wall_seconds": 33.29,
+      "real_time_factor": 1.1097,
+      "audio_per_wall": 0.9012,
+      "cpu_percent": 287,
+      "peak_rss_kib": 134116,
+      "swap_count": 0
+    },
+    {
+      "id": "f16-greedy-loop-30s-t4",
+      "model": "tiny.en-f16",
+      "audio_seconds": 30,
+      "threads": 4,
+      "decoder": {"beam_size": 1, "best_of": 1, "timestamps": false},
+      "wall_seconds": 20.57,
+      "real_time_factor": 0.6857,
+      "audio_per_wall": 1.4584,
+      "cpu_percent": 373,
+      "peak_rss_kib": 151784,
+      "swap_count": 0,
+      "encoder_seconds": 17.13655
+    }
+  ],
+  "limitations": [
+    "All runs disabled timestamps, so they are compute references and not product-valid transcript configurations.",
+    "The looped public sample does not establish accuracy on elder, far-field, television, overlapping-speaker or care-domain audio.",
+    "No run in this file used Whisper large-v3."
+  ]
+}

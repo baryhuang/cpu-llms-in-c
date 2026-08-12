@@ -14,6 +14,7 @@ This command runs the Python unit tests and the miniature C layer fixture. It do
 | C layer fixture | `fixtures/gemma4_layer_v1.bin` | ten tensor boundaries for one miniature local layer |
 | Official layer-0 fixture | generated, ignored | two real token rows and official layer-0 weights |
 | Complete task graph | generated, ignored | all 35 text layers and two output labels |
+| Whisper large-v3 front end | `fixtures/whisper_log_mel_128_v1.bin` | pinned 128-bin filterbank, centered STFT, log clamp and normalization against the scalar C boundary |
 
 The official layer-0 result is recorded in [`../models/gemma-4-e2b/layer0-validation.json`](../models/gemma-4-e2b/layer0-validation.json). The complete task result and every per-case value are in [`../models/gemma-4-e2b/results.json`](../models/gemma-4-e2b/results.json) and [`../REVIEW.html`](../REVIEW.html).
 

@@ -25,6 +25,8 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 | Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | target runtime measured; answer scoring and greedy free generation implemented | target vs local generic generation IDs 19/19; classification decisions vs x86 12/12; tokenizer parity 20/20 | **3.6353 prompt tokens/s** classification prefill; **2.6005 tokens/s** steady decode; 488 MiB generation RSS; zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [generation review](models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html) · [ARC-Easy 5-case HTML](models/qwen3.5-0.8b/benchmarks/arc-easy-5/REVIEW.html) · [PDF](output/pdf/qwen35-arc-easy-5-review.pdf) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
 | Qwen3.5-0.8B | Rockchip RK3588S: 4x Cortex-A76 + 4x Cortex-A55, NPU | 2022 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3588s/README.md) |
 | Qwen3.5-0.8B | Rockchip RK3576: 4x Cortex-A72 + 4x Cortex-A53, NPU | 2024 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3576/README.md) |
+| Whisper large-v3 | generic CPU | not pinned | model/deployment contract pinned; M1 scalar 128-bin log-Mel C boundary implemented | 768/768 fixture values pass, max abs `1.74e-5`; source and model hashes pinned | no large-v3 transcription measurement | [model](models/whisper-large-v3/README.md) · [generic target](models/whisper-large-v3/targets/generic/README.md) |
+| Whisper large-v3 | Amlogic A113X: 4x Cortex-A53 | 2017 | front-end boundary passes; encoder/decoder target stages planned; full model feasibility is poor | same 768-value C boundary passes; same-board `tiny.en` ASR reference is not large-v3 | tiny Q5_1 greedy: 0.757 RTF on 300 s; large-v3 unmeasured | [model](models/whisper-large-v3/README.md) · [target](models/whisper-large-v3/targets/a113x/README.md) · [raw reference](models/whisper-large-v3/targets/a113x/results-tiny-reference.json) |
 
 Chip year means first public MP release, official launch, or official development-board sale; it is not the board manufacture year. The evidence and exact event are recorded in each target file.
 
@@ -92,6 +94,22 @@ Measured and planned steps are labeled separately. Factors do not multiply clean
 | 6. Lower-bit LUT (experimental) | CPU | Q3/Q2 with linear LUT cost scaling, only if task quality survives | further 1.3-2x |
 
 Model-axis details: [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md). Target details: [A113X](models/qwen3.5-0.8b/targets/a113x/README.md) · [RK3588S](models/qwen3.5-0.8b/targets/rk3588s/README.md) · [RK3576](models/qwen3.5-0.8b/targets/rk3576/README.md).
+
+### Whisper large-v3 transcription path
+
+Transcript remains an open natural-language input to the downstream model. Whisper therefore retains its tokenizer, reachable output vocabulary and ordered timestamp segments. It is not compiled into a fixed classifier.
+
+| Step | Axis | Mechanism | Status / evidence |
+|---|---|---|---|
+| 1. Portable C graph | model | 128-bin Mel front end, 32-layer encoder, cached 32-layer decoder and timestamp grammar | in progress; scalar Mel boundary passes locally and on A113X |
+| 2. Per-layer precision search | model | compile-time search over Q8/Q6/Q5/Q4 and outlier rows instead of one global format | planned; Q5_0's 1.08 GB file is a capacity reference, not a selected artifact |
+| 3. Exact output search | model + target | legal-token masks plus bounded top-k tree; fall back to full 51,866-row scan when bounds do not decide | planned experiment; token equality required |
+| 4. VAD compaction | workload | skip non-speech encoder windows while restoring original timeline offsets | planned; report RTF against original audio |
+| 5. Confidence fallback | workload | greedy by default, beam/temperature only on uncertain windows | planned; WER/CER and hallucination gates required |
+| 6. Cortex-A53 packed NEON | CPU | weight-tiled encoder, fused residual schedules, static four-core partitions and prefetch | planned; no dotprod/i8mm/SVE on A113X |
+| 7. Teacher-guided structural reduction | model | prune/distill encoder and decoder layers using large-v3 as teacher | required research branch for A113X-scale latency; derived artifact gets a new identity |
+
+The same-board `tiny.en` Q5_1 run reaches 0.757 RTF on a 300-second public fixture with four cores. A layer/width work projection puts the unchanged large-v3 encoder near RTF 50 before decoder work. This is an estimate, not a large-v3 benchmark. Full definitions, incremental gates and raw reference fields: [`models/whisper-large-v3/`](models/whisper-large-v3/).
 
 ## Why rewrite instead of using an existing stack
 
