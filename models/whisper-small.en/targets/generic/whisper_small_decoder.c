@@ -7,6 +7,14 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+#ifdef WHISPER_SMALL_TARGET_DECODER_KERNELS
+#include WHISPER_SMALL_TARGET_DECODER_KERNELS
+#endif
+
 enum { WIDTH = 768, HEADS = 12, HEAD_WIDTH = 64, MLP = 3072,
        Q4_GROUP = 128, Q4_RECORD = 66, Q8_RECORD = 130 };
 
@@ -64,6 +72,9 @@ static void q4_dequantize(const unsigned char *records, float *output, size_t co
 
 static float q8_dot(const unsigned char *records, const float *input, size_t columns)
 {
+#ifdef WHISPER_SMALL_HAVE_DECODER_Q8_DOT
+    return whisper_small_decoder_q8_dot(records, input, columns);
+#else
     float sum = 0.0f;
     for (size_t group = 0U; group < columns / Q4_GROUP; ++group) {
         const float scale = bf16_to_float(records);
@@ -73,6 +84,7 @@ static float q8_dot(const unsigned char *records, const float *input, size_t col
         records += Q8_RECORD;
     }
     return sum;
+#endif
 }
 
 static void q8_dequantize(const unsigned char *records, float *output, size_t columns)
@@ -86,26 +98,55 @@ static void q8_dequantize(const unsigned char *records, float *output, size_t co
     }
 }
 
+static float output_embedding_logit(const cllm_whisper_matrix *embedding,
+                                    size_t row,
+                                    const float *hidden)
+{
+    if (embedding->f32 != NULL) {
+        double sum = 0.0;
+        const float *weights = embedding->f32 + row * WIDTH;
+        for (size_t column = 0U; column < WIDTH; ++column)
+            sum += (double)weights[column] * hidden[column];
+        return (float)sum;
+    }
+    if (embedding->q4 != NULL) {
+        const size_t row_bytes = (WIDTH / Q4_GROUP) * Q4_RECORD;
+        return q4_dot(embedding->q4 + row * row_bytes, hidden, WIDTH);
+    }
+    const size_t row_bytes = (WIDTH / Q4_GROUP) * Q8_RECORD;
+    return q8_dot(embedding->q8 + row * row_bytes, hidden, WIDTH);
+}
+
+static float matrix_vector_row(const cllm_whisper_matrix *matrix,
+                               const float *input,
+                               const float *bias,
+                               size_t row)
+{
+    double sum = bias == NULL ? 0.0 : bias[row];
+    if (matrix->q4 != NULL) {
+        const size_t row_bytes = (matrix->columns / Q4_GROUP) * Q4_RECORD;
+        sum += q4_dot(matrix->q4 + row * row_bytes, input, matrix->columns);
+    } else if (matrix->q8 != NULL) {
+        const size_t row_bytes = (matrix->columns / Q4_GROUP) * Q8_RECORD;
+        sum += q8_dot(matrix->q8 + row * row_bytes, input, matrix->columns);
+    } else {
+        const float *weights = matrix->f32 + row * matrix->columns;
+        for (size_t column = 0U; column < matrix->columns; ++column)
+            sum += (double)weights[column] * input[column];
+    }
+    return (float)sum;
+}
+
 static void matrix_vector(const cllm_whisper_matrix *matrix,
                           const float *input,
                           const float *bias,
                           float *output)
 {
-    for (size_t row = 0U; row < matrix->rows; ++row) {
-        double sum = bias == NULL ? 0.0 : bias[row];
-        if (matrix->q4 != NULL) {
-            const size_t row_bytes = (matrix->columns / Q4_GROUP) * Q4_RECORD;
-            sum += q4_dot(matrix->q4 + row * row_bytes, input, matrix->columns);
-        } else if (matrix->q8 != NULL) {
-            const size_t row_bytes = (matrix->columns / Q4_GROUP) * Q8_RECORD;
-            sum += q8_dot(matrix->q8 + row * row_bytes, input, matrix->columns);
-        } else {
-            const float *weights = matrix->f32 + row * matrix->columns;
-            for (size_t column = 0U; column < matrix->columns; ++column)
-                sum += (double)weights[column] * input[column];
-        }
-        output[row] = (float)sum;
-    }
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (size_t row = 0U; row < matrix->rows; ++row)
+        output[row] = matrix_vector_row(matrix, input, bias, row);
 }
 
 static void matrix_rows(const cllm_whisper_matrix *matrix,
@@ -114,9 +155,13 @@ static void matrix_rows(const cllm_whisper_matrix *matrix,
                         const float *bias,
                         float *output)
 {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (size_t row = 0U; row < rows; ++row)
-        matrix_vector(matrix, input + row * matrix->columns, bias,
-                      output + row * matrix->rows);
+        for (size_t output_row = 0U; output_row < matrix->rows; ++output_row)
+            output[row * matrix->rows + output_row] = matrix_vector_row(
+                matrix, input + row * matrix->columns, bias, output_row);
 }
 
 static void layer_norm(const float *input, const float *weight,
@@ -143,6 +188,9 @@ static void attention(const float *query,
                       float *output)
 {
     memset(output, 0, WIDTH * sizeof(float));
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (size_t head = 0U; head < HEADS; ++head) {
         const size_t offset = head * HEAD_WIDTH;
         float maximum = -INFINITY;
@@ -315,39 +363,40 @@ static int decoder_step_internal(const cllm_whisper_decoder_weights *weights,
     started = monotonic_seconds();
     *next_token = 0U;
     *next_logit = -INFINITY;
-    if (weights->token_embedding.f32 != NULL) {
+#ifdef _OPENMP
+#pragma omp parallel
+    {
+        uint32_t local_token = 0U;
+        float local_logit = -INFINITY;
+#pragma omp for nowait schedule(static)
         for (size_t row = 0U; row < CLLM_WHISPER_SMALL_VOCABULARY; ++row) {
             if (suppressed_tokens != NULL && suppressed_tokens[row]) continue;
-            double logit = 0.0;
-            const float *embedding = weights->token_embedding.f32 + row * WIDTH;
-            for (size_t column = 0U; column < WIDTH; ++column)
-                logit += (double)embedding[column] * norm[column];
-            if ((float)logit > *next_logit) {
-                *next_logit = (float)logit;
-                *next_token = (uint32_t)row;
+            const float logit = output_embedding_logit(
+                &weights->token_embedding, row, norm);
+            if (logit > local_logit ||
+                (logit == local_logit && row < local_token)) {
+                local_logit = logit;
+                local_token = (uint32_t)row;
             }
         }
-    } else if (weights->token_embedding.q4 != NULL) {
-        const size_t row_bytes = (WIDTH / Q4_GROUP) * Q4_RECORD;
-        for (size_t row = 0U; row < CLLM_WHISPER_SMALL_VOCABULARY; ++row) {
-            if (suppressed_tokens != NULL && suppressed_tokens[row]) continue;
-            const float logit = q4_dot(weights->token_embedding.q4 + row * row_bytes, norm, WIDTH);
-            if (logit > *next_logit) {
-                *next_logit = logit;
-                *next_token = (uint32_t)row;
-            }
-        }
-    } else {
-        const size_t row_bytes = (WIDTH / Q4_GROUP) * Q8_RECORD;
-        for (size_t row = 0U; row < CLLM_WHISPER_SMALL_VOCABULARY; ++row) {
-            if (suppressed_tokens != NULL && suppressed_tokens[row]) continue;
-            const float logit = q8_dot(weights->token_embedding.q8 + row * row_bytes, norm, WIDTH);
-            if (logit > *next_logit) {
-                *next_logit = logit;
-                *next_token = (uint32_t)row;
-            }
+#pragma omp critical
+        if (local_logit > *next_logit ||
+            (local_logit == *next_logit && local_token < *next_token)) {
+            *next_logit = local_logit;
+            *next_token = local_token;
         }
     }
+#else
+    for (size_t row = 0U; row < CLLM_WHISPER_SMALL_VOCABULARY; ++row) {
+        if (suppressed_tokens != NULL && suppressed_tokens[row]) continue;
+        const float logit = output_embedding_logit(
+            &weights->token_embedding, row, norm);
+        if (logit > *next_logit) {
+            *next_logit = logit;
+            *next_token = (uint32_t)row;
+        }
+    }
+#endif
     metrics->output_head_seconds = monotonic_seconds() - started;
     state->token_count += 1U;
     return 0;
