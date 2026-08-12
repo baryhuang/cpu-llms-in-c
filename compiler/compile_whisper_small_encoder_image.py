@@ -19,16 +19,16 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from .q4_image import align, sha256_file
+    from .q4_image import align, q4_byte_count, quantize_q4_grouped, sha256_file
     from .safetensors_file import SafetensorsFile
 except ImportError:
-    from q4_image import align, sha256_file
+    from q4_image import align, q4_byte_count, quantize_q4_grouped, sha256_file
     from safetensors_file import SafetensorsFile
 
 
 MAGIC = b"WHSENC01"
-VERSION = 1
 KIND_F32 = 1
+KIND_Q4_GROUPED = 4
 HEADER = struct.Struct("<8s8I4Q")
 DESCRIPTOR = struct.Struct("<96sII4IQQQ")
 MODEL_PREFIX = "model."
@@ -38,6 +38,7 @@ MODEL_PREFIX = "model."
 class Entry:
     name: str
     shape: tuple[int, ...]
+    kind: int = KIND_F32
     payload: bytes | None = None
     source_name: str | None = None
     offset: int = 0
@@ -50,13 +51,19 @@ def descriptor_bytes(entry: Entry) -> bytes:
         raise ValueError(f"tensor cannot be represented: {entry.name} {entry.shape}")
     shape = list(entry.shape) + [0] * (4 - len(entry.shape))
     return DESCRIPTOR.pack(
-        encoded, KIND_F32, len(entry.shape), *shape,
+        encoded, entry.kind, len(entry.shape), *shape,
         entry.offset, entry.byte_count, 0,
     )
 
 
 def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def is_quantized_matrix(name: str, shape: tuple[int, ...], precision: str) -> bool:
+    return (precision == "q4" and len(shape) == 2 and
+            name.startswith("model.encoder.layers.") and name.endswith(".weight") and
+            shape[1] % 128 == 0)
 
 
 def main() -> None:
@@ -66,6 +73,7 @@ def main() -> None:
     parser.add_argument("--mel-filters", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--precision", choices=("f32", "q4"), default="f32")
     parser.add_argument("--skip-checkpoint-hash", action="store_true")
     args = parser.parse_args()
 
@@ -110,10 +118,11 @@ def main() -> None:
             info = source.tensors[full_name]
             if info.dtype != "F32":
                 raise ValueError(f"exact encoder image requires F32: {full_name} is {info.dtype}")
-            entries.append(
-                Entry(full_name[len(MODEL_PREFIX):], tuple(info.shape),
-                      source_name=full_name, byte_count=info.byte_count)
-            )
+            shape = tuple(info.shape)
+            kind = KIND_Q4_GROUPED if is_quantized_matrix(full_name, shape, args.precision) else KIND_F32
+            byte_count = q4_byte_count(shape) if kind == KIND_Q4_GROUPED else info.byte_count
+            entries.append(Entry(full_name[len(MODEL_PREFIX):], shape, kind=kind,
+                                 source_name=full_name, byte_count=byte_count))
 
         directory_offset = HEADER.size
         data_offset = align(directory_offset + len(entries) * DESCRIPTOR.size)
@@ -130,14 +139,22 @@ def main() -> None:
         with temporary.open("w+b") as output:
             output.truncate(file_bytes)
             output.write(HEADER.pack(
-                MAGIC, VERSION, len(entries), 12, 80, 768, 12, 3072, 1500,
+                MAGIC, 2 if args.precision == "q4" else 1,
+                len(entries), 12, 80, 768, 12, 3072, 1500,
                 directory_offset, data_offset, file_bytes, 0,
             ))
             output.seek(directory_offset)
             for entry in entries:
                 output.write(descriptor_bytes(entry))
             for index, entry in enumerate(entries, 1):
-                payload = entry.payload if entry.payload is not None else source.read_bytes(entry.source_name)
+                if entry.payload is not None:
+                    payload = entry.payload
+                elif entry.kind == KIND_Q4_GROUPED:
+                    raw = source.read_bytes(entry.source_name)
+                    array = np.frombuffer(raw, dtype="<f4").reshape(entry.shape)
+                    payload = quantize_q4_grouped(array)
+                else:
+                    payload = source.read_bytes(entry.source_name)
                 if len(payload) != entry.byte_count:
                     raise AssertionError(f"payload length mismatch: {entry.name}")
                 output.seek(entry.offset)
@@ -151,7 +168,8 @@ def main() -> None:
     manifest = {
         "schema_version": 1,
         "format": MAGIC.decode(),
-        "precision": "float32 exact correctness baseline",
+        "precision": ("float32 exact correctness baseline" if args.precision == "f32" else
+                      "signed Q4 group 128 with BF16 scale for encoder Transformer matrices; other tensors F32"),
         "checkpoint_repository": source_pin["repository"],
         "checkpoint_revision": source_pin["revision"],
         "checkpoint_sha256": checkpoint_pin["sha256"],
@@ -159,6 +177,8 @@ def main() -> None:
         "image_bytes": args.output.stat().st_size,
         "image_sha256": sha256_file(args.output),
         "tensor_count": len(entries),
+        "q4_matrix_count": sum(entry.kind == KIND_Q4_GROUPED for entry in entries),
+        "q4_matrix_bytes": sum(entry.byte_count for entry in entries if entry.kind == KIND_Q4_GROUPED),
         "payload_bytes": sum(entry.byte_count for entry in entries),
         "padding_and_directory_bytes": args.output.stat().st_size - sum(entry.byte_count for entry in entries),
         "elapsed_seconds": time.monotonic() - started,

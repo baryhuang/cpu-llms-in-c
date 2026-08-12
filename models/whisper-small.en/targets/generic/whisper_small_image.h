@@ -18,6 +18,7 @@ typedef struct {
 
 typedef struct {
     cllm_whisper_small_image image;
+    uint32_t image_version;
     const float *mel_filters;
     const float *conv1_weight;
     const float *conv1_bias;

@@ -10,17 +10,23 @@ typedef struct {
     const float *attention_norm_weight;
     const float *attention_norm_bias;
     const float *query_weight;
+    const unsigned char *query_weight_q4;
     const float *query_bias;
     const float *key_weight;
+    const unsigned char *key_weight_q4;
     const float *value_weight;
+    const unsigned char *value_weight_q4;
     const float *value_bias;
     const float *attention_output_weight;
+    const unsigned char *attention_output_weight_q4;
     const float *attention_output_bias;
     const float *mlp_norm_weight;
     const float *mlp_norm_bias;
     const float *mlp_input_weight;
+    const unsigned char *mlp_input_weight_q4;
     const float *mlp_input_bias;
     const float *mlp_output_weight;
+    const unsigned char *mlp_output_weight_q4;
     const float *mlp_output_bias;
 } cllm_whisper_encoder_block_weights;
 

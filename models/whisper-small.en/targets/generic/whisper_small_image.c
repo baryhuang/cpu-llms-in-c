@@ -13,7 +13,11 @@
 #include <time.h>
 #include <unistd.h>
 
-enum { IMAGE_KIND_F32 = 1 };
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+enum { IMAGE_KIND_F32 = 1, IMAGE_KIND_Q4 = 4, Q4_GROUP = 128, Q4_RECORD = 66 };
 
 #pragma pack(push, 1)
 struct image_header {
@@ -48,6 +52,16 @@ static double monotonic_seconds(void)
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0.0;
     return (double)now.tv_sec + (double)now.tv_nsec * 1.0e-9;
+}
+
+static size_t worker_count(void)
+{
+#ifdef _OPENMP
+    const int workers = omp_get_max_threads();
+    return workers > 0 ? (size_t)workers : 1U;
+#else
+    return 1U;
+#endif
 }
 
 static int multiply_size(size_t left, size_t right, size_t *result)
@@ -94,6 +108,37 @@ static const float *bind_f32(const cllm_whisper_small_image *image,
     return (const float *)(const void *)(image->base + entry->offset);
 }
 
+static int bind_matrix(const cllm_whisper_small_image *image,
+                       const char *name,
+                       uint32_t rows,
+                       uint32_t columns,
+                       const float **f32,
+                       const unsigned char **q4)
+{
+    const struct descriptor *entry = find_descriptor(image, name);
+    size_t expected;
+    *f32 = NULL;
+    *q4 = NULL;
+    if (entry == NULL || entry->rank != 2U || entry->shape[0] != rows ||
+        entry->shape[1] != columns || entry->offset % _Alignof(float) != 0U)
+        return -1;
+    if (entry->kind == IMAGE_KIND_F32) {
+        if (multiply_size((size_t)rows * columns, sizeof(float), &expected) != 0 ||
+            entry->byte_count != expected)
+            return -1;
+        *f32 = (const float *)(const void *)(image->base + entry->offset);
+        return 0;
+    }
+    if (entry->kind == IMAGE_KIND_Q4 && columns % Q4_GROUP == 0U) {
+        if (multiply_size(rows, (columns / Q4_GROUP) * Q4_RECORD, &expected) != 0 ||
+            entry->byte_count != expected)
+            return -1;
+        *q4 = image->base + entry->offset;
+        return 0;
+    }
+    return -1;
+}
+
 static int map_image(const char *path, cllm_whisper_small_image *image)
 {
     struct stat status;
@@ -115,7 +160,8 @@ static int map_image(const char *path, cllm_whisper_small_image *image)
     }
     header = (const struct image_header *)(const void *)image->base;
     image->header = header;
-    if (memcmp(header->magic, "WHSENC01", 8U) != 0 || header->version != 1U ||
+    if (memcmp(header->magic, "WHSENC01", 8U) != 0 ||
+        (header->version != 1U && header->version != 2U) ||
         header->layer_count != 12U || header->n_mels != 80U ||
         header->n_state != 768U || header->n_heads != 12U ||
         header->n_mlp != 3072U || header->maximum_frames != 1500U ||
@@ -153,6 +199,11 @@ static int bind_layer(const cllm_whisper_small_image *image,
     weights->field = bind_f32(image, name, rank, d0, d1, d2); \
     if (weights->field == NULL) return -1; \
 } while (0)
+#define BIND_MATRIX(field, suffix, rows, columns) do { \
+    snprintf(name, sizeof(name), "%s%s", prefix, suffix); \
+    if (bind_matrix(image, name, rows, columns, &weights->field, \
+                    &weights->field##_q4) != 0) return -1; \
+} while (0)
     snprintf(prefix, sizeof(prefix), "encoder.layers.%zu.", index);
     memset(weights, 0, sizeof(*weights));
     weights->n_state = 768U;
@@ -160,20 +211,21 @@ static int bind_layer(const cllm_whisper_small_image *image,
     weights->n_mlp = 3072U;
     BIND(attention_norm_weight, "self_attn_layer_norm.weight", 1U, 768U, 0U, 0U);
     BIND(attention_norm_bias, "self_attn_layer_norm.bias", 1U, 768U, 0U, 0U);
-    BIND(query_weight, "self_attn.q_proj.weight", 2U, 768U, 768U, 0U);
+    BIND_MATRIX(query_weight, "self_attn.q_proj.weight", 768U, 768U);
     BIND(query_bias, "self_attn.q_proj.bias", 1U, 768U, 0U, 0U);
-    BIND(key_weight, "self_attn.k_proj.weight", 2U, 768U, 768U, 0U);
-    BIND(value_weight, "self_attn.v_proj.weight", 2U, 768U, 768U, 0U);
+    BIND_MATRIX(key_weight, "self_attn.k_proj.weight", 768U, 768U);
+    BIND_MATRIX(value_weight, "self_attn.v_proj.weight", 768U, 768U);
     BIND(value_bias, "self_attn.v_proj.bias", 1U, 768U, 0U, 0U);
-    BIND(attention_output_weight, "self_attn.out_proj.weight", 2U, 768U, 768U, 0U);
+    BIND_MATRIX(attention_output_weight, "self_attn.out_proj.weight", 768U, 768U);
     BIND(attention_output_bias, "self_attn.out_proj.bias", 1U, 768U, 0U, 0U);
     BIND(mlp_norm_weight, "final_layer_norm.weight", 1U, 768U, 0U, 0U);
     BIND(mlp_norm_bias, "final_layer_norm.bias", 1U, 768U, 0U, 0U);
-    BIND(mlp_input_weight, "fc1.weight", 2U, 3072U, 768U, 0U);
+    BIND_MATRIX(mlp_input_weight, "fc1.weight", 3072U, 768U);
     BIND(mlp_input_bias, "fc1.bias", 1U, 3072U, 0U, 0U);
-    BIND(mlp_output_weight, "fc2.weight", 2U, 768U, 3072U, 0U);
+    BIND_MATRIX(mlp_output_weight, "fc2.weight", 768U, 3072U);
     BIND(mlp_output_bias, "fc2.bias", 1U, 768U, 0U, 0U);
 #undef BIND
+#undef BIND_MATRIX
     return 0;
 }
 
@@ -183,6 +235,7 @@ int cllm_whisper_small_model_open(const char *path, cllm_whisper_small_model *mo
     memset(model, 0, sizeof(*model));
     model->image.fd = -1;
     if (map_image(path, &model->image) != 0) return -1;
+    model->image_version = ((const struct image_header *)model->image.header)->version;
 #define BIND_MODEL(field, name, rank, d0, d1, d2) do { \
     model->field = bind_f32(&model->image, name, rank, d0, d1, d2); \
     if (model->field == NULL) goto fail; \
@@ -261,7 +314,7 @@ int cllm_whisper_small_encode_mel(const cllm_whisper_small_model *model,
     if (state_count > SIZE_MAX / 8U || stem_count > SIZE_MAX - state_count * 8U ||
         frames * 3072U > SIZE_MAX - stem_count - state_count * 8U)
         return -1;
-    total_floats = stem_count + state_count * 8U + frames + frames * 3072U;
+    total_floats = stem_count + state_count * 8U + frames * worker_count() + frames * 3072U;
     allocation = malloc(total_floats * sizeof(float));
     if (allocation == NULL) return -1;
     cursor = allocation;
@@ -273,7 +326,7 @@ int cllm_whisper_small_encode_mel(const cllm_whisper_small_model *model,
     after_attention = cursor; cursor += state_count;
     state_a = cursor; cursor += state_count;
     state_b = cursor; cursor += state_count;
-    workspace.attention_scores = cursor; cursor += frames;
+    workspace.attention_scores = cursor; cursor += frames * worker_count();
     workspace.mlp_hidden = cursor; cursor += frames * 3072U;
     stem_scratch = cursor;
 

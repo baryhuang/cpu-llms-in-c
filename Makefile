@@ -29,6 +29,9 @@ WHISPER_ENCODER_BLOCK_TEST := $(BUILD_DIR)/whisper-encoder-block-test
 WHISPER_ENCODER_BLOCK_FIXTURE := tests/fixtures/whisper_encoder_block_v1.bin
 WHISPER_SMALL_ENCODER_CHECK := $(BUILD_DIR)/whisper-small-encoder-check
 WHISPER_SMALL_ENCODER_BENCH := $(BUILD_DIR)/whisper-small-encoder-bench
+WHISPER_SMALL_A113X := models/whisper-small.en/targets/a113x
+WHISPER_SMALL_A113X_BENCH := $(BUILD_DIR)/whisper-small-encoder-bench-a113x
+WHISPER_SMALL_A113X_CHECK := $(BUILD_DIR)/whisper-small-encoder-check-a113x
 
 .PHONY: all a113x clean fixture linux-tools test whisper-small-tools
 
@@ -36,7 +39,7 @@ all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
 linux-tools: $(TARGET_PROBE)
 
-a113x: $(QWEN35_A113X_TASK)
+a113x: $(QWEN35_A113X_TASK) $(WHISPER_SMALL_A113X_BENCH) $(WHISPER_SMALL_A113X_CHECK)
 
 whisper-small-tools: $(WHISPER_SMALL_ENCODER_CHECK) $(WHISPER_SMALL_ENCODER_BENCH)
 
@@ -146,9 +149,32 @@ $(WHISPER_SMALL_ENCODER_BENCH): tools/whisper_small_encoder_bench.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) -lm
 
+$(WHISPER_SMALL_A113X_BENCH): tools/whisper_small_encoder_bench.c \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
+	$(WHISPER_SMALL_A113X)/whisper_small_encoder.c $(WHISPER_SMALL_A113X)/whisper_small_a113x_kernels.h \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
+		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_bench.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
+		$(WHISPER_SMALL_A113X)/whisper_small_encoder.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
+$(WHISPER_SMALL_A113X_CHECK): tools/whisper_small_encoder_check.c \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
+	$(WHISPER_SMALL_A113X)/whisper_small_encoder.c $(WHISPER_SMALL_A113X)/whisper_small_a113x_kernels.h \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
+		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_check.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
+		$(WHISPER_SMALL_A113X)/whisper_small_encoder.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
 clean:
 	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK) $(QWEN35_LAYER_TEST) \
 		$(QWEN35_TASK) $(QWEN35_A113X_TASK) $(WHISPER_LOG_MEL_TEST) \
 		$(WHISPER_SMALL_LOG_MEL_TEST) $(WHISPER_ENCODER_STEM_TEST) \
 		$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_SMALL_ENCODER_CHECK) \
-		$(WHISPER_SMALL_ENCODER_BENCH)
+		$(WHISPER_SMALL_ENCODER_BENCH) $(WHISPER_SMALL_A113X_BENCH) \
+		$(WHISPER_SMALL_A113X_CHECK)

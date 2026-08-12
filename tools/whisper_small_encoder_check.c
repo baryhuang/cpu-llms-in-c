@@ -41,7 +41,7 @@ static unsigned char *read_file(const char *path, size_t *size)
 }
 
 static int compare(const char *name, const float *actual, const float *expected,
-                   size_t count, double duration, size_t workspace)
+                   size_t count, double duration, size_t workspace, int exact)
 {
     double maximum_absolute = 0.0;
     double root_square = 0.0;
@@ -52,11 +52,11 @@ static int compare(const char *name, const float *actual, const float *expected,
         const double tolerance = 2.0e-4 + 2.0e-4 * fabs((double)expected[index]);
         if (absolute > maximum_absolute) maximum_absolute = absolute;
         root_square += delta * delta;
-        if (!isfinite(actual[index]) || absolute > tolerance) passed = 0;
+        if (!isfinite(actual[index]) || (exact && absolute > tolerance)) passed = 0;
     }
     printf("section=verification boundary=%s count=%zu max_abs=%.9g rmse=%.9g status=%s\n",
            name, count, maximum_absolute, sqrt(root_square / (double)count),
-           passed ? "PASS" : "FAIL");
+           passed ? (exact ? "PASS" : "FINITE_MEASURED") : "FAIL");
     printf("section=benchmark boundary=%s duration_seconds=%.6f workspace_bytes=%zu\n",
            name, duration, workspace);
     return passed;
@@ -126,10 +126,15 @@ int main(int argc, char **argv)
         for (size_t layer = 0U; layer < metrics.executed_layers; ++layer)
             duration += metrics.layer_seconds[layer];
         if (!compare(names[boundary], actual, expected[boundary], state_count,
-                     duration, metrics.workspace_bytes))
+                     duration, metrics.workspace_bytes, model.image_version == 1U))
             passed = 0;
     }
-    printf("VERDICT: %s\n", passed ? "PASS" : "FAIL");
+    if (!passed)
+        printf("VERDICT: FAIL\n");
+    else if (model.image_version == 1U)
+        printf("VERDICT: PASS\n");
+    else
+        printf("VERDICT: FINITE_MEASURED_NOT_QUALITY_GATE\n");
     cllm_whisper_small_model_close(&model);
     free(actual);
     free(fixture);

@@ -3,6 +3,10 @@
 #include <math.h>
 #include <stdint.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #define CLLM_PI 3.14159265358979323846264338327950288
 #define CLLM_WHISPER_CONV_KERNEL 3U
 
@@ -147,6 +151,9 @@ int cllm_whisper_encoder_stem(const float *mel,
         return -1;
     }
 
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (size_t output_channel = 0U; output_channel < n_state; ++output_channel) {
         for (size_t frame = 0U; frame < input_frames; ++frame) {
             double sum = conv1_bias[output_channel];
@@ -165,6 +172,9 @@ int cllm_whisper_encoder_stem(const float *mel,
         }
     }
 
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
     for (size_t output_frame = 0U; output_frame < output_frames; ++output_frame) {
         for (size_t output_channel = 0U; output_channel < n_state; ++output_channel) {
             double sum = conv2_bias[output_channel];

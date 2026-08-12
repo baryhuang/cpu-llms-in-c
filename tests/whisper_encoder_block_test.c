@@ -99,6 +99,7 @@ int main(int argc, char **argv)
     n_heads = read_u32(data + 20U);
     n_mlp = read_u32(data + 24U);
     state_count = frames * n_state;
+    memset(&weights, 0, sizeof(weights));
 
 #define TAKE_FLOATS(name, count) \
     do { \
