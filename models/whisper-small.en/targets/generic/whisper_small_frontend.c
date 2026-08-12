@@ -10,6 +10,45 @@
 #define CLLM_PI 3.14159265358979323846264338327950288
 #define CLLM_WHISPER_CONV_KERNEL 3U
 
+typedef struct {
+    double real;
+    double imaginary;
+} cllm_complex;
+
+static void fft_400_recursive(const cllm_complex *input,
+                              size_t stride,
+                              cllm_complex *output,
+                              size_t count,
+                              const cllm_complex *twiddle)
+{
+    cllm_complex sub[CLLM_WHISPER_N_FFT];
+    size_t radix, inner;
+
+    if (count == 1U) {
+        output[0] = input[0];
+        return;
+    }
+    radix = count % 5U == 0U ? 5U : 2U;
+    inner = count / radix;
+    for (size_t branch = 0U; branch < radix; ++branch)
+        fft_400_recursive(input + branch * stride, stride * radix,
+                          sub + branch * inner, inner, twiddle);
+
+    for (size_t frequency = 0U; frequency < count; ++frequency) {
+        cllm_complex sum = {0.0, 0.0};
+        for (size_t branch = 0U; branch < radix; ++branch) {
+            const size_t index = (branch * frequency *
+                (CLLM_WHISPER_N_FFT / count)) % CLLM_WHISPER_N_FFT;
+            const cllm_complex value = sub[branch * inner + frequency % inner];
+            sum.real += value.real * twiddle[index].real -
+                        value.imaginary * twiddle[index].imaginary;
+            sum.imaginary += value.real * twiddle[index].imaginary +
+                             value.imaginary * twiddle[index].real;
+        }
+        output[frequency] = sum;
+    }
+}
+
 static size_t reflect_index(long index, size_t count)
 {
     const long last = (long)count - 1L;
@@ -52,6 +91,8 @@ int cllm_whisper_small_log_mel(const float *audio,
 {
     const size_t frames = cllm_whisper_small_log_mel_frames(sample_count);
     const size_t required = cllm_whisper_small_log_mel_workspace_floats(sample_count);
+    float window[CLLM_WHISPER_N_FFT];
+    cllm_complex twiddle[CLLM_WHISPER_N_FFT];
     float maximum = -INFINITY;
 
     if (audio == NULL || mel_filters == NULL || output == NULL || workspace == NULL ||
@@ -60,32 +101,42 @@ int cllm_whisper_small_log_mel(const float *audio,
         return -1;
     }
 
+    for (size_t index = 0U; index < CLLM_WHISPER_N_FFT; ++index) {
+        const double angle = -2.0 * CLLM_PI * (double)index /
+                             (double)CLLM_WHISPER_N_FFT;
+        window[index] = 0.5f - 0.5f * cosf((float)-angle);
+        twiddle[index].real = cos(angle);
+        twiddle[index].imaginary = sin(angle);
+    }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (size_t frame = 0U; frame < frames; ++frame) {
         const long frame_start = (long)(frame * CLLM_WHISPER_HOP_LENGTH) -
                                  (long)(CLLM_WHISPER_N_FFT / 2U);
+        cllm_complex fft_input[CLLM_WHISPER_N_FFT];
+        cllm_complex fft_output[CLLM_WHISPER_N_FFT];
 
+        for (size_t index = 0U; index < CLLM_WHISPER_N_FFT; ++index) {
+            const size_t source = reflect_index(frame_start + (long)index,
+                                                sample_count);
+            fft_input[index].real = (double)audio[source] * window[index];
+            fft_input[index].imaginary = 0.0;
+        }
+        fft_400_recursive(fft_input, 1U, fft_output, CLLM_WHISPER_N_FFT, twiddle);
         for (size_t frequency = 0U; frequency < CLLM_WHISPER_N_FREQUENCIES;
              ++frequency) {
-            double real = 0.0;
-            double imaginary = 0.0;
-
-            for (size_t index = 0U; index < CLLM_WHISPER_N_FFT; ++index) {
-                const float window = 0.5f - 0.5f *
-                    cosf((float)(2.0 * CLLM_PI * (double)index /
-                                 (double)CLLM_WHISPER_N_FFT));
-                const size_t source = reflect_index(frame_start + (long)index,
-                                                    sample_count);
-                const float value = audio[source] * window;
-                const double angle = -2.0 * CLLM_PI * (double)frequency *
-                                     (double)index / (double)CLLM_WHISPER_N_FFT;
-                real += (double)value * cos(angle);
-                imaginary += (double)value * sin(angle);
-            }
+            const double real = fft_output[frequency].real;
+            const double imaginary = fft_output[frequency].imaginary;
             workspace[frame * CLLM_WHISPER_N_FREQUENCIES + frequency] =
                 (float)(real * real + imaginary * imaginary);
         }
     }
 
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) reduction(max:maximum)
+#endif
     for (size_t mel = 0U; mel < CLLM_WHISPER_SMALL_N_MELS; ++mel) {
         const float *filter = mel_filters + mel * CLLM_WHISPER_N_FREQUENCIES;
         for (size_t frame = 0U; frame < frames; ++frame) {
@@ -105,6 +156,9 @@ int cllm_whisper_small_log_mel(const float *audio,
         }
     }
 
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (size_t index = 0U; index < CLLM_WHISPER_SMALL_N_MELS * frames; ++index) {
         if (output[index] < maximum - 8.0f) {
             output[index] = maximum - 8.0f;
