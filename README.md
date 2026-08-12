@@ -22,13 +22,27 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 | Model | CPU / SoC target | Chip year | Status | Verification | Measured performance | Record |
 |---|---|---:|---|---|---|---|
 | Gemma 4 E2B | two-vCPU x86-64 dev machine (unpinned) | not pinned | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
-| Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | target runtime measured; answer scoring and greedy free generation implemented | target vs local generic generation IDs 19/19; classification decisions vs x86 12/12; tokenizer parity 20/20 | **3.6353 prompt tokens/s** classification prefill; **2.6005 tokens/s** steady decode; 488 MiB generation RSS; zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [generation review](models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html) · [ARC-Easy 5-case review](models/qwen3.5-0.8b/benchmarks/arc-easy-5/REVIEW.html) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
+| Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | target runtime measured; answer scoring and greedy free generation implemented | target vs local generic generation IDs 19/19; classification decisions vs x86 12/12; tokenizer parity 20/20 | **3.6353 prompt tokens/s** classification prefill; **2.6005 tokens/s** steady decode; 488 MiB generation RSS; zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [generation review](models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html) · [ARC-Easy 5-case HTML](models/qwen3.5-0.8b/benchmarks/arc-easy-5/REVIEW.html) · [PDF](output/pdf/qwen35-arc-easy-5-review.pdf) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
 | Qwen3.5-0.8B | Rockchip RK3588S: 4x Cortex-A76 + 4x Cortex-A55, NPU | 2022 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3588s/README.md) |
 | Qwen3.5-0.8B | Rockchip RK3576: 4x Cortex-A72 + 4x Cortex-A53, NPU | 2024 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3576/README.md) |
 
 Chip year means first public MP release, official launch, or official development-board sale; it is not the board manufacture year. The evidence and exact event are recorded in each target file.
 
 The Gemma artifact predates the prompt-defined output contract and compiles its two labels in — now the restricted special case. The Qwen artifact carries the default contract: runtime tokenizer, full output head, per-call answer sets.
+
+## Evaluation isolation
+
+A result belongs to one exact tuple: model revision x compiled-image hash x runtime-binary hash x CPU/SoC target x benchmark-profile hash. Changing the model or input data starts a new record. Old results remain evidence for the old tuple only.
+
+| Reuse for a new model | Reset for a new model and new data |
+|---|---|
+| source revision and file-hash pinning method | model graph, tokenizer, chat template, and image |
+| exact-input/output review format | prompts, cases, answer keys, and output parser |
+| prefill, TTFT, decode, wall, CPU, RSS, swap, page-fault definitions | quality score and correctness conclusions |
+| per-case JSON plus HTML/PDF review structure | throughput, latency, CPU, and memory measurements |
+| verification separated from timed benchmark sections | target correctness agreement and quantization conclusions |
+
+The ARC-Easy five-case profile is closed evidence for Qwen3.5-0.8B. It is not a default input set for the next model.
 
 ## Memory is the governing factor
 

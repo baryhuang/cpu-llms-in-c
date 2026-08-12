@@ -120,7 +120,7 @@ Five source-order cases from the public ARC-Easy validation split were run as gr
 | Runtime / target | Cases | Exact answers | Prompt prefill | Steady decode | Peak RSS | Review |
 |---|---:|---:|---:|---:|---:|---|
 | Generic C / Apple M3 Pro | 5 | 4/5 | 3.7094 tokens/s | 2.3869 tokens/s | 490.99 MiB | [inputs, outputs, and per-case duration](benchmarks/arc-easy-5/REVIEW.html) |
-| A113X-specialized C / A113X | 5 | 4/5 | 2.9182 tokens/s | 1.8220 tokens/s | 502,016 KiB | [inputs, outputs, duration, CPU, and memory](benchmarks/arc-easy-5/REVIEW.html) |
+| A113X-specialized C / A113X | 5 | 4/5 | 2.9182 tokens/s | 1.8220 tokens/s | 502,016 KiB | [HTML](benchmarks/arc-easy-5/REVIEW.html) · [PDF](../../output/pdf/qwen35-arc-easy-5-review.pdf) |
 
 The profile pins the source revision, source-file hash, selection rule, prompts, answer keys, and scoring rule. Machine-readable measurements are separate: [`results-a113x.json`](benchmarks/arc-easy-5/results-a113x.json) and [`results-macos-m3-pro.json`](benchmarks/arc-easy-5/results-macos-m3-pro.json). The A113X batch used 333.84% wall-weighted CPU, peaked at 502,016 KiB RSS, and used zero swap. All five generated token sequences match the generic C development run.
 
