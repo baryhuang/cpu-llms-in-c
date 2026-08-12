@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "status": "compact_window_cpu_optimized_realtime_gate_failed_quality_suite_open",
+  "model": "OpenAI Whisper small.en",
+  "target": {
+    "soc": "Amlogic A113X",
+    "cpu": "4x Arm Cortex-A53",
+    "maximum_observed_clock_hz": 1416000000,
+    "threads": 4
+  },
+  "source": {
+    "repository_commit": "544ddd3",
+    "transcribe_source_commit": "544ddd3",
+    "q4_kernel_commit": "c8b022d",
+    "transcribe_binary_bytes": 75632,
+    "transcribe_binary_sha256": "7c4ff1b316a6f4887d97edf89d6d120267bba002c571ac1a6ab66fdddc09932f",
+    "transcribe_source_sha256": "215832dd02c3da049f1e354ada07f6f84d81d08bc6e59ab557b882b2fb8f8ae4",
+    "q4_kernel_source_sha256": "5572f4e403eabe8ce7831d88fbcc7d040b9d60f3ba2046377f98c99d25b1163e",
+    "frontend_source_sha256": "e96da0cb6c554400dc38d7048a4336d6f0470ddff78f4f89aa3186a03e70e772"
+  },
+  "input": {
+    "file": "whisper.cpp samples/jfk.wav",
+    "sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+    "format": "mono PCM16 WAV",
+    "sample_rate_hz": 16000,
+    "audio_seconds": 11.0,
+    "window": "compact",
+    "input_frames": 1100,
+    "output_frames": 550,
+    "fixed30_input_frames": 3000,
+    "fixed30_output_frames": 1500
+  },
+  "command": "OMP_NUM_THREADS=4 OMP_DYNAMIC=FALSE /usr/bin/time -v ./build/whisper-small-transcribe-a113x small.en-full-mixed.whenc /root/whisper-bench-v1.8.0/whisper.cpp/samples/jfk.wav 64 compact",
+  "output": {
+    "transcript": " And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+    "normalized_word_edits": 0,
+    "normalized_reference_words": 22,
+    "smoke_case_wer": 0.0,
+    "generated_text_tokens": 25,
+    "eot_reached": true,
+    "relative_wer_increase": null,
+    "relative_wer_gate": "open",
+    "timestamps": "not emitted; no-timestamps decoding was selected"
+  },
+  "benchmark": {
+    "definition": "three complete process invocations; headline is median internal total duration",
+    "repetitions": 3,
+    "total_seconds": [48.808225, 48.214580, 47.984083],
+    "total_seconds_median": 48.214580,
+    "total_seconds_mean": 48.335629,
+    "total_seconds_sample_sd": 0.425197,
+    "total_seconds_cv_percent": 0.879675,
+    "rtf": [4.437111, 4.383144, 4.362189],
+    "rtf_median": 4.383144,
+    "frontend_seconds": [0.081300, 0.080052, 0.080148],
+    "encoder_seconds": [42.223373, 41.625532, 41.345683],
+    "decoder_core_seconds": [6.067983, 6.076246, 6.119253],
+    "output_head_seconds": [0.425421, 0.422475, 0.428544],
+    "overall_text_tokens_per_second": [0.512209, 0.518515, 0.521006],
+    "decoder_text_tokens_per_second": [3.850060, 3.846911, 3.818078],
+    "cpu_percent": [388, 388, 388],
+    "peak_rss_kib": [251232, 251496, 251448],
+    "process_swaps": [0, 0, 0]
+  },
+  "incremental": [
+    {"stage":"E1","implementation":"fixed 30-second window; A3 encoder and D1 decoder","total_seconds":589.055851,"rtf":53.550532,"increment_vs_previous":1.0,"cumulative_vs_e1":1.0},
+    {"stage":"E2","implementation":"E1 plus compact audio window","total_seconds":160.802747,"rtf":14.618432,"increment_vs_previous":3.663220,"cumulative_vs_e1":3.663220},
+    {"stage":"E3","implementation":"E2 plus 4-column Q4 cache block","total_seconds":73.774966,"rtf":6.706815,"increment_vs_previous":2.179638,"cumulative_vs_e1":7.984495},
+    {"stage":"E4","implementation":"E3 plus 8-column Q4 cache block","total_seconds":61.882272,"rtf":5.625661,"increment_vs_previous":1.192183,"cumulative_vs_e1":9.518976},
+    {"stage":"E5","implementation":"E4 plus 16-column Q4 cache block","total_seconds":56.771391,"rtf":5.161036,"increment_vs_previous":1.090026,"cumulative_vs_e1":10.375928},
+    {"stage":"E6","implementation":"E5 plus 32-column Q4 cache block","total_seconds":53.560030,"rtf":4.869094,"increment_vs_previous":1.059958,"cumulative_vs_e1":10.998049},
+    {"stage":"E7","implementation":"E6 plus 64-column Q4 cache block","total_seconds":52.206838,"rtf":4.746076,"increment_vs_previous":1.025920,"cumulative_vs_e1":11.283117},
+    {"stage":"E8","implementation":"E7 plus fixed 4-output NEON dot micro-kernel","total_seconds":48.214580,"duration_statistic":"median of three runs after per-layer instrumentation","rtf":4.383144,"increment_vs_previous":1.082802,"cumulative_vs_e1":12.217380}
+  ],
+  "canonical_resource_run": {
+    "total_seconds": 48.808225,
+    "rtf": 4.437111,
+    "cpu_percent": 388,
+    "user_cpu_seconds": 189.00,
+    "system_cpu_seconds": 0.71,
+    "peak_rss_kib": 251232,
+    "process_swaps": 0,
+    "device_swap_free_before_kib": 1005484,
+    "device_swap_free_after_kib": 1005484,
+    "exit_status": 0
+  },
+  "verification": {
+    "real_weight_fixture": "FINITE_MEASURED_NOT_QUALITY_GATE",
+    "stem_rmse": 3.11536603e-8,
+    "layer_0_rmse": 0.0605037052,
+    "layer_11_final_ln_rmse": 0.238280457,
+    "transcript_identical_across_final_runs": true,
+    "normalized_words_match_reference": true
+  },
+  "rejected_experiments": [
+    {"experiment":"8-output shared-input accumulator","total_seconds":67.524915,"reason":"9.1% slower than its 8-column baseline; register pressure and spill inferred"},
+    {"experiment":"encoder GELU lookup table","total_seconds":48.631542,"reason":"no repeatable gain over exact GELU baseline"},
+    {"experiment":"stem GELU lookup table","stem_seconds":3.793233,"reason":"slower than exact stem"},
+    {"experiment":"fixed 8-output NEON dot micro-kernel","total_seconds":48.736442,"reason":"slower than fixed 4-output micro-kernel median"},
+    {"experiment":"fixed 6-output NEON dot micro-kernel","total_seconds":48.899499,"reason":"slower than fixed 4-output micro-kernel median"},
+    {"experiment":"A113X NEON encoder stem","total_seconds_median":48.417212,"baseline_seconds_median":48.214580,"reason":"stem duration improved, but three-run end-to-end median regressed by 0.4%"}
+  ],
+  "raw_files": {
+    "compact-run-1.stdout.txt": "6b872725278456c58e9fd474629e6c160889b73845b4dfee691f580bd46d50b9",
+    "compact-run-1.time.txt": "4dcebc1f7b792a0eab3fd9bdd3ef03de99ea96935383c4f9d1670673f1d2c7f7",
+    "compact-run-2.stdout.txt": "9ab5a8c758554838d3b7b40a908cf40e4a7b6c776f89599c8e2430ed3a2026ec",
+    "compact-run-2.time.txt": "215ed8e59ac0044c1c97fa50662017118d7f401a78afc37d135219e67bf76046",
+    "compact-run-3.stdout.txt": "1ffeec3160b964d554d1dd24173e098787d32bbfb22e716943b264b9b0e05174",
+    "compact-run-3.time.txt": "e45b7f1a7e4a8ccb3d77a104e99360decb59a40a0043daaa4ddcf7c916421b0b",
+    "compact-canonical.stdout.txt": "6b872725278456c58e9fd474629e6c160889b73845b4dfee691f580bd46d50b9",
+    "compact-canonical.time.txt": "4dcebc1f7b792a0eab3fd9bdd3ef03de99ea96935383c4f9d1670673f1d2c7f7",
+    "compact-canonical.memory-before.txt": "0bc033f8cfc95a0d9449bba657231972a44dc736f8b8eecb1c1ed5fab26b756a",
+    "compact-canonical.memory-after.txt": "2e3bfe38222e28c0be67ce7d91ce3fca728d285ef5ee5449c0046267e5b6fd05"
+  }
+}

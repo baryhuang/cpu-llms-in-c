@@ -1,6 +1,6 @@
 # Target: Amlogic A113X — Whisper small.en
 
-Status: the from-scratch C path now accepts an arbitrary mono PCM16 16 kHz WAV, runs the complete `small.en` encoder and cached decoder, and emits English text. The first public end-to-end smoke case is correct after word normalization. It takes 589.056 seconds for 11 seconds of audio, so the unchanged model fails the real-time gate by 53.55x. The `<10%` relative-WER gate remains open because one sample is not a quality suite.
+Status: the from-scratch C path accepts an arbitrary mono PCM16 16 kHz WAV, runs the complete `small.en` encoder and cached decoder, and emits English text. Compact-window graph execution and A113X Q4 kernels reduce the 11-second JFK case from 589.056 seconds to a three-run median of 48.215 seconds, a 12.22x cumulative gain. RTF is still 4.383, so real time fails. The `<10%` relative-WER gate remains open because one sample is not a quality suite.
 
 ## Target and artifact
 
@@ -19,30 +19,51 @@ Weights, packed images and target binaries are excluded from Git.
 
 | Metric | Gate | Measured | Status |
 |---|---:|---:|---|
-| Full ASR RTF against original 11-second audio | `<= 1.0` | **53.5505** | fail |
-| End-to-end duration | report | **589.055851 s** | measured |
-| Decoder text throughput | report | **1.777 text token/s** | measured |
-| Overall text throughput including encoder | report | **0.0441 text token/s** | measured |
+| Full ASR RTF against original 11-second audio | `<= 1.0` | **4.3831** median | fail |
+| End-to-end duration | report | **48.214580 s** median of 3 | measured |
+| Cumulative end-to-end increment | report | **12.22x** vs fixed30 E1 | measured |
+| Decoder text throughput | report | **3.847 text token/s** on median run | measured |
+| Overall text throughput including encoder | report | **0.519 text token/s** on median run | measured |
 | Public JFK smoke-case WER after stated normalization | `0` for this case | **0/22 = 0%** | pass for this case only |
 | Relative WER increase over an evaluation suite | `<= 10%` | unavailable | open |
 | Ordered timestamps | required final output | no-timestamps decoding selected | open |
-| Peak RSS | `< 1 GiB` | 327,820 KiB | pass |
+| Peak RSS | `< 1 GiB` | 251,232–251,496 KiB over 3 runs | pass |
 | Process swap | `0` | 0 | pass |
 | Device swap change | `0` | 0 KiB | pass |
 
-The input is 11 seconds. The current implementation zero-pads it to Whisper's fixed 30-second window. RTF is total duration divided by the original 11-second duration, not the padded duration. The benchmark is one invocation with no warm-up or repeated-sample statistics.
+The default mode still zero-pads to Whisper's fixed 30-second window. The measured `compact` mode encodes the 1,100 frames present in this 11-second input and produces 550 encoder frames instead of 1,500. RTF is total duration divided by the original 11-second duration. The final headline is the median of three complete process invocations; the coefficient of variation is 0.880%.
 
 ## Benchmark
 
-Benchmark duration excludes verification. Raw data for the current end-to-end case is in [`benchmarks/jfk-11s/`](benchmarks/jfk-11s/); the compact reviewer is [`REVIEW.html`](benchmarks/jfk-11s/REVIEW.html).
+Benchmark duration excludes verification. Raw fixed30 and compact data are in [`benchmarks/jfk-11s/`](benchmarks/jfk-11s/); the reviewer is [`REVIEW.html`](benchmarks/jfk-11s/REVIEW.html).
 
 ### End-to-end public audio
 
-| Input | Front end | Encoder | Decoder core | Output head | Total | CPU | Peak RSS | Swap |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `jfk.wav`, 11.000 s | 0.216886 s | 574.188459 s | 14.188894 s | 0.439936 s | **589.055851 s** | 386% | 327,820 KiB | 0 |
+| Mode | Input | Front end | Encoder | Decoder core | Output head | Total | RTF | CPU | Peak RSS | Swap |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| E1 fixed30, one run | `jfk.wav`, 11.000 s | 0.216886 s | 574.188459 s | 14.188894 s | 0.439936 s | 589.055851 s | 53.5505 | 386% | 327,820 KiB | 0 |
+| E8 compact, run 1 | same | 0.081300 s | 42.223373 s | 6.067983 s | 0.425421 s | 48.808225 s | 4.4371 | 388% | 251,232 KiB | 0 |
+| E8 compact, run 2 / median | same | 0.080052 s | 41.625532 s | 6.076246 s | 0.422475 s | **48.214580 s** | **4.3831** | 388% | 251,496 KiB | 0 |
+| E8 compact, run 3 | same | 0.080148 s | 41.345683 s | 6.119253 s | 0.428544 s | 47.984083 s | 4.3622 | 388% | 251,448 KiB | 0 |
 
-The encoder consumes 97.48% of total duration. Improving the decoder alone cannot reach real time on this graph.
+The encoder consumes 86.33% of the median compact run. Improving the decoder alone cannot reach real time on this graph.
+
+### End-to-end increment
+
+E1–E3 and E8 correspond to committed feature boundaries. E4–E7 are recorded tile-selection experiments within the final Q4 blocking change; their exact intermediate source was not retained as a release commit. Each row is one run except E8, whose stated duration is a three-run median.
+
+| Stage | Cumulative implementation | Duration | RTF | Increment | Cumulative |
+|---|---|---:|---:|---:|---:|
+| E1 | A3 encoder + D1 decoder, fixed 30-second window | 589.055851 s | 53.5505 | 1.00x | 1.00x |
+| E2 | E1 + compact input window | 160.802747 s | 14.6184 | **3.66x** | 3.66x |
+| E3 | E2 + 4-column Q4 cache block | 73.774966 s | 6.7068 | **2.18x** | 7.98x |
+| E4 | E3 + 8-column block | 61.882272 s | 5.6257 | 1.19x | 9.52x |
+| E5 | E4 + 16-column block | 56.771391 s | 5.1610 | 1.09x | 10.38x |
+| E6 | E5 + 32-column block | 53.560030 s | 4.8691 | 1.06x | 11.00x |
+| E7 | E6 + 64-column block | 52.206838 s | 4.7461 | 1.03x | 11.28x |
+| E8 | E7 + fixed 4-output NEON dot; 3-run median | **48.214580 s** | **4.3831** | 1.08x | **12.22x** |
+
+Rejected variants are recorded in [`compact-result.json`](benchmarks/jfk-11s/compact-result.json): shared 8-output accumulators, fixed 6/8-output micro-kernels, GELU lookup tables and a NEON encoder stem all failed the end-to-end duration gate.
 
 ### Decoder CPU increment
 
@@ -108,9 +129,9 @@ make build/whisper-small-transcribe-a113x \
 
 OMP_NUM_THREADS=4 OMP_DYNAMIC=FALSE /usr/bin/time -v \
   ./build/whisper-small-transcribe-a113x \
-  small.en-full-mixed.whenc samples/jfk.wav 64
+  small.en-full-mixed.whenc samples/jfk.wav 64 compact
 ```
 
-The executable accepts arbitrary mono PCM16 16 kHz WAV content up to 30 seconds. The last argument is the maximum number of decode steps. Current decoding is English transcription, greedy, batch one and no timestamps.
+The executable accepts arbitrary mono PCM16 16 kHz WAV content up to 30 seconds. The fourth argument is the maximum number of decode steps. The optional fifth argument is `fixed30` or `compact`; omitting it preserves `fixed30`. Current decoding is English transcription, greedy, batch one and no timestamps.
 
-Machine-readable cumulative measurements are in [`results.json`](results.json). Exact input, command, transcript, resource fields, trace and raw-file hashes are in [`benchmarks/jfk-11s/result.json`](benchmarks/jfk-11s/result.json).
+Machine-readable cumulative measurements are in [`results.json`](results.json). Fixed30 input, output and resource fields are in [`result.json`](benchmarks/jfk-11s/result.json); compact increments, three-run statistics, rejected variants and raw hashes are in [`compact-result.json`](benchmarks/jfk-11s/compact-result.json).

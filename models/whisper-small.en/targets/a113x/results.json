@@ -38,7 +38,9 @@
     "physical_ram_bytes": 2059239424,
     "repository_commit_cpu_stage_a2": "85591aa",
     "repository_commit_cpu_stage_a3": "bed2af2",
-    "repository_commit_end_to_end": "0a3193a"
+    "repository_commit_end_to_end": "0a3193a",
+    "repository_commit_compact_window": "a3dffc4",
+    "repository_commit_q4_blocking": "c8b022d"
   },
   "verification": {
     "fixture_format": "WHREAL01",
@@ -235,6 +237,7 @@
     "end_to_end": [
       {
         "stage": "E1",
+        "implementation": "fixed 30-second window; A3 encoder and D1 decoder",
         "input": "whisper.cpp samples/jfk.wav",
         "input_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
         "audio_seconds": 11.0,
@@ -259,6 +262,34 @@
         "relative_wer_increase": null,
         "timestamps": "not emitted; no-timestamps decoding was selected",
         "raw_record": "benchmarks/jfk-11s/result.json"
+      },
+      {
+        "stage": "E8",
+        "implementation": "E1 plus compact window, 64-column Q4 block and fixed four-output NEON dot",
+        "input": "whisper.cpp samples/jfk.wav",
+        "input_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+        "audio_seconds": 11.0,
+        "window": "compact",
+        "input_frames": 1100,
+        "output_frames": 550,
+        "repetitions": 3,
+        "duration_statistic": "median",
+        "total_seconds": 48.214580,
+        "total_seconds_runs": [48.808225, 48.214580, 47.984083],
+        "rtf_against_original_audio": 4.383144,
+        "increment_vs_e1": 12.217380,
+        "generated_text_tokens": 25,
+        "overall_text_tokens_per_second": 0.518515,
+        "decoder_text_tokens_per_second": 3.846911,
+        "cpu_percent_runs": [388, 388, 388],
+        "peak_rss_kib_runs": [251232, 251496, 251448],
+        "process_swap_runs": [0, 0, 0],
+        "transcript": " And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+        "quality_scope": "one public smoke case; not the relative-WER acceptance suite",
+        "normalized_smoke_case_wer": 0.0,
+        "relative_wer_increase": null,
+        "timestamps": "not emitted; no-timestamps decoding was selected",
+        "raw_record": "benchmarks/jfk-11s/compact-result.json"
       }
     ]
   }

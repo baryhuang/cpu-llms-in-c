@@ -1,6 +1,6 @@
 # Whisper small.en
 
-Status: selected A113X real-time research path. A from-scratch C implementation now covers the exact mixed-radix FFT log-Mel front end, complete 12-layer encoder, cached 12-layer decoder, byte-token table and greedy English transcription. The first public A113X smoke case emits the correct normalized words, but the unchanged graph takes 589.056 seconds for 11 seconds of audio. The real-time and evaluation-suite quality gates remain open.
+Status: selected A113X real-time research path. A from-scratch C implementation covers the exact mixed-radix FFT log-Mel front end, complete 12-layer encoder, cached 12-layer decoder, byte-token table and greedy English transcription. Compact-window execution plus A113X Q4 kernels reduce the public 11-second smoke case from 589.056 seconds to a three-run median of 48.215 seconds. The normalized words remain correct, but RTF 4.383 still fails real time; the evaluation-suite quality gate remains open.
 
 ## Pinned architecture
 
@@ -41,7 +41,7 @@ The target is a derived model optimized jointly with the C runtime. It is not re
 | Token output | compiled byte-token table, suppression policy and greedy no-timestamps decode | public JFK WAV emits readable English text |
 | Image compiler | selective safetensors import; F32, encoder Q4 and decoder/tied-head Q8 packing | image and source SHA-256 pins; weights excluded from Git |
 
-The full mixed image is 214,878,912 bytes. On A113X, an 11-second public WAV is zero-padded to the fixed 30-second model window and completes in 589.055851 seconds: RTF 53.5505, 386% CPU, 327,820 KiB peak RSS and zero swap. The encoder consumes 574.188459 seconds. The result establishes a working C path and identifies the unchanged encoder graph as the dominant limit; it does not establish the `<10%` relative-WER gate. Exact increments, input, transcript and raw duration/resource output are in the [A113X target record](targets/a113x/README.md).
+The full mixed image is 214,878,912 bytes. On A113X, the compact path processes the actual 11-second window in a median 48.214580 seconds across three runs: RTF 4.3831, 388% CPU, 251,496 KiB peak RSS and zero swap. This is 12.22x faster than the earlier fixed-30-second path. The encoder still consumes 86.33% of the median run. The result establishes a working C path and its current bottleneck; it does not establish the `<10%` relative-WER gate. Exact increments, input, transcript and raw duration/resource output are in the [A113X target record](targets/a113x/README.md).
 
 ## Build and test
 
