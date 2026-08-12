@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Qwen3.5-0.8B — ARC-Easy 5-case review</title>
+<style>
+  :root { color-scheme: light; --ink:#17202a; --muted:#5f6b76; --line:#d8dee4; --paper:#fff; --wash:#f6f8fa; --ok:#176b3a; --bad:#a12622; --accent:#175cd3; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#eef1f4; color:var(--ink); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  main { max-width:1580px; margin:28px auto; padding:34px; background:var(--paper); box-shadow:0 2px 18px #17202a18; }
+  h1 { margin:0 0 4px; font-size:28px; } h2 { margin:34px 0 12px; border-bottom:2px solid var(--ink); padding-bottom:6px; }
+  h3 { margin:0 0 12px; font-size:18px; } p { margin:7px 0; } .muted { color:var(--muted); }
+  .warning { margin:18px 0; padding:12px 14px; border-left:4px solid #d97706; background:#fff8e7; }
+  .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:18px 0; }
+  .card { border:1px solid var(--line); padding:13px; background:var(--wash); } .card b { display:block; font-size:22px; } .card span { color:var(--muted); font-size:12px; }
+  table { width:100%; border-collapse:collapse; margin:12px 0 20px; } th,td { border:1px solid var(--line); padding:8px 9px; text-align:left; vertical-align:top; } th { background:var(--wash); }
+  .result-table { font-size:12px; }
+  .num { text-align:right; white-space:nowrap; } .ok { color:var(--ok); font-weight:700; } .bad { color:var(--bad); font-weight:700; }
+  .case { border:1px solid var(--line); border-radius:6px; padding:18px; margin:18px 0; break-inside:avoid; }
+  .case-head { display:flex; justify-content:space-between; gap:10px; } .badge { padding:3px 9px; border-radius:20px; background:#e9f6ee; color:var(--ok); font-weight:700; } .badge.badge-bad { background:#fdeceb; color:var(--bad); }
+  .io { display:grid; grid-template-columns:3fr 2fr; gap:12px; } pre { margin:6px 0; padding:12px; white-space:pre-wrap; overflow-wrap:anywhere; background:#0d1117; color:#e6edf3; border-radius:5px; font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; } details { margin:9px 0; } a { color:var(--accent); }
+  @media(max-width:760px){ main{margin:0;padding:18px}.cards,.io{grid-template-columns:1fr}.case-head{display:block} }
+</style>
+</head>
+<body><main>
+  <h1>Qwen3.5-0.8B — ARC-Easy 5-case review</h1>
+  <p class="muted">Greedy free generation · A113X-specialized C runtime · ThirdReality TRHub-V3 · measured 2026-08-12</p>
+
+  <div class="warning"><strong>Scope:</strong> this is a five-case generative smoke adaptation. It is not the official ARC-Easy likelihood evaluation and must not be cited as an ARC-Easy benchmark score. Primary timing and resource measurements on this page are from the A113X target.</div>
+
+  <div class="cards">
+    <div class="card"><b>4 / 5</b><span>exact generated answers</span></div>
+    <div class="card"><b>2.9182 tok/s</b><span>A113X aggregate prompt prefill</span></div>
+    <div class="card"><b>1.8220 tok/s</b><span>A113X aggregate steady decode</span></div>
+    <div class="card"><b>333.8% / 490 MiB</b><span>weighted CPU / maximum RSS</span></div>
+  </div>
+
+  <h2>Method</h2>
+  <table>
+    <tr><th>Dataset</th><td>AI2 Reasoning Challenge, ARC-Easy validation split</td></tr>
+    <tr><th>Selection</th><td>First five source-order rows whose labels are exactly A, B, C, D. Selection was fixed before inference.</td></tr>
+    <tr><th>Input</th><td>Five distinct runtime strings passed through <code>--prompt</code>. None is compiled into the image.</td></tr>
+    <tr><th>Generation</th><td>Greedy; maximum 32 tokens; all five stopped at EOS after 9 tokens.</td></tr>
+    <tr><th>Scoring fixed before run</th><td>Extract the last case-sensitive standalone <code>Answer: [A-D]</code>. Missing or ambiguous output is incorrect.</td></tr>
+    <tr><th>Source pin</th><td>Canonical dataset revision <code>7f5ff0bd482eee246ed06220b2450de1553890c6</code>; validation parquet SHA-256 <code>4e3752de…3ff0a0</code>; mirrored JSONL commit <code>fcca017f…165e</code></td></tr>
+    <tr><th>Image</th><td>492,962,304 bytes; SHA-256 <code>00bb5a62…fd474</code></td></tr>
+  </table>
+
+  <p><strong>Measured command shape:</strong></p>
+  <pre>prompt=$(jq -r '.cases[0].prompt' profile.json)
+OMP_NUM_THREADS=4 /usr/bin/time -v \
+  ./qwen35-task-a113x-generate qwen35-v2.qtask \
+  --prompt "$prompt" --generate 32</pre>
+
+  <h2>Result table</h2>
+  <table class="result-table">
+    <thead><tr><th># / case</th><th>Expected</th><th>Generated</th><th>Result</th><th class="num">Prompt tokens</th><th class="num">Prefill</th><th class="num">TTFT</th><th class="num">Steady decode</th><th class="num">Wall</th><th class="num">CPU</th><th class="num">Peak RSS</th><th class="num">Swap</th></tr></thead>
+    <tbody>
+      <tr><td>1 · MCAS_2000_4_6</td><td>A</td><td>B</td><td class="bad">wrong</td><td class="num">69</td><td class="num">22.561309 s</td><td class="num">22.671961 s</td><td class="num">1.858670 tok/s</td><td class="num">27.05 s</td><td class="num">345%</td><td class="num">500,864 KiB</td><td class="num">0</td></tr>
+      <tr><td>2 · Mercury_7057260</td><td>C</td><td>C</td><td class="ok">correct</td><td class="num">106</td><td class="num">37.758794 s</td><td class="num">37.869394 s</td><td class="num">1.850583 tok/s</td><td class="num">42.27 s</td><td class="num">325%</td><td class="num">502,016 KiB</td><td class="num">0</td></tr>
+      <tr><td>3 · ACTAAP_2014_7_6</td><td>A</td><td>A</td><td class="ok">correct</td><td class="num">93</td><td class="num">29.735323 s</td><td class="num">29.845795 s</td><td class="num">1.969770 tok/s</td><td class="num">33.98 s</td><td class="num">354%</td><td class="num">501,632 KiB</td><td class="num">0</td></tr>
+      <tr><td>4 · Mercury_7122448</td><td>B</td><td>B</td><td class="ok">correct</td><td class="num">101</td><td class="num">37.065897 s</td><td class="num">37.176777 s</td><td class="num">1.728581 tok/s</td><td class="num">41.88 s</td><td class="num">316%</td><td class="num">501,760 KiB</td><td class="num">0</td></tr>
+      <tr><td>5 · Mercury_SC_416516</td><td>B</td><td>B</td><td class="ok">correct</td><td class="num">97</td><td class="num">32.568104 s</td><td class="num">32.679591 s</td><td class="num">1.724987 tok/s</td><td class="num">37.39 s</td><td class="num">335%</td><td class="num">501,120 KiB</td><td class="num">0</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Exact inputs and outputs</h2>
+
+  <section class="case">
+    <div class="case-head"><h3>1 · MCAS_2000_4_6</h3><span class="badge badge-bad">expected A · generated B</span></div>
+    <div class="io"><div><strong>Exact runtime input</strong><pre>&lt;|im_start|&gt;system
+Answer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+Which technology was developed most recently?
+A. cellular telephone
+B. television
+C. refrigerator
+D. airplane&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+</pre></div><div><strong>Exact human-readable model output</strong><pre>
+&lt;think&gt;
+
+&lt;/think&gt;
+
+Answer: B</pre><p class="bad">Wrong. Reference: A.</p></div></div>
+  </section>
+
+  <section class="case">
+    <div class="case-head"><h3>2 · Mercury_7057260</h3><span class="badge">expected C · generated C</span></div>
+    <div class="io"><div><strong>Exact runtime input</strong><pre>&lt;|im_start|&gt;system
+Answer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+A student hypothesizes that algae are producers. Which question will best help the student determine if this is correct?
+A. Do algae consume other organisms?
+B. Which organisms consume algae?
+C. Do algae use sunlight to make food?
+D. Could an ecosystem survive without algae?&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+</pre></div><div><strong>Exact human-readable model output</strong><pre>
+&lt;think&gt;
+
+&lt;/think&gt;
+
+Answer: C</pre><p class="ok">Correct.</p></div></div>
+  </section>
+
+  <section class="case">
+    <div class="case-head"><h3>3 · ACTAAP_2014_7_6</h3><span class="badge">expected A · generated A</span></div>
+    <div class="io"><div><strong>Exact runtime input</strong><pre>&lt;|im_start|&gt;system
+Answer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+Soccer players use their muscle systems to kick a ball into a goal. What organ system coordinates the muscles?
+A. The nervous system
+B. The endocrine system
+C. The respiratory system
+D. The circulatory system&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+</pre></div><div><strong>Exact human-readable model output</strong><pre>
+&lt;think&gt;
+
+&lt;/think&gt;
+
+Answer: A</pre><p class="ok">Correct.</p></div></div>
+  </section>
+
+  <section class="case">
+    <div class="case-head"><h3>4 · Mercury_7122448</h3><span class="badge">expected B · generated B</span></div>
+    <div class="io"><div><strong>Exact runtime input</strong><pre>&lt;|im_start|&gt;system
+Answer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+Planets in the solar system are in constant motion. What factor has the greatest effect on the orbits of the planets?
+A. the size of the planets
+B. gravitational pull of the Sun
+C. the composition of the planets
+D. electromagnetic radiation from the Sun&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+</pre></div><div><strong>Exact human-readable model output</strong><pre>
+&lt;think&gt;
+
+&lt;/think&gt;
+
+Answer: B</pre><p class="ok">Correct.</p></div></div>
+  </section>
+
+  <section class="case">
+    <div class="case-head"><h3>5 · Mercury_SC_416516</h3><span class="badge">expected B · generated B</span></div>
+    <div class="io"><div><strong>Exact runtime input</strong><pre>&lt;|im_start|&gt;system
+Answer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+How is a pond different from a lake?
+A. Ponds have moving water.
+B. Ponds are smaller and shallower.
+C. Ponds are not surrounded by land.
+D. Ponds have a different amount of salt.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+</pre></div><div><strong>Exact human-readable model output</strong><pre>
+&lt;think&gt;
+
+&lt;/think&gt;
+
+Answer: B</pre><p class="ok">Correct.</p></div></div>
+  </section>
+
+  <h2>Aggregate timing</h2>
+  <table>
+    <tr><th>Prompt prefill</th><td>466 tokens / 159.689427 s = <strong>2.918164 tokens/s</strong></td></tr>
+    <tr><th>Mean time to first token</th><td>32.048704 s</td></tr>
+    <tr><th>Steady decode</th><td>40 tokens / 21.954294 s = <strong>1.821967 tokens/s</strong></td></tr>
+    <tr><th>Generation after prefill</th><td>45 tokens / 22.508385 s = 1.999255 tokens/s</td></tr>
+    <tr><th>Total process wall time</th><td>182.57 s across five separate invocations</td></tr>
+    <tr><th>CPU</th><td>605.76 s user + 3.74 s system; wall-weighted <strong>333.84%</strong> of a four-core ceiling near 400%</td></tr>
+    <tr><th>Maximum peak RSS / swap</th><td><strong>502,016 KiB</strong> (490.25 MiB) / 0 process swaps; device swap used was 0 before and after the batch</td></tr>
+    <tr><th>Page faults / context switches</th><td>0 major, 91,102 minor; 10,733 voluntary, 208,531 involuntary</td></tr>
+  </table>
+
+  <h2>Runtime comparison</h2>
+  <table>
+    <thead><tr><th>Runtime / CPU</th><th class="num">Exact answers</th><th class="num">Prefill</th><th class="num">Steady decode</th><th class="num">Mean TTFT</th><th class="num">Wall</th><th class="num">Max RSS</th><th class="num">Swap</th></tr></thead>
+    <tbody>
+      <tr><td>A113X-specialized C / 4x Cortex-A53</td><td class="num">4/5</td><td class="num">2.9182 tok/s</td><td class="num">1.8220 tok/s</td><td class="num">32.0487 s</td><td class="num">182.57 s</td><td class="num">502,016 KiB</td><td class="num">0</td></tr>
+      <tr><td>Generic C / Apple M3 Pro (development reference)</td><td class="num">4/5</td><td class="num">3.7094 tok/s</td><td class="num">2.3869 tok/s</td><td class="num">25.3308 s</td><td class="num">143.46 s</td><td class="num">514,867,200 bytes</td><td class="num">0</td></tr>
+    </tbody>
+  </table>
+
+  <details><summary><strong>Audit data: token IDs and artifact hashes</strong></summary>
+    <p>Token IDs:</p>
+    <pre>1: [198,248068,271,248069,271,15666,25,417,248046]
+2: [198,248068,271,248069,271,15666,25,351,248046]
+3: [198,248068,271,248069,271,15666,25,357,248046]
+4: [198,248068,271,248069,271,15666,25,417,248046]
+5: [198,248068,271,248069,271,15666,25,417,248046]</pre>
+    <p>Runtime SHA-256: <code>293e1fb52bcf42094134a31b20a96978f5107c7b074651fdad36ce34147f9de6</code><br>Image SHA-256: <code>00bb5a62214f1db44722731f895eeb9d9d28a27b0201bdd9287485671e5fd474</code></p>
+  </details>
+</main></body></html>

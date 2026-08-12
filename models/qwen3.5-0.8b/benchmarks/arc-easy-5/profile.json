@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "id": "arc-easy-validation-first-5-four-choice",
+  "description": "Five-case generative smoke adaptation of ARC-Easy; not an official ARC-Easy score.",
+  "source": {
+    "benchmark": "AI2 Reasoning Challenge (ARC-Easy)",
+    "split": "validation",
+    "upstream_repository": "https://github.com/zhaoxlpku/HKU-DASC7606-A2.git",
+    "upstream_revision": "fcca017f3468a25901ad298913e976c42ad9165e",
+    "upstream_path": "data/ARC-Easy-validation.jsonl",
+    "upstream_file_sha256": "e45dbcd2d8e8235af16302f4be0dd00c5d173878c583f4dfe55b70f9df07b2f8",
+    "canonical_dataset_revision": "7f5ff0bd482eee246ed06220b2450de1553890c6",
+    "canonical_validation_parquet_sha256": "4e3752de16e4255ba97c6d521435fab222034acb129636b99569eefcd43ff0a0",
+    "license": "CC-BY-SA-4.0"
+  },
+  "selection_rule": "Take rows from the official validation split in source order; keep rows whose choice labels are exactly A, B, C, D; stop after five rows. Do not inspect model outputs while selecting.",
+  "inference": {
+    "mode": "greedy free generation",
+    "requested_tokens": 32,
+    "prompt_template": "Qwen chat template with one system turn, one user turn, and an open assistant turn",
+    "system_text": "Answer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.",
+    "scoring_rule": "Before any run: extract the last case-sensitive standalone match of Answer: [A-D] from generated text. Missing or ambiguous output is incorrect. Compare the letter with answerKey.",
+    "official_metric_difference": "The standard lm-evaluation-harness task scores multiple-choice likelihood. This profile scores generated answer text and must not be reported as an official ARC-Easy accuracy."
+  },
+  "cases": [
+    {
+      "ordinal": 1,
+      "id": "MCAS_2000_4_6",
+      "question": "Which technology was developed most recently?",
+      "choices": {
+        "A": "cellular telephone",
+        "B": "television",
+        "C": "refrigerator",
+        "D": "airplane"
+      },
+      "answerKey": "A",
+      "prompt": "<|im_start|>system\nAnswer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.<|im_end|>\n<|im_start|>user\nWhich technology was developed most recently?\nA. cellular telephone\nB. television\nC. refrigerator\nD. airplane<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "ordinal": 2,
+      "id": "Mercury_7057260",
+      "question": "A student hypothesizes that algae are producers. Which question will best help the student determine if this is correct?",
+      "choices": {
+        "A": "Do algae consume other organisms?",
+        "B": "Which organisms consume algae?",
+        "C": "Do algae use sunlight to make food?",
+        "D": "Could an ecosystem survive without algae?"
+      },
+      "answerKey": "C",
+      "prompt": "<|im_start|>system\nAnswer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.<|im_end|>\n<|im_start|>user\nA student hypothesizes that algae are producers. Which question will best help the student determine if this is correct?\nA. Do algae consume other organisms?\nB. Which organisms consume algae?\nC. Do algae use sunlight to make food?\nD. Could an ecosystem survive without algae?<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "ordinal": 3,
+      "id": "ACTAAP_2014_7_6",
+      "question": "Soccer players use their muscle systems to kick a ball into a goal. What organ system coordinates the muscles?",
+      "choices": {
+        "A": "The nervous system",
+        "B": "The endocrine system",
+        "C": "The respiratory system",
+        "D": "The circulatory system"
+      },
+      "answerKey": "A",
+      "prompt": "<|im_start|>system\nAnswer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.<|im_end|>\n<|im_start|>user\nSoccer players use their muscle systems to kick a ball into a goal. What organ system coordinates the muscles?\nA. The nervous system\nB. The endocrine system\nC. The respiratory system\nD. The circulatory system<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "ordinal": 4,
+      "id": "Mercury_7122448",
+      "question": "Planets in the solar system are in constant motion. What factor has the greatest effect on the orbits of the planets?",
+      "choices": {
+        "A": "the size of the planets",
+        "B": "gravitational pull of the Sun",
+        "C": "the composition of the planets",
+        "D": "electromagnetic radiation from the Sun"
+      },
+      "answerKey": "B",
+      "prompt": "<|im_start|>system\nAnswer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.<|im_end|>\n<|im_start|>user\nPlanets in the solar system are in constant motion. What factor has the greatest effect on the orbits of the planets?\nA. the size of the planets\nB. gravitational pull of the Sun\nC. the composition of the planets\nD. electromagnetic radiation from the Sun<|im_end|>\n<|im_start|>assistant\n"
+    },
+    {
+      "ordinal": 5,
+      "id": "Mercury_SC_416516",
+      "question": "How is a pond different from a lake?",
+      "choices": {
+        "A": "Ponds have moving water.",
+        "B": "Ponds are smaller and shallower.",
+        "C": "Ponds are not surrounded by land.",
+        "D": "Ponds have a different amount of salt."
+      },
+      "answerKey": "B",
+      "prompt": "<|im_start|>system\nAnswer the multiple-choice science question. Do not explain. End with exactly one line: Answer: X, where X is A, B, C, or D.<|im_end|>\n<|im_start|>user\nHow is a pond different from a lake?\nA. Ponds have moving water.\nB. Ponds are smaller and shallower.\nC. Ponds are not surrounded by land.\nD. Ponds have a different amount of salt.<|im_end|>\n<|im_start|>assistant\n"
+    }
+  ]
+}

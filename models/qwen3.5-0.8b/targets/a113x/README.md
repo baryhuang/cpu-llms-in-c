@@ -93,6 +93,16 @@ The primary colors are **Red**, **Blue**, and **Yellow**.
 
 The complete 19-token sequence matches the local generic C runtime 19/19. Review the exact English input, human-readable output, and per-token decoded pieces in [`GENERATION_REVIEW.html`](GENERATION_REVIEW.html). Machine-readable durations and IDs remain in [`results.json`](results.json). This is one functional decode measurement, not a latency distribution.
 
+### ARC-Easy five-case generative smoke subset
+
+Five fixed, source-order ARC-Easy validation prompts were supplied at run time. This is a generated-answer smoke adaptation, not an official ARC-Easy likelihood score. Exact inputs and outputs: [`../../benchmarks/arc-easy-5/REVIEW.html`](../../benchmarks/arc-easy-5/REVIEW.html). Raw A113X fields: [`../../benchmarks/arc-easy-5/results-a113x.json`](../../benchmarks/arc-easy-5/results-a113x.json).
+
+| Quality | Prefill | Steady decode | Mean TTFT | Wall | CPU | Peak RSS | Swap |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4/5 | 2.9182 tokens/s | 1.8220 tokens/s | 32.0487 s | 182.57 s | 333.84% wall-weighted | 502,016 KiB | 0 |
+
+CPU and memory came from `/usr/bin/time -v` for each invocation. Individual CPU utilization was 316–354% of a four-core ceiling near 400%; process swaps were zero in every case, and device swap usage was zero both before and after the batch.
+
 ## Verification
 
 Verification time is not included in the benchmark table.

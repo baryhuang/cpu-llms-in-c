@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-12",
+  "profile": "profile.json",
+  "profile_sha256": "28d250832265c69c6dd81b0beec94c8eafefed2ea2e5c1bd7776ab6ebc95e05f",
+  "classification": "five-case generative smoke adaptation; not an official ARC-Easy score",
+  "host": {
+    "board": "ThirdReality TRHub-V3",
+    "hostname": "linuxbox-hubv3",
+    "soc": "Amlogic A113X",
+    "cpu": "4x ARM Cortex-A53",
+    "logical_cpus": 4,
+    "physical_memory_bytes": 2059239424,
+    "architecture": "aarch64"
+  },
+  "runtime": {
+    "implementation": "A113X-specialized C runtime",
+    "binary": "qwen35-task-a113x-generate",
+    "binary_bytes": 948688,
+    "binary_sha256": "c3a12f6b702a1bac7b91884f4e4ada189d53c91ef1ad551153dfb9a2a9fefe5a",
+    "threads": 4,
+    "generation": "greedy",
+    "requested_tokens_per_case": 32
+  },
+  "artifact": {
+    "path": "qwen35-v2.qtask",
+    "bytes": 492962304,
+    "sha256": "00bb5a62214f1db44722731f895eeb9d9d28a27b0201bdd9287485671e5fd474"
+  },
+  "resource_measurement": {
+    "tool": "/usr/bin/time -v per process invocation",
+    "cpu_percent_definition": "(user CPU time + system CPU time) / wall time; four-core process ceiling is approximately 400%",
+    "memory_definition": "maximum resident set size reported for each process",
+    "swap_definition": "process swaps from time -v plus device swap used before and after the batch",
+    "device_swap_used_bytes_before": 0,
+    "device_swap_used_bytes_after": 0
+  },
+  "scoring": {
+    "rule_fixed_before_run": true,
+    "rule": "Extract the last case-sensitive standalone match of Answer: [A-D]. Missing or ambiguous output is incorrect.",
+    "correct": 4,
+    "total": 5,
+    "accuracy": 0.8,
+    "official_arc_score": false
+  },
+  "aggregate_timing_and_resources": {
+    "prompt_tokens": 466,
+    "prefill_seconds": 159.689427,
+    "prefill_tokens_per_second": 2.918164,
+    "generated_tokens": 45,
+    "generation_after_prefill_seconds": 22.508385,
+    "generation_after_prefill_tokens_per_second": 1.999255,
+    "steady_decode_tokens": 40,
+    "steady_decode_seconds": 21.954294,
+    "steady_decode_tokens_per_second": 1.821967,
+    "mean_time_to_first_token_seconds": 32.048704,
+    "wall_duration_seconds": 182.57,
+    "user_cpu_seconds": 605.76,
+    "system_cpu_seconds": 3.74,
+    "weighted_cpu_percent": 333.844553,
+    "maximum_resident_kib": 502016,
+    "major_page_faults": 0,
+    "minor_page_faults": 91102,
+    "voluntary_context_switches": 10733,
+    "involuntary_context_switches": 208531,
+    "swaps": 0
+  },
+  "cases": [
+    {
+      "ordinal": 1, "id": "MCAS_2000_4_6", "expected": "A", "parsed": "B", "correct": false,
+      "generated_text": "\n<think>\n\n</think>\n\nAnswer: B", "prompt_tokens": 69, "generated_tokens": 9, "stop_reason": "eos",
+      "token_ids": [198, 248068, 271, 248069, 271, 15666, 25, 417, 248046],
+      "prefill_seconds": 22.561309, "prefill_tokens_per_second": 3.058333, "first_token_head_seconds": 0.110652, "time_to_first_token_seconds": 22.671961,
+      "steady_decode_seconds": 4.304153, "steady_decode_tokens_per_second": 1.858670, "generation_after_prefill_seconds": 4.414805, "generation_after_prefill_tokens_per_second": 2.038595,
+      "per_generated_token_seconds": [0.110652, 0.536939, 0.539323, 0.540991, 0.530517, 0.540604, 0.539766, 0.541660, 0.534353],
+      "wall_duration_seconds": 27.05, "user_cpu_seconds": 92.98, "system_cpu_seconds": 0.62, "cpu_percent": 345, "maximum_resident_kib": 500864,
+      "major_page_faults": 0, "minor_page_faults": 18070, "voluntary_context_switches": 1468, "involuntary_context_switches": 32375, "swaps": 0
+    },
+    {
+      "ordinal": 2, "id": "Mercury_7057260", "expected": "C", "parsed": "C", "correct": true,
+      "generated_text": "\n<think>\n\n</think>\n\nAnswer: C", "prompt_tokens": 106, "generated_tokens": 9, "stop_reason": "eos",
+      "token_ids": [198, 248068, 271, 248069, 271, 15666, 25, 351, 248046],
+      "prefill_seconds": 37.758794, "prefill_tokens_per_second": 2.807293, "first_token_head_seconds": 0.110600, "time_to_first_token_seconds": 37.869394,
+      "steady_decode_seconds": 4.322962, "steady_decode_tokens_per_second": 1.850583, "generation_after_prefill_seconds": 4.433562, "generation_after_prefill_tokens_per_second": 2.029971,
+      "per_generated_token_seconds": [0.110600, 0.533910, 0.541461, 0.538070, 0.543211, 0.539192, 0.543154, 0.539299, 0.544664],
+      "wall_duration_seconds": 42.27, "user_cpu_seconds": 136.88, "system_cpu_seconds": 0.85, "cpu_percent": 325, "maximum_resident_kib": 502016,
+      "major_page_faults": 0, "minor_page_faults": 18306, "voluntary_context_switches": 3394, "involuntary_context_switches": 48241, "swaps": 0
+    },
+    {
+      "ordinal": 3, "id": "ACTAAP_2014_7_6", "expected": "A", "parsed": "A", "correct": true,
+      "generated_text": "\n<think>\n\n</think>\n\nAnswer: A", "prompt_tokens": 93, "generated_tokens": 9, "stop_reason": "eos",
+      "token_ids": [198, 248068, 271, 248069, 271, 15666, 25, 357, 248046],
+      "prefill_seconds": 29.735323, "prefill_tokens_per_second": 3.127593, "first_token_head_seconds": 0.110472, "time_to_first_token_seconds": 29.845795,
+      "steady_decode_seconds": 4.061389, "steady_decode_tokens_per_second": 1.969770, "generation_after_prefill_seconds": 4.171860, "generation_after_prefill_tokens_per_second": 2.157311,
+      "per_generated_token_seconds": [0.110472, 0.500252, 0.517558, 0.499575, 0.503878, 0.510301, 0.508259, 0.507660, 0.513904],
+      "wall_duration_seconds": 33.98, "user_cpu_seconds": 119.58, "system_cpu_seconds": 0.78, "cpu_percent": 354, "maximum_resident_kib": 501632,
+      "major_page_faults": 0, "minor_page_faults": 18219, "voluntary_context_switches": 2002, "involuntary_context_switches": 42767, "swaps": 0
+    },
+    {
+      "ordinal": 4, "id": "Mercury_7122448", "expected": "B", "parsed": "B", "correct": true,
+      "generated_text": "\n<think>\n\n</think>\n\nAnswer: B", "prompt_tokens": 101, "generated_tokens": 9, "stop_reason": "eos",
+      "token_ids": [198, 248068, 271, 248069, 271, 15666, 25, 417, 248046],
+      "prefill_seconds": 37.065897, "prefill_tokens_per_second": 2.724877, "first_token_head_seconds": 0.110881, "time_to_first_token_seconds": 37.176777,
+      "steady_decode_seconds": 4.628073, "steady_decode_tokens_per_second": 1.728581, "generation_after_prefill_seconds": 4.738954, "generation_after_prefill_tokens_per_second": 1.899153,
+      "per_generated_token_seconds": [0.110881, 0.575811, 0.575029, 0.575483, 0.576563, 0.579732, 0.580936, 0.578799, 0.585721],
+      "wall_duration_seconds": 41.88, "user_cpu_seconds": 131.77, "system_cpu_seconds": 0.76, "cpu_percent": 316, "maximum_resident_kib": 501760,
+      "major_page_faults": 0, "minor_page_faults": 18271, "voluntary_context_switches": 2033, "involuntary_context_switches": 44740, "swaps": 0
+    },
+    {
+      "ordinal": 5, "id": "Mercury_SC_416516", "expected": "B", "parsed": "B", "correct": true,
+      "generated_text": "\n<think>\n\n</think>\n\nAnswer: B", "prompt_tokens": 97, "generated_tokens": 9, "stop_reason": "eos",
+      "token_ids": [198, 248068, 271, 248069, 271, 15666, 25, 417, 248046],
+      "prefill_seconds": 32.568104, "prefill_tokens_per_second": 2.978374, "first_token_head_seconds": 0.111487, "time_to_first_token_seconds": 32.679591,
+      "steady_decode_seconds": 4.637717, "steady_decode_tokens_per_second": 1.724987, "generation_after_prefill_seconds": 4.749204, "generation_after_prefill_tokens_per_second": 1.895055,
+      "per_generated_token_seconds": [0.111487, 0.579701, 0.578793, 0.580641, 0.576774, 0.580188, 0.579857, 0.580755, 0.581009],
+      "wall_duration_seconds": 37.39, "user_cpu_seconds": 124.55, "system_cpu_seconds": 0.73, "cpu_percent": 335, "maximum_resident_kib": 501120,
+      "major_page_faults": 0, "minor_page_faults": 18236, "voluntary_context_switches": 1836, "involuntary_context_switches": 40408, "swaps": 0
+    }
+  ]
+}

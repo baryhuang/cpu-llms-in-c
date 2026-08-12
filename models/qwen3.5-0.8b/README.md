@@ -113,6 +113,17 @@ The two CPU increments compose to 4.42x over the generic scalar runtime. Full ma
 
 Free generation is also implemented. One measured greedy run scans the full 248,320-row head per generated token: 6.7701 s time to first token and **2.6005 tokens/s steady decode**, with 499,968 KiB peak RSS and zero swap. The exact input, human-readable output, and timing are in the [generation review](targets/a113x/GENERATION_REVIEW.html); machine-readable fields remain in the [A113X target record](targets/a113x/results.json).
 
+### Open-source benchmark smoke subset
+
+Five source-order cases from the public ARC-Easy validation split were run as greedy free generation. This checks that different runtime prompts produce readable, scoreable answers; it is not the official likelihood-based ARC-Easy evaluation.
+
+| Runtime / target | Cases | Exact answers | Prompt prefill | Steady decode | Peak RSS | Review |
+|---|---:|---:|---:|---:|---:|---|
+| Generic C / Apple M3 Pro | 5 | 4/5 | 3.7094 tokens/s | 2.3869 tokens/s | 490.99 MiB | [inputs, outputs, and per-case duration](benchmarks/arc-easy-5/REVIEW.html) |
+| A113X-specialized C / A113X | 5 | 4/5 | 2.9182 tokens/s | 1.8220 tokens/s | 502,016 KiB | [inputs, outputs, duration, CPU, and memory](benchmarks/arc-easy-5/REVIEW.html) |
+
+The profile pins the source revision, source-file hash, selection rule, prompts, answer keys, and scoring rule. Machine-readable measurements are separate: [`results-a113x.json`](benchmarks/arc-easy-5/results-a113x.json) and [`results-macos-m3-pro.json`](benchmarks/arc-easy-5/results-macos-m3-pro.json). The A113X batch used 333.84% wall-weighted CPU, peaked at 502,016 KiB RSS, and used zero swap. All five generated token sequences match the generic C development run.
+
 ## Verified facts
 
 | Check | Result |
