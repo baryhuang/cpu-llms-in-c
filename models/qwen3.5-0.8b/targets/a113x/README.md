@@ -22,7 +22,7 @@ The board exposes no temperature node through the tested `/sys/class/hwmon` path
 
 ## Incremental benchmark
 
-Benchmark and verification are separate. Every row below is a warm single-process run over the same 488 prompt tokens in 12 cases with `OMP_NUM_THREADS=4`. `Duration` is model classification time summed from the runtime; `Wall` comes from `/usr/bin/time -v`.
+Benchmark and verification are separate. Every row below is a warm single-process run over the same 488 prompt tokens in 12 cases with `OMP_NUM_THREADS=4`. `Duration` is model classification time summed from the runtime; `Wall` comes from `/usr/bin/time -v`. Throughput is prompt prefill/classification throughput, not free-generation decode throughput.
 
 | Cumulative implementation | Duration | Wall | Throughput | Increment vs previous | Increment vs baseline | CPU | Peak RSS | Swap |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|

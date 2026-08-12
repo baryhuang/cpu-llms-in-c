@@ -22,7 +22,7 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 | Model | CPU / SoC target | Chip year | Status | Verification | Measured performance | Record |
 |---|---|---:|---|---|---|---|
 | Gemma 4 E2B | two-vCPU x86-64 dev machine (unpinned) | not pinned | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
-| Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | target runtime measured; NEON GEMV and DeltaNet state kernels implemented | target vs x86 decisions 12/12; written labels 10/12; tokenizer parity 20/20 | **3.6353 tokens/s**, 367 MiB RSS, zero swap; 4.42x over scalar | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
+| Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | target runtime measured; NEON GEMV and DeltaNet state kernels implemented | target vs x86 decisions 12/12; written labels 10/12; tokenizer parity 20/20 | **3.6353 prompt tokens/s** classification prefill, 367 MiB RSS, zero swap; 4.42x over scalar | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
 | Qwen3.5-0.8B | Rockchip RK3588S: 4x Cortex-A76 + 4x Cortex-A55, NPU | 2022 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3588s/README.md) |
 | Qwen3.5-0.8B | Rockchip RK3576: 4x Cortex-A72 + 4x Cortex-A53, NPU | 2024 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3576/README.md) |
 
@@ -42,7 +42,7 @@ tokens/s  ≤  usable memory bandwidth / weight bytes visited per token
 |---|---:|---:|
 | Weight bytes visited per decode token | 960 MB | ~350 MB (Q8 DeltaNet projections included) |
 | Usable DRAM bandwidth | not the limit yet | 3.591 GiB/s, four-thread read probe |
-| Achieved runtime | 0.598 token/s (different model/workload) | 0.8230 scalar → 3.6353 tokens/s CPU-specialized |
+| Achieved measured prompt path | 0.598 token/s (different model/workload) | 0.8230 scalar → 3.6353 prompt tokens/s CPU-specialized |
 | CPU optimization gain | — | 4.42x cumulative; still compute-bound |
 | Image / peak RSS vs RAM | 966 MB image, 926 MiB RSS, zero swap | 470 MiB image, 367 MiB RSS vs 1.92 GiB, zero swap |
 
@@ -73,8 +73,8 @@ Measured and planned steps are labeled separately. Factors do not multiply clean
 | 1. Switch to Qwen3.5-0.8B | model | per-token matrix traffic 960 MB → ~350 MB (Q8 DeltaNet projections — see the model record) | ~2.7x per token |
 | 2. Batched prefill | model | read each matrix once per layer per prompt, not per token | up to ~40x on prompt prefill |
 | 3. Per-call answer-set scoring | model | skip the 248K-row output head unless generating | ~130 MB saved per decision |
-| 4. NEON Q4/Q8 GEMV | CPU | Cortex-A53 signed nibble unpack and vector MAC | **measured: 2.95x**, 0.8230 → 2.4297 token/s |
-| 5. DeltaNet state kernel | CPU | contiguous row traversal and four-thread static head partition | **measured: 1.50x**, 2.4297 → 3.6353 token/s |
+| 4. NEON Q4/Q8 GEMV | CPU | Cortex-A53 signed nibble unpack and vector MAC | **measured prefill: 2.95x**, 0.8230 → 2.4297 prompt tokens/s |
+| 5. DeltaNet state kernel | CPU | contiguous row traversal and four-thread static head partition | **measured prefill: 1.50x**, 2.4297 → 3.6353 prompt tokens/s |
 | 6. Lower-bit LUT (experimental) | CPU | Q3/Q2 with linear LUT cost scaling, only if task quality survives | further 1.3-2x |
 
 Model-axis details: [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md). Target details: [A113X](models/qwen3.5-0.8b/targets/a113x/README.md) · [RK3588S](models/qwen3.5-0.8b/targets/rk3588s/README.md) · [RK3576](models/qwen3.5-0.8b/targets/rk3576/README.md).

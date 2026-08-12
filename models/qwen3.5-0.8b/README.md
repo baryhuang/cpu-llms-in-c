@@ -6,7 +6,7 @@ Status: model runtime implemented and verified; the A113X target is measured and
 
 | Target | Chip year | CPU | Accelerator | Current evidence | Record |
 |---|---:|---|---|---|---|
-| Amlogic A113X | 2017 | 4x Cortex-A53 | CPU only for this project | 3.6353 token/s after two CPU increments; 367 MiB RSS; zero swap | [target](targets/a113x/README.md) · [raw results](targets/a113x/results.json) |
+| Amlogic A113X | 2017 | 4x Cortex-A53 | CPU only for this project | 3.6353 prompt tokens/s classification prefill after two CPU increments; 367 MiB RSS; zero swap | [target](targets/a113x/README.md) · [raw results](targets/a113x/results.json) |
 | Rockchip RK3588S | 2022 | 4x Cortex-A76 + 4x Cortex-A55 | 6 TOPS NPU | external RKLLM baseline; no repository run | [target](targets/rk3588s/README.md) |
 | Rockchip RK3576 | 2024 | 4x Cortex-A72 + 4x Cortex-A53 | 6 TOPS RKNN NPU | external RKLLM baseline; no repository run | [target](targets/rk3576/README.md) |
 
@@ -101,7 +101,7 @@ The unpinned x86-64 development run is retained only as implementation evidence:
 
 Peak RSS sits below the 470 MiB image because untouched embedding rows are never faulted in — a direct effect of per-call answer-set scoring.
 
-The A113X target runs the same image and 12 cases. These rows are cumulative so the CPU-axis increment is visible:
+The A113X target runs the same image and 12 cases. This is prompt prefill/classification throughput, not free-generation decode throughput. The rows are cumulative so the CPU-axis increment is visible:
 
 | A113X implementation | Total classification duration | Throughput | Increment vs previous | Peak RSS | Swap |
 |---|---:|---:|---:|---:|---:|
