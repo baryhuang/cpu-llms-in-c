@@ -8,7 +8,7 @@
 #include <time.h>
 
 enum { WIDTH = 768, HEADS = 12, HEAD_WIDTH = 64, MLP = 3072,
-       Q4_GROUP = 128, Q4_RECORD = 66 };
+       Q4_GROUP = 128, Q4_RECORD = 66, Q8_RECORD = 130 };
 
 static double monotonic_seconds(void)
 {
@@ -62,6 +62,30 @@ static void q4_dequantize(const unsigned char *records, float *output, size_t co
     }
 }
 
+static float q8_dot(const unsigned char *records, const float *input, size_t columns)
+{
+    float sum = 0.0f;
+    for (size_t group = 0U; group < columns / Q4_GROUP; ++group) {
+        const float scale = bf16_to_float(records);
+        const signed char *quantized = (const signed char *)(const void *)(records + 2U);
+        for (size_t index = 0U; index < Q4_GROUP; ++index)
+            sum += scale * input[group * Q4_GROUP + index] * quantized[index];
+        records += Q8_RECORD;
+    }
+    return sum;
+}
+
+static void q8_dequantize(const unsigned char *records, float *output, size_t columns)
+{
+    for (size_t group = 0U; group < columns / Q4_GROUP; ++group) {
+        const float scale = bf16_to_float(records);
+        const signed char *quantized = (const signed char *)(const void *)(records + 2U);
+        for (size_t index = 0U; index < Q4_GROUP; ++index)
+            output[group * Q4_GROUP + index] = scale * quantized[index];
+        records += Q8_RECORD;
+    }
+}
+
 static void matrix_vector(const cllm_whisper_matrix *matrix,
                           const float *input,
                           const float *bias,
@@ -72,6 +96,9 @@ static void matrix_vector(const cllm_whisper_matrix *matrix,
         if (matrix->q4 != NULL) {
             const size_t row_bytes = (matrix->columns / Q4_GROUP) * Q4_RECORD;
             sum += q4_dot(matrix->q4 + row * row_bytes, input, matrix->columns);
+        } else if (matrix->q8 != NULL) {
+            const size_t row_bytes = (matrix->columns / Q4_GROUP) * Q8_RECORD;
+            sum += q8_dot(matrix->q8 + row * row_bytes, input, matrix->columns);
         } else {
             const float *weights = matrix->f32 + row * matrix->columns;
             for (size_t column = 0U; column < matrix->columns; ++column)
@@ -229,10 +256,14 @@ int cllm_whisper_decoder_step(const cllm_whisper_decoder_weights *weights,
     if (weights->token_embedding.f32 != NULL) {
         memcpy(hidden, weights->token_embedding.f32 + (size_t)token * WIDTH,
                WIDTH * sizeof(float));
-    } else {
+    } else if (weights->token_embedding.q4 != NULL) {
         const size_t row_bytes = (WIDTH / Q4_GROUP) * Q4_RECORD;
         const unsigned char *row = weights->token_embedding.q4 + (size_t)token * row_bytes;
         q4_dequantize(row, hidden, WIDTH);
+    } else {
+        const size_t row_bytes = (WIDTH / Q4_GROUP) * Q8_RECORD;
+        const unsigned char *row = weights->token_embedding.q8 + (size_t)token * row_bytes;
+        q8_dequantize(row, hidden, WIDTH);
     }
     for (size_t index = 0U; index < WIDTH; ++index)
         hidden[index] += weights->positions[position * WIDTH + index];
@@ -289,10 +320,19 @@ int cllm_whisper_decoder_step(const cllm_whisper_decoder_weights *weights,
                 *next_token = (uint32_t)row;
             }
         }
-    } else {
+    } else if (weights->token_embedding.q4 != NULL) {
         const size_t row_bytes = (WIDTH / Q4_GROUP) * Q4_RECORD;
         for (size_t row = 0U; row < CLLM_WHISPER_SMALL_VOCABULARY; ++row) {
             const float logit = q4_dot(weights->token_embedding.q4 + row * row_bytes, norm, WIDTH);
+            if (logit > *next_logit) {
+                *next_logit = logit;
+                *next_token = (uint32_t)row;
+            }
+        }
+    } else {
+        const size_t row_bytes = (WIDTH / Q4_GROUP) * Q8_RECORD;
+        for (size_t row = 0U; row < CLLM_WHISPER_SMALL_VOCABULARY; ++row) {
+            const float logit = q8_dot(weights->token_embedding.q8 + row * row_bytes, norm, WIDTH);
             if (logit > *next_logit) {
                 *next_logit = logit;
                 *next_token = (uint32_t)row;

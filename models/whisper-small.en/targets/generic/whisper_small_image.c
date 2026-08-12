@@ -17,7 +17,8 @@
 #include <omp.h>
 #endif
 
-enum { IMAGE_KIND_F32 = 1, IMAGE_KIND_Q4 = 4, Q4_GROUP = 128, Q4_RECORD = 66 };
+enum { IMAGE_KIND_F32 = 1, IMAGE_KIND_Q4 = 4, IMAGE_KIND_Q8 = 5,
+       Q4_GROUP = 128, Q4_RECORD = 66, Q8_RECORD = 130 };
 
 #pragma pack(push, 1)
 struct image_header {
@@ -161,7 +162,7 @@ static int map_image(const char *path, cllm_whisper_small_image *image)
     header = (const struct image_header *)(const void *)image->base;
     image->header = header;
     if (memcmp(header->magic, "WHSENC01", 8U) != 0 ||
-        (header->version < 1U || header->version > 4U) ||
+        (header->version < 1U || header->version > 5U) ||
         header->layer_count != 12U || header->n_mels != 80U ||
         header->n_state != 768U || header->n_heads != 12U ||
         header->n_mlp != 3072U || header->maximum_frames != 1500U ||
@@ -235,9 +236,21 @@ static int bind_decoder_matrix(const cllm_whisper_small_image *image,
                                uint32_t columns,
                                cllm_whisper_matrix *matrix)
 {
+    const struct descriptor *entry;
+    size_t expected;
     memset(matrix, 0, sizeof(*matrix));
     matrix->rows = rows;
     matrix->columns = columns;
+    entry = find_descriptor(image, name);
+    if (entry == NULL || entry->rank != 2U || entry->shape[0] != rows ||
+        entry->shape[1] != columns || entry->offset % _Alignof(float) != 0U)
+        return -1;
+    if (entry->kind == IMAGE_KIND_Q8 && columns % Q4_GROUP == 0U) {
+        if (multiply_size(rows, (columns / Q4_GROUP) * Q8_RECORD, &expected) != 0 ||
+            entry->byte_count != expected) return -1;
+        matrix->q8 = image->base + entry->offset;
+        return 0;
+    }
     return bind_matrix(image, name, rows, columns, &matrix->f32, &matrix->q4);
 }
 

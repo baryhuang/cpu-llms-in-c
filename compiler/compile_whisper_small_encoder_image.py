@@ -19,16 +19,19 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from .q4_image import align, q4_byte_count, quantize_q4_grouped, sha256_file
+    from .q4_image import (align, q4_byte_count, q8_byte_count,
+                           quantize_q4_grouped, quantize_q8_grouped, sha256_file)
     from .safetensors_file import SafetensorsFile
 except ImportError:
-    from q4_image import align, q4_byte_count, quantize_q4_grouped, sha256_file
+    from q4_image import (align, q4_byte_count, q8_byte_count,
+                          quantize_q4_grouped, quantize_q8_grouped, sha256_file)
     from safetensors_file import SafetensorsFile
 
 
 MAGIC = b"WHSENC01"
 KIND_F32 = 1
 KIND_Q4_GROUPED = 4
+KIND_Q8_GROUPED = 5
 HEADER = struct.Struct("<8s8I4Q")
 DESCRIPTOR = struct.Struct("<96sII4IQQQ")
 MODEL_PREFIX = "model."
@@ -60,13 +63,19 @@ def sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def is_quantized_matrix(name: str, shape: tuple[int, ...], precision: str) -> bool:
-    return (precision == "q4" and len(shape) == 2 and
-            (name.startswith("model.encoder.layers.") or
-             name.startswith("model.decoder.layers.") or
-             name == "model.decoder.embed_tokens.weight") and
-            name.endswith(".weight") and
-            shape[1] % 128 == 0)
+def matrix_kind(name: str, shape: tuple[int, ...], precision: str) -> int:
+    if (len(shape) != 2 or not name.endswith(".weight") or
+            shape[1] % 128 != 0):
+        return KIND_F32
+    if precision in ("q4", "mixed-q4-q8") and name.startswith("model.encoder.layers."):
+        return KIND_Q4_GROUPED
+    if precision == "q4" and (name.startswith("model.decoder.layers.") or
+                              name == "model.decoder.embed_tokens.weight"):
+        return KIND_Q4_GROUPED
+    if precision == "mixed-q4-q8" and (name.startswith("model.decoder.layers.") or
+                                       name == "model.decoder.embed_tokens.weight"):
+        return KIND_Q8_GROUPED
+    return KIND_F32
 
 
 def main() -> None:
@@ -76,10 +85,12 @@ def main() -> None:
     parser.add_argument("--mel-filters", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--precision", choices=("f32", "q4"), default="f32")
+    parser.add_argument("--precision", choices=("f32", "q4", "mixed-q4-q8"), default="f32")
     parser.add_argument("--graph", choices=("encoder", "full"), default="encoder")
     parser.add_argument("--skip-checkpoint-hash", action="store_true")
     args = parser.parse_args()
+    if args.precision == "mixed-q4-q8" and args.graph != "full":
+        raise ValueError("mixed-q4-q8 is defined only for the full graph")
 
     repository = Path(__file__).resolve().parents[1]
     pins = json.loads((repository / "models/whisper-small.en/pins.json").read_text())
@@ -124,8 +135,13 @@ def main() -> None:
             if info.dtype != "F32":
                 raise ValueError(f"exact encoder image requires F32: {full_name} is {info.dtype}")
             shape = tuple(info.shape)
-            kind = KIND_Q4_GROUPED if is_quantized_matrix(full_name, shape, args.precision) else KIND_F32
-            byte_count = q4_byte_count(shape) if kind == KIND_Q4_GROUPED else info.byte_count
+            kind = matrix_kind(full_name, shape, args.precision)
+            if kind == KIND_Q4_GROUPED:
+                byte_count = q4_byte_count(shape)
+            elif kind == KIND_Q8_GROUPED:
+                byte_count = q8_byte_count(shape)
+            else:
+                byte_count = info.byte_count
             entries.append(Entry(full_name[len(MODEL_PREFIX):], shape, kind=kind,
                                  source_name=full_name, byte_count=byte_count))
 
@@ -144,7 +160,8 @@ def main() -> None:
         with temporary.open("w+b") as output:
             output.truncate(file_bytes)
             output.write(HEADER.pack(
-                MAGIC, ((4 if args.precision == "q4" else 3)
+                MAGIC, ((5 if args.precision == "mixed-q4-q8" else
+                         (4 if args.precision == "q4" else 3))
                         if args.graph == "full" else
                         (2 if args.precision == "q4" else 1)),
                 len(entries), 12, 80, 768, 12, 3072, 1500,
@@ -160,6 +177,10 @@ def main() -> None:
                     raw = source.read_bytes(entry.source_name)
                     array = np.frombuffer(raw, dtype="<f4").reshape(entry.shape)
                     payload = quantize_q4_grouped(array)
+                elif entry.kind == KIND_Q8_GROUPED:
+                    raw = source.read_bytes(entry.source_name)
+                    array = np.frombuffer(raw, dtype="<f4").reshape(entry.shape)
+                    payload = quantize_q8_grouped(array)
                 else:
                     payload = source.read_bytes(entry.source_name)
                 if len(payload) != entry.byte_count:
@@ -176,8 +197,11 @@ def main() -> None:
         "schema_version": 1,
         "format": MAGIC.decode(),
         "graph": args.graph,
-        "precision": ("float32 exact correctness baseline" if args.precision == "f32" else
-                      "signed Q4 group 128 with BF16 scale for selected matrices; other tensors F32"),
+        "precision": ({
+            "f32": "float32 exact correctness baseline",
+            "q4": "signed Q4 group 128 with BF16 scale for selected matrices; other tensors F32",
+            "mixed-q4-q8": "encoder Transformer matrices Q4; decoder matrices and tied embedding/output Q8; other tensors F32",
+        }[args.precision]),
         "checkpoint_repository": source_pin["repository"],
         "checkpoint_revision": source_pin["revision"],
         "checkpoint_sha256": checkpoint_pin["sha256"],
@@ -187,6 +211,8 @@ def main() -> None:
         "tensor_count": len(entries),
         "q4_matrix_count": sum(entry.kind == KIND_Q4_GROUPED for entry in entries),
         "q4_matrix_bytes": sum(entry.byte_count for entry in entries if entry.kind == KIND_Q4_GROUPED),
+        "q8_matrix_count": sum(entry.kind == KIND_Q8_GROUPED for entry in entries),
+        "q8_matrix_bytes": sum(entry.byte_count for entry in entries if entry.kind == KIND_Q8_GROUPED),
         "payload_bytes": sum(entry.byte_count for entry in entries),
         "padding_and_directory_bytes": args.output.stat().st_size - sum(entry.byte_count for entry in entries),
         "elapsed_seconds": time.monotonic() - started,

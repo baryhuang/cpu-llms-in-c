@@ -11,6 +11,7 @@
 typedef struct {
     const float *f32;
     const unsigned char *q4;
+    const unsigned char *q8;
     size_t rows;
     size_t columns;
 } cllm_whisper_matrix;
