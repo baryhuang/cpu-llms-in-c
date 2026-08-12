@@ -79,6 +79,32 @@ static inline float whisper_small_dot_f32_128(const float *left,
     return vaddvq_f32(vaddq_f32(sum0, sum1));
 }
 
+static inline void whisper_small_dot_f32_128_x4(const float *input,
+                                                 float decoded[][128],
+                                                 float *sums)
+{
+    float32x4_t accumulators[4][2];
+    for (size_t column = 0U; column < 4U; ++column) {
+        accumulators[column][0] = vdupq_n_f32(0.0f);
+        accumulators[column][1] = vdupq_n_f32(0.0f);
+    }
+    for (size_t index = 0U; index < 128U; index += 8U) {
+        const float32x4_t input0 = vld1q_f32(input + index);
+        const float32x4_t input1 = vld1q_f32(input + index + 4U);
+        for (size_t column = 0U; column < 4U; ++column) {
+            accumulators[column][0] = vfmaq_f32(
+                accumulators[column][0], input0,
+                vld1q_f32(decoded[column] + index));
+            accumulators[column][1] = vfmaq_f32(
+                accumulators[column][1], input1,
+                vld1q_f32(decoded[column] + index + 4U));
+        }
+    }
+    for (size_t column = 0U; column < 4U; ++column)
+        sums[column] = vaddvq_f32(vaddq_f32(accumulators[column][0],
+                                            accumulators[column][1]));
+}
+
 static inline void whisper_small_q4_gemm(const unsigned char *weights,
                                          const float *input,
                                          size_t rows,
@@ -87,7 +113,7 @@ static inline void whisper_small_q4_gemm(const unsigned char *weights,
                                          const float *bias,
                                          float *output)
 {
-    enum { OUTPUT_TILE = 8 };
+    enum { OUTPUT_TILE = 64 };
     const size_t groups = input_width / 128U;
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -116,10 +142,18 @@ static inline void whisper_small_q4_gemm(const unsigned char *weights,
             }
             for (size_t row = 0U; row < rows; ++row) {
                 const float *input_group = input + row * input_width + group * 128U;
-                for (size_t column = 0U; column < tile; ++column) {
+                size_t column = 0U;
+                for (; column + 4U <= tile; column += 4U) {
+                    float sums[4];
+                    whisper_small_dot_f32_128_x4(
+                        input_group, decoded + column, sums);
+                    for (size_t lane = 0U; lane < 4U; ++lane)
+                        output[row * output_width + output_block + column + lane] +=
+                            sums[lane];
+                }
+                for (; column < tile; ++column)
                     output[row * output_width + output_block + column] +=
                         whisper_small_dot_f32_128(input_group, decoded[column]);
-                }
             }
         }
     }
