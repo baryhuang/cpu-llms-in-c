@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Whisper small.en / A113X / JFK 11 s review</title>
+  <style>
+    :root { color-scheme: light; --ink:#17202a; --muted:#637083; --line:#d8dee8; --bg:#f5f7fa; --card:#fff; --pass:#17643a; --fail:#9b2c2c; --open:#8a5a00; --code:#eef2f6; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1120px; margin:0 auto; padding:38px 24px 64px; }
+    h1 { margin:0 0 6px; font-size:30px; letter-spacing:-.02em; }
+    h2 { margin:34px 0 12px; font-size:21px; }
+    p { margin:8px 0; }
+    .muted { color:var(--muted); }
+    .grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:22px 0; }
+    .card { padding:15px 16px; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+    .card span { display:block; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+    .card strong { display:block; margin-top:3px; font-size:23px; font-variant-numeric:tabular-nums; }
+    .pass { color:var(--pass); } .fail { color:var(--fail); } .open { color:var(--open); }
+    table { width:100%; border-collapse:collapse; background:var(--card); font-variant-numeric:tabular-nums; }
+    th,td { border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }
+    th { background:#edf1f5; font-size:13px; }
+    td.num, th.num { text-align:right; white-space:nowrap; }
+    code,pre { font:13px/1.48 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    code { background:var(--code); padding:2px 4px; border-radius:3px; }
+    pre { margin:10px 0; padding:13px 15px; overflow:auto; border:1px solid var(--line); border-radius:6px; background:var(--code); white-space:pre-wrap; }
+    blockquote { margin:12px 0; padding:14px 17px; border-left:4px solid #466b9e; background:var(--card); font-size:18px; }
+    details { margin-top:12px; border:1px solid var(--line); border-radius:6px; background:var(--card); }
+    summary { padding:10px 13px; cursor:pointer; font-weight:600; }
+    details pre { margin:0; border:0; border-top:1px solid var(--line); border-radius:0 0 6px 6px; }
+    .raw a { margin-right:14px; white-space:nowrap; }
+    @media (max-width:800px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } table { font-size:13px; } }
+    @media (max-width:480px) { main { padding:24px 12px 48px; } .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body><main>
+  <h1>Whisper small.en — A113X end-to-end review</h1>
+  <p class="muted">One public 11-second speech sample. From-scratch C runtime. Greedy English transcription. No timestamps.</p>
+
+  <div class="grid">
+    <div class="card"><span>Total duration</span><strong>589.056 s</strong></div>
+    <div class="card"><span>RTF</span><strong class="fail">53.5505</strong></div>
+    <div class="card"><span>CPU</span><strong>386%</strong></div>
+    <div class="card"><span>Peak RSS</span><strong>327,820 KiB</strong></div>
+    <div class="card"><span>Decoder throughput</span><strong>1.777 tok/s</strong></div>
+    <div class="card"><span>Overall throughput</span><strong>0.0441 tok/s</strong></div>
+    <div class="card"><span>Smoke-case WER</span><strong class="pass">0 / 22</strong></div>
+    <div class="card"><span>Process swap</span><strong class="pass">0</strong></div>
+  </div>
+
+  <h2>Input and output</h2>
+  <table>
+    <tr><th>Field</th><th>Exact value</th></tr>
+    <tr><td>Input</td><td><code>whisper.cpp samples/jfk.wav</code></td></tr>
+    <tr><td>Input SHA-256</td><td><code>59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e</code></td></tr>
+    <tr><td>Input format</td><td>352,078-byte mono PCM16 WAV, 16,000 Hz, 11.000 seconds</td></tr>
+    <tr><td>Model input</td><td>Zero-padded to the fixed 30-second window; 3,000 Mel frames, 1,500 encoder frames</td></tr>
+    <tr><td>Decode policy</td><td>English transcription, batch one, greedy, no timestamps, maximum 64 steps</td></tr>
+    <tr><td>Output</td><td>26 text tokens; EOT reached on decode step 27</td></tr>
+  </table>
+
+  <p><strong>Exact emitted text, including its leading space:</strong></p>
+  <blockquote> And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.</blockquote>
+  <p><strong>Reference used for this smoke case:</strong></p>
+  <blockquote>And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.</blockquote>
+  <p>Normalization lowercases ASCII words and removes punctuation and leading whitespace. The normalized sequences match: 0 substitutions, 0 insertions and 0 deletions over 22 reference words. This is one smoke case, not the required relative-WER evaluation suite.</p>
+
+  <h2>Benchmark</h2>
+  <p>Benchmark duration does not include fixture verification. RTF uses the original 11 seconds, not the zero-padded 30-second model window.</p>
+  <table>
+    <thead><tr><th>Path</th><th class="num">Duration</th><th class="num">Share of total</th></tr></thead>
+    <tbody>
+      <tr><td>Waveform → log-Mel</td><td class="num">0.216886 s</td><td class="num">0.04%</td></tr>
+      <tr><td>12-layer encoder</td><td class="num">574.188459 s</td><td class="num">97.48%</td></tr>
+      <tr><td>Cross cache + 27 decoder-core steps</td><td class="num">14.188894 s</td><td class="num">2.41%</td></tr>
+      <tr><td>27 tied output-head evaluations</td><td class="num">0.439936 s</td><td class="num">0.07%</td></tr>
+      <tr><td>Measured runtime overhead</td><td class="num">0.021676 s</td><td class="num">&lt;0.01%</td></tr>
+      <tr><th>Total internal timer</th><th class="num">589.055851 s</th><th class="num">100%</th></tr>
+      <tr><td>External wall clock</td><td class="num">589.12 s</td><td class="num">—</td></tr>
+    </tbody>
+  </table>
+
+  <table style="margin-top:12px">
+    <thead><tr><th>Resource</th><th class="num">Measured</th></tr></thead>
+    <tbody>
+      <tr><td>User CPU time</td><td class="num">2,269.90 s</td></tr>
+      <tr><td>System CPU time</td><td class="num">5.11 s</td></tr>
+      <tr><td>Average CPU utilization</td><td class="num">386%</td></tr>
+      <tr><td>Maximum resident set</td><td class="num">327,820 KiB</td></tr>
+      <tr><td>Decoder cache</td><td class="num">115,353,456 bytes</td></tr>
+      <tr><td>Process swaps</td><td class="num">0</td></tr>
+      <tr><td>Device SwapFree before / after</td><td class="num">1,005,484 / 1,005,484 KiB</td></tr>
+      <tr><td>Exit status</td><td class="num">0</td></tr>
+    </tbody>
+  </table>
+
+  <p><strong>Exact command:</strong></p>
+  <pre>OMP_NUM_THREADS=4 OMP_DYNAMIC=FALSE /usr/bin/time -v \
+  ./build/whisper-small-transcribe-a113x \
+  small.en-full-mixed.whenc \
+  /root/whisper-bench-v1.8.0/whisper.cpp/samples/jfk.wav 64</pre>
+
+  <h2>Verification</h2>
+  <p>Verification is not counted in the benchmark above. The fixture checks three causal decoder steps against an independent NumPy implementation. Mixed Q4/Q8 hidden-state error is finite and reported; it is not a WER acceptance test.</p>
+  <table>
+    <thead><tr><th>Implementation</th><th>Expected / actual next tokens</th><th class="num">Duration</th><th class="num">Increment</th><th class="num">CPU</th><th class="num">Peak RSS</th><th class="num">Swap</th></tr></thead>
+    <tbody>
+      <tr><td>D0: Q8 NEON, 1 thread</td><td><code>[31340, 685, 50256]</code> / same</td><td class="num">0.798079 s</td><td class="num">1.00x</td><td class="num">98%</td><td class="num">155,008 KiB</td><td class="num">0</td></tr>
+      <tr><td>D1: D0 + 4-thread schedule</td><td><code>[31340, 685, 50256]</code> / same</td><td class="num">0.251960 s</td><td class="num"><strong>3.17x</strong></td><td class="num">359%</td><td class="num">154,624 KiB</td><td class="num">0</td></tr>
+    </tbody>
+  </table>
+  <p>Hidden-state RMSE per step: <code>0.027242122</code>, <code>0.0559865152</code>, <code>0.416797914</code>. Verdict: <code>FINITE_MEASURED_NOT_QUALITY_GATE</code>.</p>
+
+  <h2>Decode trace</h2>
+  <details>
+    <summary>Show all 27 measured decoder steps</summary>
+    <pre>pos  input  next   decoder-core s  output-head s
+ 1   50362    843       0.204592        0.018465
+ 2     843    523       0.204378        0.015952
+ 3     523     11       0.203745        0.016209
+ 4      11    616       0.203964        0.017765
+ 5     616   5891       0.206488        0.016140
+ 6    5891   3399       0.205963        0.016106
+ 7    3399     11       0.205482        0.016148
+ 8      11   1265       0.204850        0.015887
+ 9    1265    407       0.204772        0.016012
+10     407    644       0.206903        0.016079
+11     644    534       0.205299        0.016262
+12     534   1499       0.206167        0.016369
+13    1499    460       0.205667        0.016086
+14     460    466       0.208928        0.016168
+15     466    329       0.204192        0.016186
+16     329    345       0.204852        0.016422
+17     345     11       0.205170        0.016326
+18      11   1265       0.208474        0.015993
+19    1265    644       0.206507        0.015897
+20     644    345       0.206989        0.016045
+21     345    460       0.206955        0.016468
+22     460    466       0.207868        0.016220
+23     466    329       0.207073        0.015974
+24     329    534       0.206601        0.016022
+25     534   1499       0.206724        0.016056
+26    1499     13       0.207069        0.016019
+27      13  50256       0.206435        0.016660</pre>
+  </details>
+
+  <h2>Artifact identity and limitations</h2>
+  <table>
+    <tr><th>Item</th><th>Exact value</th></tr>
+    <tr><td>Repository commit</td><td><code>0a3193a</code></td></tr>
+    <tr><td>Full mixed image</td><td>214,878,912 bytes; SHA-256 <code>8f34d629c5ec4b8a3af4c9de03252fd60ab08781538768c3a5171f6a74b82343</code></td></tr>
+    <tr><td>A113X transcribe binary</td><td>75,632 bytes; SHA-256 <code>accd28ecb6f7ec21b405abec95b41f06066787196cce67a09f68c77ca79dcbbb</code></td></tr>
+    <tr><td>Target</td><td>Amlogic A113X, 4x Cortex-A53, maximum observed 1.416 GHz, 2,059,239,424 bytes RAM</td></tr>
+    <tr><td>Quantization</td><td>Encoder Transformer matrices Q4; decoder matrices and tied embedding/output Q8; other tensors F32</td></tr>
+  </table>
+  <p class="open"><strong>Open:</strong> sustained real-time transcription, relative WER over a multi-file suite, timestamp output, long-audio window scheduling, and repeated-run statistics.</p>
+
+  <h2>Raw files</h2>
+  <p class="raw">
+    <a href="result.json">result.json</a>
+    <a href="stdout.txt">stdout.txt</a>
+    <a href="time.txt">time.txt</a>
+    <a href="memory-before.txt">memory-before.txt</a>
+    <a href="memory-after.txt">memory-after.txt</a>
+    <a href="decoder-check-1t.txt">decoder-check-1t.txt</a>
+    <a href="decoder-check-4t.txt">decoder-check-4t.txt</a>
+  </p>
+</main></body>
+</html>

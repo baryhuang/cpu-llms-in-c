@@ -1,18 +1,35 @@
 {
   "schema_version": 1,
-  "status": "encoder_only_decoder_and_wer_unavailable",
-  "artifact": {
-    "model": "OpenAI Whisper small.en",
-    "checkpoint_repository": "openai/whisper-small.en",
-    "checkpoint_revision": "e8727524f962ee844a7319d92be39ac1bd25655a",
-    "checkpoint_sha256": "6014ac49b506df900f66f4aca6b0801eed7245594ace97bcaf73e0ae5b863066",
-    "image_format": "WHSENC01 version 2",
-    "image_precision": "signed Q4 group 128 with BF16 scales for 72 Transformer matrices; other tensors F32",
-    "image_bytes": 56763776,
-    "image_sha256": "4ac8031884f1cc4d8eae215507713bf750633c793902f6f1ec095b82d91201d5",
-    "tensor_count": 188,
-    "q4_matrix_count": 72,
-    "q4_matrix_bytes": 43794432
+  "status": "end_to_end_smoke_complete_realtime_gate_failed_quality_suite_open",
+  "artifacts": {
+    "full_mixed": {
+      "model": "OpenAI Whisper small.en",
+      "checkpoint_repository": "openai/whisper-small.en",
+      "checkpoint_revision": "e8727524f962ee844a7319d92be39ac1bd25655a",
+      "checkpoint_sha256": "6014ac49b506df900f66f4aca6b0801eed7245594ace97bcaf73e0ae5b863066",
+      "image_format": "WHSENC01 version 5",
+      "image_precision": "encoder Transformer matrices Q4; decoder matrices and tied embedding/output Q8; other tensors F32",
+      "image_bytes": 214878912,
+      "image_sha256": "8f34d629c5ec4b8a3af4c9de03252fd60ab08781538768c3a5171f6a74b82343",
+      "tensor_count": 483,
+      "q4_matrix_count": 72,
+      "q4_matrix_bytes": 43794432,
+      "q8_matrix_count": 121,
+      "q8_matrix_bytes": 155469600
+    },
+    "encoder_only_q4": {
+      "model": "OpenAI Whisper small.en",
+      "checkpoint_repository": "openai/whisper-small.en",
+      "checkpoint_revision": "e8727524f962ee844a7319d92be39ac1bd25655a",
+      "checkpoint_sha256": "6014ac49b506df900f66f4aca6b0801eed7245594ace97bcaf73e0ae5b863066",
+      "image_format": "WHSENC01 version 2",
+      "image_precision": "signed Q4 group 128 with BF16 scales for 72 Transformer matrices; other tensors F32",
+      "image_bytes": 56763776,
+      "image_sha256": "4ac8031884f1cc4d8eae215507713bf750633c793902f6f1ec095b82d91201d5",
+      "tensor_count": 188,
+      "q4_matrix_count": 72,
+      "q4_matrix_bytes": 43794432
+    }
   },
   "target": {
     "soc": "Amlogic A113X",
@@ -20,7 +37,8 @@
     "maximum_observed_clock_hz": 1416000000,
     "physical_ram_bytes": 2059239424,
     "repository_commit_cpu_stage_a2": "85591aa",
-    "repository_commit_cpu_stage_a3": "bed2af2"
+    "repository_commit_cpu_stage_a3": "bed2af2",
+    "repository_commit_end_to_end": "0a3193a"
   },
   "verification": {
     "fixture_format": "WHREAL01",
@@ -43,10 +61,19 @@
       "layer_0_rmse": 0.0605037052,
       "layer_11_final_ln_rmse": 0.238280457,
       "verdict": "finite_measured_not_quality_gate"
+    },
+    "decoder_a113x": {
+      "fixture_format": "WHDEC001",
+      "fixture_sha256": "ecfb1bd396b838937caddef1f4e161cfdec50732cdfc18ecd827ab4220e3d406",
+      "expected_next_tokens": [31340, 685, 50256],
+      "actual_next_tokens_one_thread": [31340, 685, 50256],
+      "actual_next_tokens_four_threads": [31340, 685, 50256],
+      "hidden_rmse_per_step": [0.027242122, 0.0559865152, 0.416797914],
+      "verdict": "finite_measured_not_quality_gate"
     }
   },
   "benchmarks": {
-    "definition": {
+    "encoder_definition": {
       "audio_seconds": "input log-Mel frame count multiplied by 0.01 seconds",
       "timed_path": "log-Mel input through convolution stem, selected encoder blocks and final LayerNorm",
       "excluded": ["waveform-to-log-Mel", "decoder", "tokenizer", "timestamps", "verification"],
@@ -173,6 +200,65 @@
         "final_norm_seconds": 0.022473,
         "checksum": -31979.5771,
         "layer_seconds": [45.421374, 45.386132, 45.505894, 45.448636, 44.670796, 45.870231, 45.161237, 45.001946, 45.446680, 45.365116, 45.096133, 44.991781]
+      }
+    ],
+    "decoder_increment": [
+      {
+        "stage": "D0",
+        "implementation": "A113X Q8 NEON decoder, one thread",
+        "threads": 1,
+        "fixture_steps": 3,
+        "cross_cache_seconds": 0.073277,
+        "step_and_output_head_seconds": 0.724802,
+        "duration_seconds": 0.798079,
+        "increment_vs_previous": 1.0,
+        "cpu_percent": 98,
+        "wall_seconds": 0.82,
+        "peak_rss_kib": 155008,
+        "process_swap": 0
+      },
+      {
+        "stage": "D1",
+        "implementation": "D0 plus four-thread cross-cache, decoder projections, attention heads and tied output head",
+        "threads": 4,
+        "fixture_steps": 3,
+        "cross_cache_seconds": 0.027413,
+        "step_and_output_head_seconds": 0.224547,
+        "duration_seconds": 0.251960,
+        "increment_vs_previous": 3.1675,
+        "cpu_percent": 359,
+        "wall_seconds": 0.28,
+        "peak_rss_kib": 154624,
+        "process_swap": 0
+      }
+    ],
+    "end_to_end": [
+      {
+        "stage": "E1",
+        "input": "whisper.cpp samples/jfk.wav",
+        "input_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+        "audio_seconds": 11.0,
+        "model_window_seconds": 30.0,
+        "frontend_seconds": 0.216886,
+        "encoder_seconds": 574.188459,
+        "decoder_core_seconds": 14.188894,
+        "output_head_seconds": 0.439936,
+        "total_seconds": 589.055851,
+        "wall_seconds": 589.12,
+        "rtf_against_original_audio": 53.550532,
+        "generated_text_tokens": 26,
+        "text_tokens_per_decoder_second": 1.777312,
+        "cpu_percent": 386,
+        "peak_rss_kib": 327820,
+        "process_swap": 0,
+        "device_swap_free_before_kib": 1005484,
+        "device_swap_free_after_kib": 1005484,
+        "transcript": " And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+        "quality_scope": "one public smoke case; not the relative-WER acceptance suite",
+        "normalized_smoke_case_wer": 0.0,
+        "relative_wer_increase": null,
+        "timestamps": "not emitted; no-timestamps decoding was selected",
+        "raw_record": "benchmarks/jfk-11s/result.json"
       }
     ]
   }

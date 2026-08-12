@@ -1,6 +1,6 @@
 # Whisper small.en
 
-Status: selected A113X real-time research path. The scalar 80-bin log-Mel front end and complete 12-layer encoder run from compiler-generated F32 and Q4 images. Real-weight F32 boundaries pass; the Q4 encoder and Cortex-A53 kernels are measured on A113X. The decoder and tokenizer are not implemented.
+Status: selected A113X real-time research path. A from-scratch C implementation now covers the exact mixed-radix FFT log-Mel front end, complete 12-layer encoder, cached 12-layer decoder, byte-token table and greedy English transcription. The first public A113X smoke case emits the correct normalized words, but the unchanged graph takes 589.056 seconds for 11 seconds of audio. The real-time and evaluation-suite quality gates remain open.
 
 ## Pinned architecture
 
@@ -37,9 +37,11 @@ The target is a derived model optimized jointly with the C runtime. It is not re
 | Log-Mel | centered scalar STFT, pinned `mel_80` filterbank, log clamp and normalization | committed synthetic fixture generated independently in Python |
 | Encoder stem | Conv1D 80→768, exact GELU, stride-2 Conv1D 768→768, exact GELU, position addition | miniature independent fixture checks the graph and layout |
 | Encoder | stem, position addition, 12 pre-LayerNorm attention/FFN blocks and final LayerNorm | real pinned weights checked at stem, layer 0 and final output against independent NumPy |
-| Image compiler | selective safetensors import; exact F32 image or group-128 Q4 Transformer matrices | image and source SHA-256 pins; weights excluded from Git |
+| Decoder | cached self-attention, cross-attention cache, 12 decoder blocks and tied output head | three real-weight causal steps checked against independent NumPy; one- and four-thread tokens agree |
+| Token output | compiled byte-token table, suppression policy and greedy no-timestamps decode | public JFK WAV emits readable English text |
+| Image compiler | selective safetensors import; F32, encoder Q4 and decoder/tied-head Q8 packing | image and source SHA-256 pins; weights excluded from Git |
 
-The A113X Q4 encoder image is 56,763,776 bytes. Its final measured CPU stage uses 125,056 KiB peak RSS and zero process swap, but takes 556.218 seconds for a 30-second encoder window: encoder-only RTF 18.541. The full-attention topology fails the compute gate before decoder work. Exact increments and per-layer durations are in the [A113X target record](targets/a113x/README.md).
+The full mixed image is 214,878,912 bytes. On A113X, an 11-second public WAV is zero-padded to the fixed 30-second model window and completes in 589.055851 seconds: RTF 53.5505, 386% CPU, 327,820 KiB peak RSS and zero swap. The encoder consumes 574.188459 seconds. The result establishes a working C path and identifies the unchanged encoder graph as the dominant limit; it does not establish the `<10%` relative-WER gate. Exact increments, input, transcript and raw duration/resource output are in the [A113X target record](targets/a113x/README.md).
 
 ## Build and test
 

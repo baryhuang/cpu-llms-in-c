@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "status": "end_to_end_smoke_complete_realtime_gate_failed_quality_suite_open",
+  "model": "OpenAI Whisper small.en",
+  "target": {
+    "soc": "Amlogic A113X",
+    "cpu": "4x Arm Cortex-A53",
+    "maximum_observed_clock_hz": 1416000000,
+    "physical_ram_bytes": 2059239424,
+    "threads": 4
+  },
+  "source": {
+    "repository_commit": "0a3193a",
+    "transcribe_binary_bytes": 75632,
+    "transcribe_binary_sha256": "accd28ecb6f7ec21b405abec95b41f06066787196cce67a09f68c77ca79dcbbb",
+    "decoder_check_binary_bytes": 75384,
+    "decoder_check_binary_sha256": "fb27f6c3daebf5934ebc7a27b65c2710f6a49053f883a059e69fa1f6e6da549e",
+    "generic_decoder_source_sha256": "6c5593c30dd2ad2f32655047c6fee1565a61388c901348ef8a9d67620352f95a"
+  },
+  "image": {
+    "format": "WHSENC01 version 5",
+    "precision": "encoder Transformer matrices Q4; decoder matrices and tied embedding/output Q8; other tensors F32",
+    "bytes": 214878912,
+    "sha256": "8f34d629c5ec4b8a3af4c9de03252fd60ab08781538768c3a5171f6a74b82343",
+    "tensor_count": 483,
+    "q4_matrix_count": 72,
+    "q4_matrix_bytes": 43794432,
+    "q8_matrix_count": 121,
+    "q8_matrix_bytes": 155469600
+  },
+  "input": {
+    "file": "whisper.cpp samples/jfk.wav",
+    "sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+    "bytes": 352078,
+    "format": "mono PCM16 WAV",
+    "sample_rate_hz": 16000,
+    "audio_seconds": 11.0,
+    "model_window_seconds": 30.0,
+    "input_frames": 3000,
+    "output_frames": 1500,
+    "padding": "zero-pad from 11 seconds to the fixed 30-second model window"
+  },
+  "command": "OMP_NUM_THREADS=4 OMP_DYNAMIC=FALSE /usr/bin/time -v ./build/whisper-small-transcribe-a113x small.en-full-mixed.whenc /root/whisper-bench-v1.8.0/whisper.cpp/samples/jfk.wav 64",
+  "output": {
+    "transcript": " And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+    "transcript_utf8_bytes": 109,
+    "generated_text_tokens": 26,
+    "decode_steps_including_eot": 27,
+    "eot_reached": true
+  },
+  "quality": {
+    "scope": "one public smoke case; not the relative-WER acceptance suite",
+    "reference_transcript": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country.",
+    "normalization": "lowercase ASCII words; punctuation and leading whitespace removed",
+    "normalized_word_edits": 0,
+    "normalized_reference_words": 22,
+    "smoke_case_wer": 0.0,
+    "relative_wer_increase": null,
+    "relative_wer_gate": "open",
+    "timestamps": "not emitted; no-timestamps decoding was selected"
+  },
+  "benchmark": {
+    "repetitions": 1,
+    "frontend_seconds": 0.216886,
+    "encoder_seconds": 574.188459,
+    "decoder_core_seconds": 14.188894,
+    "output_head_seconds": 0.439936,
+    "decoder_total_seconds": 14.628830,
+    "runtime_overhead_seconds": 0.021676,
+    "total_seconds": 589.055851,
+    "wall_seconds_external": 589.12,
+    "rtf_against_original_audio": 53.550532,
+    "text_tokens_per_decoder_second": 1.777312,
+    "decoder_cache_bytes": 115353456,
+    "cpu_percent": 386,
+    "user_cpu_seconds": 2269.90,
+    "system_cpu_seconds": 5.11,
+    "peak_rss_kib": 327820,
+    "process_swaps": 0,
+    "device_swap_free_before_kib": 1005484,
+    "device_swap_free_after_kib": 1005484,
+    "exit_status": 0
+  },
+  "decoder_verification": {
+    "fixture_format": "WHDEC001",
+    "fixture_bytes": 18500,
+    "fixture_sha256": "ecfb1bd396b838937caddef1f4e161cfdec50732cdfc18ecd827ab4220e3d406",
+    "expected_next_tokens": [31340, 685, 50256],
+    "one_thread": {
+      "actual_next_tokens": [31340, 685, 50256],
+      "cross_cache_seconds": 0.073277,
+      "three_steps_and_heads_seconds": 0.724802,
+      "total_seconds": 0.798079,
+      "cpu_percent": 98,
+      "wall_seconds": 0.82,
+      "peak_rss_kib": 155008,
+      "process_swaps": 0
+    },
+    "four_threads": {
+      "actual_next_tokens": [31340, 685, 50256],
+      "cross_cache_seconds": 0.027413,
+      "three_steps_and_heads_seconds": 0.224547,
+      "total_seconds": 0.251960,
+      "increment_vs_one_thread": 3.1675,
+      "cpu_percent": 359,
+      "wall_seconds": 0.28,
+      "peak_rss_kib": 154624,
+      "process_swaps": 0
+    },
+    "hidden_rmse_per_step": [0.027242122, 0.0559865152, 0.416797914],
+    "verdict": "FINITE_MEASURED_NOT_QUALITY_GATE"
+  },
+  "raw_files": {
+    "stdout.txt": "594324b5074bc4e07a7e187a5d7e31f0db856884f478e89ec18c79dc11336e51",
+    "time.txt": "3dc9e6e12c4f0ca78a24634c32ea23d8ab9096b31cd85d70b7200e06138d286d",
+    "memory-before.txt": "602d4eaf9520b809fd6a9a9828e75e06e9335a94428059c036062933aac54e5c",
+    "memory-after.txt": "71e1096e1270446c8bfe8c4202fa1e6ed31b6738e77a6821bb97e0c1f3b023e2",
+    "decoder-check-1t.txt": "8a1dd51b68429749387033d551a5866cbb2bf975448c7c97230ca4e8a14578cd",
+    "decoder-check-4t.txt": "656807bebef779e480ae6166131330369c43b83dadbcd7509e96e731b5be39b2"
+  }
+}

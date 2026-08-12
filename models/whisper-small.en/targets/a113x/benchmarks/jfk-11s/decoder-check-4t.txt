@@ -1,0 +1,31 @@
+section=benchmark boundary=decoder_cross_cache duration_seconds=0.027413 allocated_bytes=479244
+section=verification boundary=decoder_step step=0 input_token=50257 expected_next_token=31340 actual_next_token=31340 hidden_max_abs=0.225585938 hidden_rmse=0.027242122 expected_top_logit=9.26139164 actual_top_logit=9.29240322 status=FINITE_MEASURED
+section=benchmark boundary=decoder_step step=0 duration_seconds=0.064975 output_head_seconds=0.018478
+section=verification boundary=decoder_step step=1 input_token=50362 expected_next_token=685 actual_next_token=685 hidden_max_abs=0.257164955 hidden_rmse=0.0559865152 expected_top_logit=15.3608875 actual_top_logit=15.4195433 status=FINITE_MEASURED
+section=benchmark boundary=decoder_step step=1 duration_seconds=0.054429 output_head_seconds=0.016184
+section=verification boundary=decoder_step step=2 input_token=464 expected_next_token=50256 actual_next_token=50256 hidden_max_abs=2.38467216 hidden_rmse=0.416797914 expected_top_logit=11.3519258 actual_top_logit=10.6816273 status=FINITE_MEASURED
+section=benchmark boundary=decoder_step step=2 duration_seconds=0.053386 output_head_seconds=0.017095
+VERDICT: FINITE_MEASURED_NOT_QUALITY_GATE
+	Command being timed: "./build/whisper-small-decoder-check-a113x small.en-full-mixed.whenc real-decoder-fixture.bin"
+	User time (seconds): 0.94
+	System time (seconds): 0.07
+	Percent of CPU this job got: 359%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.28
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 154624
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 1
+	Minor (reclaiming a frame) page faults: 3028
+	Voluntary context switches: 31
+	Involuntary context switches: 190
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
