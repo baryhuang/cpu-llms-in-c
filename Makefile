@@ -187,7 +187,7 @@ $(WHISPER_SMALL_TRANSCRIBE): tools/whisper_small_transcribe.c \
 $(WHISPER_SMALL_A113X_TRANSCRIBE): tools/whisper_small_transcribe.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_A113X)/whisper_small_encoder.c $(WHISPER_SMALL_A113X)/whisper_small_a113x_kernels.h \
-	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
+	$(WHISPER_SMALL_A113X)/whisper_small_frontend.c \
 	$(WHISPER_SMALL_A113X)/whisper_small_decoder.c \
 	$(WHISPER_SMALL_A113X)/whisper_small_a113x_decoder_kernels.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
@@ -196,13 +196,13 @@ $(WHISPER_SMALL_A113X_TRANSCRIBE): tools/whisper_small_transcribe.c \
 		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_transcribe.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_encoder.c \
-		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
+		$(WHISPER_SMALL_A113X)/whisper_small_frontend.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_decoder.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
 $(WHISPER_SMALL_A113X_DECODER_CHECK): tools/whisper_small_decoder_check.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
-	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
+	$(WHISPER_SMALL_A113X)/whisper_small_frontend.c \
 	$(WHISPER_SMALL_A113X)/whisper_small_decoder.c \
 	$(WHISPER_SMALL_A113X)/whisper_small_a113x_decoder_kernels.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
@@ -211,30 +211,30 @@ $(WHISPER_SMALL_A113X_DECODER_CHECK): tools/whisper_small_decoder_check.c \
 		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_decoder_check.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
-		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
+		$(WHISPER_SMALL_A113X)/whisper_small_frontend.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_decoder.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
 $(WHISPER_SMALL_A113X_BENCH): tools/whisper_small_encoder_bench.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_A113X)/whisper_small_encoder.c $(WHISPER_SMALL_A113X)/whisper_small_a113x_kernels.h \
-	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c
+	$(WHISPER_SMALL_A113X)/whisper_small_frontend.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
 		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_bench.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_encoder.c \
-		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+		$(WHISPER_SMALL_A113X)/whisper_small_frontend.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
 $(WHISPER_SMALL_A113X_CHECK): tools/whisper_small_encoder_check.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_A113X)/whisper_small_encoder.c $(WHISPER_SMALL_A113X)/whisper_small_a113x_kernels.h \
-	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c
+	$(WHISPER_SMALL_A113X)/whisper_small_frontend.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
 		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_check.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_encoder.c \
-		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+		$(WHISPER_SMALL_A113X)/whisper_small_frontend.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
 clean:
 	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK) $(QWEN35_LAYER_TEST) \

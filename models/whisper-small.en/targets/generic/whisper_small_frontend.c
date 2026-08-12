@@ -63,10 +63,12 @@ static size_t reflect_index(long index, size_t count)
     return (size_t)index;
 }
 
+#ifndef WHISPER_SMALL_TARGET_ENCODER_STEM
 static float exact_gelu(float value)
 {
     return 0.5f * value * (1.0f + erff(value * 0.70710678118654752440f));
 }
+#endif
 
 size_t cllm_whisper_small_log_mel_frames(size_t sample_count)
 {
@@ -195,6 +197,12 @@ int cllm_whisper_encoder_stem(const float *mel,
                               float *scratch,
                               size_t scratch_floats)
 {
+#ifdef WHISPER_SMALL_TARGET_ENCODER_STEM
+    return WHISPER_SMALL_TARGET_ENCODER_STEM(
+        mel, n_mels, input_frames, n_state,
+        conv1_weight, conv1_bias, conv2_weight, conv2_bias, positions,
+        output, scratch, scratch_floats);
+#else
     const size_t output_frames = cllm_whisper_encoder_stem_output_frames(input_frames);
     const size_t required = cllm_whisper_encoder_stem_scratch_floats(input_frames, n_state);
 
@@ -248,4 +256,5 @@ int cllm_whisper_encoder_stem(const float *mel,
         }
     }
     return 0;
+#endif
 }
