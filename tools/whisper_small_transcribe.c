@@ -41,7 +41,8 @@ static uint32_t u32le(const unsigned char *p)
            (uint32_t)p[2] << 16U | (uint32_t)p[3] << 24U;
 }
 
-static int read_wav_pcm16(const char *path, float **audio, size_t *sample_count,
+static int read_wav_pcm16(const char *path, int compact_window,
+                          float **audio, size_t *sample_count,
                           double *original_seconds)
 {
     FILE *file = fopen(path, "rb");
@@ -88,8 +89,14 @@ static int read_wav_pcm16(const char *path, float **audio, size_t *sample_count,
         return -1;
     }
     const size_t source_samples = pcm_bytes / 2U;
-    *original_seconds = (double)source_samples / SAMPLE_RATE;
-    *sample_count = MAX_SAMPLES;
+    const size_t used_samples = source_samples < MAX_SAMPLES ? source_samples : MAX_SAMPLES;
+    if (used_samples <= CLLM_WHISPER_N_FFT / 2U) {
+        fprintf(stderr, "error: WAV is too short for the 400-sample analysis window\n");
+        free(pcm);
+        return -1;
+    }
+    *original_seconds = (double)used_samples / SAMPLE_RATE;
+    *sample_count = compact_window ? used_samples : MAX_SAMPLES;
     *audio = calloc(*sample_count, sizeof(float));
     if (*audio == NULL) { free(pcm); return -1; }
     for (size_t index = 0U; index < source_samples && index < MAX_SAMPLES; ++index) {
@@ -157,19 +164,25 @@ int main(int argc, char **argv)
     double run_started;
     uint32_t token = SOT, next_token;
     float next_logit;
+    int compact_window = 0;
     int result = 2;
     memset(&model, 0, sizeof(model));
     model.image.fd = -1;
     memset(&decoder_state, 0, sizeof(decoder_state));
-    if (argc < 3 || argc > 4) {
-        fprintf(stderr, "usage: %s FULL_IMAGE.whenc AUDIO.wav [MAX_TOKENS]\n", argv[0]);
+    if (argc < 3 || argc > 5) {
+        fprintf(stderr, "usage: %s FULL_IMAGE.whenc AUDIO.wav [MAX_TOKENS] "
+                        "[fixed30|compact]\n", argv[0]);
         return 2;
     }
     if (argc == 4) {
         maximum_tokens = strtoul(argv[3], NULL, 10);
         if (maximum_tokens < 3U || maximum_tokens > 448U) return 2;
     }
-    if (read_wav_pcm16(argv[2], &audio, &samples, &audio_seconds) != 0 ||
+    if (argc == 5) {
+        if (strcmp(argv[4], "compact") == 0) compact_window = 1;
+        else if (strcmp(argv[4], "fixed30") != 0) return 2;
+    }
+    if (read_wav_pcm16(argv[2], compact_window, &audio, &samples, &audio_seconds) != 0 ||
         cllm_whisper_small_model_open(argv[1], &model) != 0 || !model.has_decoder)
         goto cleanup;
     run_started = monotonic_seconds();
@@ -224,11 +237,12 @@ int main(int argc, char **argv)
         if (text == NULL) goto cleanup_state;
     }
     total_seconds = monotonic_seconds() - run_started;
-    printf("section=result audio_seconds=%.6f input_frames=%zu output_frames=%zu "
+    printf("section=result window=%s audio_seconds=%.6f input_frames=%zu output_frames=%zu "
            "frontend_seconds=%.6f encoder_seconds=%.6f decoder_core_seconds=%.6f "
            "output_head_seconds=%.6f total_seconds=%.6f rtf=%.6f "
            "decoder_cache_bytes=%zu generated_tokens=%zu\n",
-           audio_seconds, input_frames, output_frames, frontend_seconds,
+           compact_window ? "compact" : "fixed30", audio_seconds,
+           input_frames, output_frames, frontend_seconds,
            encoder_seconds, decoder_seconds, output_head_seconds,
            total_seconds, total_seconds / audio_seconds,
            decoder_state.allocated_bytes, decoder_state.token_count - 2U);
