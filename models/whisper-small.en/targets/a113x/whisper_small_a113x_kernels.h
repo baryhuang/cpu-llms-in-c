@@ -105,6 +105,46 @@ static inline void whisper_small_dot_f32_128_x4(const float *input,
                                             accumulators[column][1]));
 }
 
+static inline void whisper_small_dot_f32_128_x4x2(const float *input0,
+                                                   const float *input1,
+                                                   float decoded[][128],
+                                                   float *sums0,
+                                                   float *sums1)
+{
+    float32x4_t accumulators0[4][2];
+    float32x4_t accumulators1[4][2];
+    for (size_t column = 0U; column < 4U; ++column) {
+        accumulators0[column][0] = vdupq_n_f32(0.0f);
+        accumulators0[column][1] = vdupq_n_f32(0.0f);
+        accumulators1[column][0] = vdupq_n_f32(0.0f);
+        accumulators1[column][1] = vdupq_n_f32(0.0f);
+    }
+    for (size_t index = 0U; index < 128U; index += 8U) {
+        const float32x4_t input00 = vld1q_f32(input0 + index);
+        const float32x4_t input01 = vld1q_f32(input0 + index + 4U);
+        const float32x4_t input10 = vld1q_f32(input1 + index);
+        const float32x4_t input11 = vld1q_f32(input1 + index + 4U);
+        for (size_t column = 0U; column < 4U; ++column) {
+            const float32x4_t weight0 = vld1q_f32(decoded[column] + index);
+            const float32x4_t weight1 = vld1q_f32(decoded[column] + index + 4U);
+            accumulators0[column][0] = vfmaq_f32(
+                accumulators0[column][0], input00, weight0);
+            accumulators0[column][1] = vfmaq_f32(
+                accumulators0[column][1], input01, weight1);
+            accumulators1[column][0] = vfmaq_f32(
+                accumulators1[column][0], input10, weight0);
+            accumulators1[column][1] = vfmaq_f32(
+                accumulators1[column][1], input11, weight1);
+        }
+    }
+    for (size_t column = 0U; column < 4U; ++column) {
+        sums0[column] = vaddvq_f32(vaddq_f32(accumulators0[column][0],
+                                              accumulators0[column][1]));
+        sums1[column] = vaddvq_f32(vaddq_f32(accumulators1[column][0],
+                                              accumulators1[column][1]));
+    }
+}
+
 static inline void whisper_small_q4_gemm(const unsigned char *weights,
                                          const float *input,
                                          size_t rows,
@@ -140,13 +180,38 @@ static inline void whisper_small_q4_gemm(const unsigned char *weights,
                 whisper_small_decode_q4_group(record + 2U, scale,
                                                decoded[column]);
             }
-            for (size_t row = 0U; row < rows; ++row) {
+            size_t row = 0U;
+            for (; row + 2U <= rows; row += 2U) {
+                const float *input_group0 = input + row * input_width + group * 128U;
+                const float *input_group1 = input_group0 + input_width;
+                size_t column = 0U;
+                for (; column + 4U <= tile; column += 4U) {
+                    float sums0[4];
+                    float sums1[4];
+                    whisper_small_dot_f32_128_x4x2(
+                        input_group0, input_group1, decoded + column,
+                        sums0, sums1);
+                    for (size_t lane = 0U; lane < 4U; ++lane) {
+                        output[row * output_width + output_block + column + lane] +=
+                            sums0[lane];
+                        output[(row + 1U) * output_width + output_block + column + lane] +=
+                            sums1[lane];
+                    }
+                }
+                for (; column < tile; ++column) {
+                    output[row * output_width + output_block + column] +=
+                        whisper_small_dot_f32_128(input_group0, decoded[column]);
+                    output[(row + 1U) * output_width + output_block + column] +=
+                        whisper_small_dot_f32_128(input_group1, decoded[column]);
+                }
+            }
+            for (; row < rows; ++row) {
                 const float *input_group = input + row * input_width + group * 128U;
                 size_t column = 0U;
                 for (; column + 4U <= tile; column += 4U) {
                     float sums[4];
-                    whisper_small_dot_f32_128_x4(
-                        input_group, decoded + column, sums);
+                    whisper_small_dot_f32_128_x4(input_group,
+                                                  decoded + column, sums);
                     for (size_t lane = 0U; lane < 4U; ++lane)
                         output[row * output_width + output_block + column + lane] +=
                             sums[lane];
