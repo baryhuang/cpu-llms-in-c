@@ -2,6 +2,7 @@
 #define CLLM_WHISPER_SMALL_IMAGE_H
 
 #include "whisper_small_encoder.h"
+#include "whisper_small_decoder.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -28,6 +29,8 @@ typedef struct {
     const float *final_norm_weight;
     const float *final_norm_bias;
     cllm_whisper_encoder_block_weights layers[CLLM_WHISPER_SMALL_IMAGE_LAYERS];
+    cllm_whisper_decoder_weights decoder;
+    int has_decoder;
 } cllm_whisper_small_model;
 
 typedef struct {

@@ -161,7 +161,7 @@ static int map_image(const char *path, cllm_whisper_small_image *image)
     header = (const struct image_header *)(const void *)image->base;
     image->header = header;
     if (memcmp(header->magic, "WHSENC01", 8U) != 0 ||
-        (header->version != 1U && header->version != 2U) ||
+        (header->version < 1U || header->version > 4U) ||
         header->layer_count != 12U || header->n_mels != 80U ||
         header->n_state != 768U || header->n_heads != 12U ||
         header->n_mlp != 3072U || header->maximum_frames != 1500U ||
@@ -229,6 +229,87 @@ static int bind_layer(const cllm_whisper_small_image *image,
     return 0;
 }
 
+static int bind_decoder_matrix(const cllm_whisper_small_image *image,
+                               const char *name,
+                               uint32_t rows,
+                               uint32_t columns,
+                               cllm_whisper_matrix *matrix)
+{
+    memset(matrix, 0, sizeof(*matrix));
+    matrix->rows = rows;
+    matrix->columns = columns;
+    return bind_matrix(image, name, rows, columns, &matrix->f32, &matrix->q4);
+}
+
+static int bind_decoder_layer(const cllm_whisper_small_image *image,
+                              size_t index,
+                              cllm_whisper_decoder_layer_weights *weights)
+{
+    char prefix[64];
+    char name[128];
+#define BIND_VECTOR(field, suffix, count) do { \
+    snprintf(name, sizeof(name), "%s%s", prefix, suffix); \
+    weights->field = bind_f32(image, name, 1U, count, 0U, 0U); \
+    if (weights->field == NULL) return -1; \
+} while (0)
+#define BIND_DECODER_MATRIX(field, suffix, rows, columns) do { \
+    snprintf(name, sizeof(name), "%s%s", prefix, suffix); \
+    if (bind_decoder_matrix(image, name, rows, columns, &weights->field) != 0) return -1; \
+} while (0)
+    memset(weights, 0, sizeof(*weights));
+    snprintf(prefix, sizeof(prefix), "decoder.layers.%zu.", index);
+    BIND_VECTOR(self_norm_weight, "self_attn_layer_norm.weight", 768U);
+    BIND_VECTOR(self_norm_bias, "self_attn_layer_norm.bias", 768U);
+    BIND_DECODER_MATRIX(self_query, "self_attn.q_proj.weight", 768U, 768U);
+    BIND_VECTOR(self_query_bias, "self_attn.q_proj.bias", 768U);
+    BIND_DECODER_MATRIX(self_key, "self_attn.k_proj.weight", 768U, 768U);
+    BIND_DECODER_MATRIX(self_value, "self_attn.v_proj.weight", 768U, 768U);
+    BIND_VECTOR(self_value_bias, "self_attn.v_proj.bias", 768U);
+    BIND_DECODER_MATRIX(self_output, "self_attn.out_proj.weight", 768U, 768U);
+    BIND_VECTOR(self_output_bias, "self_attn.out_proj.bias", 768U);
+
+    BIND_VECTOR(cross_norm_weight, "encoder_attn_layer_norm.weight", 768U);
+    BIND_VECTOR(cross_norm_bias, "encoder_attn_layer_norm.bias", 768U);
+    BIND_DECODER_MATRIX(cross_query, "encoder_attn.q_proj.weight", 768U, 768U);
+    BIND_VECTOR(cross_query_bias, "encoder_attn.q_proj.bias", 768U);
+    BIND_DECODER_MATRIX(cross_key, "encoder_attn.k_proj.weight", 768U, 768U);
+    BIND_DECODER_MATRIX(cross_value, "encoder_attn.v_proj.weight", 768U, 768U);
+    BIND_VECTOR(cross_value_bias, "encoder_attn.v_proj.bias", 768U);
+    BIND_DECODER_MATRIX(cross_output, "encoder_attn.out_proj.weight", 768U, 768U);
+    BIND_VECTOR(cross_output_bias, "encoder_attn.out_proj.bias", 768U);
+
+    BIND_VECTOR(mlp_norm_weight, "final_layer_norm.weight", 768U);
+    BIND_VECTOR(mlp_norm_bias, "final_layer_norm.bias", 768U);
+    BIND_DECODER_MATRIX(mlp_input, "fc1.weight", 3072U, 768U);
+    BIND_VECTOR(mlp_input_bias, "fc1.bias", 3072U);
+    BIND_DECODER_MATRIX(mlp_output, "fc2.weight", 768U, 3072U);
+    BIND_VECTOR(mlp_output_bias, "fc2.bias", 768U);
+#undef BIND_VECTOR
+#undef BIND_DECODER_MATRIX
+    return 0;
+}
+
+static int bind_decoder(const cllm_whisper_small_image *image,
+                        cllm_whisper_decoder_weights *decoder)
+{
+    memset(decoder, 0, sizeof(*decoder));
+    if (bind_decoder_matrix(image, "decoder.embed_tokens.weight", 51864U, 768U,
+                            &decoder->token_embedding) != 0)
+        return -1;
+    decoder->positions = bind_f32(image, "decoder.embed_positions.weight",
+                                  2U, 448U, 768U, 0U);
+    decoder->final_norm_weight = bind_f32(image, "decoder.layer_norm.weight",
+                                          1U, 768U, 0U, 0U);
+    decoder->final_norm_bias = bind_f32(image, "decoder.layer_norm.bias",
+                                        1U, 768U, 0U, 0U);
+    if (decoder->positions == NULL || decoder->final_norm_weight == NULL ||
+        decoder->final_norm_bias == NULL)
+        return -1;
+    for (size_t layer = 0U; layer < 12U; ++layer)
+        if (bind_decoder_layer(image, layer, &decoder->layers[layer]) != 0) return -1;
+    return 0;
+}
+
 int cllm_whisper_small_model_open(const char *path, cllm_whisper_small_model *model)
 {
     if (path == NULL || model == NULL) return -1;
@@ -251,6 +332,10 @@ int cllm_whisper_small_model_open(const char *path, cllm_whisper_small_model *mo
 #undef BIND_MODEL
     for (size_t layer = 0U; layer < 12U; ++layer)
         if (bind_layer(&model->image, layer, &model->layers[layer]) != 0) goto fail;
+    if (model->image_version >= 3U) {
+        if (bind_decoder(&model->image, &model->decoder) != 0) goto fail;
+        model->has_decoder = 1;
+    }
     return 0;
 fail:
     cllm_whisper_small_model_close(model);

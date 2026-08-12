@@ -126,12 +126,13 @@ int main(int argc, char **argv)
         for (size_t layer = 0U; layer < metrics.executed_layers; ++layer)
             duration += metrics.layer_seconds[layer];
         if (!compare(names[boundary], actual, expected[boundary], state_count,
-                     duration, metrics.workspace_bytes, model.image_version == 1U))
+                     duration, metrics.workspace_bytes,
+                     model.image_version == 1U || model.image_version == 3U))
             passed = 0;
     }
     if (!passed)
         printf("VERDICT: FAIL\n");
-    else if (model.image_version == 1U)
+    else if (model.image_version == 1U || model.image_version == 3U)
         printf("VERDICT: PASS\n");
     else
         printf("VERDICT: FINITE_MEASURED_NOT_QUALITY_GATE\n");

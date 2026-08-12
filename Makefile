@@ -32,6 +32,7 @@ WHISPER_SMALL_ENCODER_BENCH := $(BUILD_DIR)/whisper-small-encoder-bench
 WHISPER_SMALL_A113X := models/whisper-small.en/targets/a113x
 WHISPER_SMALL_A113X_BENCH := $(BUILD_DIR)/whisper-small-encoder-bench-a113x
 WHISPER_SMALL_A113X_CHECK := $(BUILD_DIR)/whisper-small-encoder-check-a113x
+WHISPER_SMALL_DECODER_CHECK := $(BUILD_DIR)/whisper-small-decoder-check
 
 .PHONY: all a113x clean fixture linux-tools test whisper-small-tools
 
@@ -41,7 +42,8 @@ linux-tools: $(TARGET_PROBE)
 
 a113x: $(QWEN35_A113X_TASK) $(WHISPER_SMALL_A113X_BENCH) $(WHISPER_SMALL_A113X_CHECK)
 
-whisper-small-tools: $(WHISPER_SMALL_ENCODER_CHECK) $(WHISPER_SMALL_ENCODER_BENCH)
+whisper-small-tools: $(WHISPER_SMALL_ENCODER_CHECK) $(WHISPER_SMALL_ENCODER_BENCH) \
+	$(WHISPER_SMALL_DECODER_CHECK)
 
 fixture: $(GEMMA4_LAYER_FIXTURE)
 
@@ -132,22 +134,38 @@ $(WHISPER_ENCODER_BLOCK_FIXTURE): compiler/generate_whisper_encoder_block_fixtur
 $(WHISPER_SMALL_ENCODER_CHECK): tools/whisper_small_encoder_check.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_encoder.h \
-	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h
+	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_check.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
-		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) -lm
+		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c -o $@ $(LDFLAGS) -lm
 
 $(WHISPER_SMALL_ENCODER_BENCH): tools/whisper_small_encoder_bench.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_encoder.h \
-	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h
+	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_bench.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
-		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) -lm
+		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c -o $@ $(LDFLAGS) -lm
+
+$(WHISPER_SMALL_DECODER_CHECK): tools/whisper_small_decoder_check.c \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_encoder.h \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h \
+	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) tools/whisper_small_decoder_check.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
+		$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c -o $@ $(LDFLAGS) -lm
 
 $(WHISPER_SMALL_A113X_BENCH): tools/whisper_small_encoder_bench.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
@@ -177,4 +195,4 @@ clean:
 		$(WHISPER_SMALL_LOG_MEL_TEST) $(WHISPER_ENCODER_STEM_TEST) \
 		$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_SMALL_ENCODER_CHECK) \
 		$(WHISPER_SMALL_ENCODER_BENCH) $(WHISPER_SMALL_A113X_BENCH) \
-		$(WHISPER_SMALL_A113X_CHECK)
+		$(WHISPER_SMALL_A113X_CHECK) $(WHISPER_SMALL_DECODER_CHECK)

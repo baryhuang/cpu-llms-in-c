@@ -85,7 +85,7 @@ int main(int argc, char **argv)
         checksum += (double)output[index] * (double)((index % 17U) + 1U);
 
     printf("section=benchmark model=whisper-small.en image_precision=%s ",
-           model.image_version == 1U ? "f32" : "q4");
+           (model.image_version == 1U || model.image_version == 3U) ? "f32" : "q4");
     printf("input_frames=%zu output_frames=%zu layers=%zu repetitions=%zu ",
            input_frames, output_frames, layer_count, repetitions);
     printf("image_map_seconds=%.6f duration_seconds=%.6f mean_seconds=%.6f ",

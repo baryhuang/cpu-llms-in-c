@@ -62,7 +62,10 @@ def sha256_bytes(payload: bytes) -> str:
 
 def is_quantized_matrix(name: str, shape: tuple[int, ...], precision: str) -> bool:
     return (precision == "q4" and len(shape) == 2 and
-            name.startswith("model.encoder.layers.") and name.endswith(".weight") and
+            (name.startswith("model.encoder.layers.") or
+             name.startswith("model.decoder.layers.") or
+             name == "model.decoder.embed_tokens.weight") and
+            name.endswith(".weight") and
             shape[1] % 128 == 0)
 
 
@@ -74,6 +77,7 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--precision", choices=("f32", "q4"), default="f32")
+    parser.add_argument("--graph", choices=("encoder", "full"), default="encoder")
     parser.add_argument("--skip-checkpoint-hash", action="store_true")
     args = parser.parse_args()
 
@@ -113,7 +117,8 @@ def main() -> None:
     entries = [Entry("frontend.mel_80", tuple(mel.shape), payload=mel.tobytes())]
     with SafetensorsFile(args.checkpoint) as source:
         for full_name in sorted(source.tensors):
-            if not full_name.startswith("model.encoder."):
+            if not (full_name.startswith("model.encoder.") or
+                    (args.graph == "full" and full_name.startswith("model.decoder."))):
                 continue
             info = source.tensors[full_name]
             if info.dtype != "F32":
@@ -139,7 +144,9 @@ def main() -> None:
         with temporary.open("w+b") as output:
             output.truncate(file_bytes)
             output.write(HEADER.pack(
-                MAGIC, 2 if args.precision == "q4" else 1,
+                MAGIC, ((4 if args.precision == "q4" else 3)
+                        if args.graph == "full" else
+                        (2 if args.precision == "q4" else 1)),
                 len(entries), 12, 80, 768, 12, 3072, 1500,
                 directory_offset, data_offset, file_bytes, 0,
             ))
@@ -168,8 +175,9 @@ def main() -> None:
     manifest = {
         "schema_version": 1,
         "format": MAGIC.decode(),
+        "graph": args.graph,
         "precision": ("float32 exact correctness baseline" if args.precision == "f32" else
-                      "signed Q4 group 128 with BF16 scale for encoder Transformer matrices; other tensors F32"),
+                      "signed Q4 group 128 with BF16 scale for selected matrices; other tensors F32"),
         "checkpoint_repository": source_pin["repository"],
         "checkpoint_revision": source_pin["revision"],
         "checkpoint_sha256": checkpoint_pin["sha256"],
