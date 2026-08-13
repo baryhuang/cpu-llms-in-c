@@ -1,6 +1,6 @@
 # Qwen3.6-27B on Apple M3 Pro
 
-Status: the real layer-0 MLP primitive is implemented and measured. The full graph, tokenizer and token generation are not implemented. No result here is model tokens/s.
+Status: the real layer-0 MLP and exact-shape one-token DeltaNet recurrent core are implemented and measured. Q4 DeltaNet projections, convolution, full layers, tokenizer and token generation are not implemented. No result here is model tokens/s.
 
 ## Target pin
 
@@ -30,7 +30,7 @@ This is an implementation scope, not a performance claim against oMLX.
 | useful threadgroup count is machine-specific | test 64, 128, 256 and 512 threads at startup and select the measured winner | implemented |
 | MLP down is followed by residual addition | fuse residual into the down-projection kernel | implemented |
 | layer schedule is exactly `3 GatedDeltaNet + 1 attention`, repeated 16 times | emit a static graph with no dynamic operator dispatch | planned |
-| DeltaNet state precision and layout are known | retain state in FP32 and fuse state update with output projection | planned |
+| DeltaNet state precision and layout are known | retain state in FP32; one recurrent-core kernel updates all 48 heads | core implemented; projection fusion planned |
 | only 16 layers use full attention and only 4 KV heads exist | emit a separate attention kernel and compact KV-cache image | planned |
 | prompt prefill has larger matrix shapes than decode | benchmark Metal against Apple CPU Accelerate/BNNS per static shape; choose at compile time | planned |
 | a deployment may declare a fixed prompt prefix | compile both KV and DeltaNet-state snapshots | planned, optional |
@@ -60,14 +60,27 @@ Each number below is the median of the named metric across five independent proc
 
 | Step | Measured path | Duration | Increment | Cumulative |
 |---:|---|---:|---:|---:|
-| 0 | internal generic 36-byte interleaved blocks; split gate/up/SiLU | 1.076765 ms | — | 1.000000x |
-| 1 | Apple split nibble/metadata streams; split gate/up/SiLU | 1.005700 ms | 1.070660x | 1.070660x |
-| 2 | same Apple layout; fused gate/up/SiLU | **0.966926 ms** | 1.040101x | **1.113594x** |
-| 3 | fused gate/up/SiLU plus down/residual | **1.377035 ms** | not comparable: adds down projection | **109.223859 GB/s** effective weight traffic |
+| 0 | internal generic 36-byte interleaved blocks; split gate/up/SiLU | 1.072704 ms | — | 1.000000x |
+| 1 | Apple split nibble/metadata streams; split gate/up/SiLU | 1.008423 ms | 1.063744x | 1.063744x |
+| 2 | same Apple layout; fused gate/up/SiLU | **0.969930 ms** | 1.039686x | **1.105960x** |
+| 3 | fused gate/up/SiLU plus down/residual | **1.367039 ms** | not comparable: adds down projection | **110.022589 GB/s** effective weight traffic |
 
 The full MLP reads 150,405,120 packed weight/metadata bytes. The generated image is 150,409,216 bytes including its page-sized header. It is memory-mapped rather than copied into Metal-owned weight buffers.
 
-Peak process physical footprint was 178,407,040 bytes. This is a benchmark footprint, not a projected release-runtime footprint: the process also keeps 100,648,960 bytes of benchmark-only generic-reference buffers for the incremental comparison.
+Peak process physical footprint was 178,390,656 bytes. This is a benchmark footprint, not a projected release-runtime footprint: the process also keeps 100,648,960 bytes of benchmark-only generic-reference buffers for the incremental comparison.
+
+## DeltaNet recurrent core
+
+Qwen3.6-27B uses 16 key heads and 48 value heads, both with dimension 128. Each key head is repeated for three value heads. One linear-attention layer retains a `48 x 128 x 128` FP32 state: 3,145,728 bytes. All 48 layers retain 150,994,944 bytes (144 MiB), before convolution windows and allocator overhead.
+
+The measured primitive starts after q/k L2 normalization and `g`/`beta` calculation. It applies decay, delta update and output contraction for one token. It excludes Q4 projections, depthwise convolution, gated RMSNorm and output projection.
+
+| Path | Duration | Effective state traffic | Decision |
+|---|---:|---:|---|
+| scalar thread per value channel | **0.152173 ms** | **62.016185 GB/s** | selected |
+| `float2` per thread | 0.155072 ms | 60.860 GB/s | rejected; no gain |
+
+The protocol alternates path order across five samples in each process and resets state before each sample. Each sample contains 100 updates; the table is the median of five process medians. Output error against C is exactly zero for this input; maximum state error is 3.7252903e-9.
 
 ## Verification
 
@@ -100,6 +113,9 @@ All five raw process results, artifact hashes and the rejected experiments are i
 |---|---:|---|
 | pair gate/up bytes into a second physical representation | 1.0103x median complete-MLP change | rejected; one-percent result did not justify another gate/up copy |
 | rewrite `dot(scale*q+bias,x)` as `scale*dot(q,x)+bias*sum(x)` | 1.369155 ms vs 1.366022 ms stable baseline | rejected; no gain and anomalous slow runs |
+| cache half a DeltaNet head in 32 KiB threadgroup memory | 0.488036 ms vs 0.328170 ms direct | rejected; explicit copy and synchronization cost more than cached reread |
+| process four DeltaNet values per thread | 0.400043 ms vs 0.320628 ms direct | rejected; reduced occupancy dominates scalar reuse |
+| process two DeltaNet values per thread | 0.155072 ms vs 0.152173 ms direct | rejected after balanced path-order measurement |
 
 Rejected code is not retained in the execution path.
 
@@ -117,7 +133,7 @@ An external oMLX entry for a 14-GPU-core M3 Pro / 36 GB machine reports Qwen3.6-
 | quality | logit/output and held-out quality gates pass |
 | metrics | prefill, TTFT, decode, peak physical footprint and energy |
 
-The repository has not passed this gate. The current 1.113594x number compares two repository-internal primitive paths; it must not be presented as a speedup over oMLX.
+The repository has not passed this gate. The current 1.105960x number compares two repository-internal MLP paths; it must not be presented as a speedup over oMLX.
 
 ## Build and reproduce
 
@@ -126,6 +142,7 @@ No Python command is used for this target.
 ```sh
 make qwen36-tools
 make qwen36-m3-bench
+make qwen36-m3-deltanet-bench
 
 build/qwen36-safetensors-inspect SOURCE.safetensors \
   language_model.model.layers.0.mlp.gate_proj.weight \
@@ -137,6 +154,8 @@ build/qwen36-m3-pack SOURCE.safetensors layer0-mlp.q36m3 SOURCE_SHA256
 
 build/qwen36-m3-mlp-bench --image layer0-mlp.q36m3 \
   build/qwen36-m3-q4.metallib 40 5
+
+build/qwen36-m3-deltanet-bench build/qwen36-m3-q4.metallib 100 10
 ```
 
 `qwen36-m3-pack` refuses to overwrite an existing output file. Checkpoint shards and generated images remain outside Git.

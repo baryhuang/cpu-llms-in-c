@@ -45,7 +45,7 @@ The dense model visits nearly every packed weight for every generated token. Q4 
 |---|---:|---|
 | Complete quantized checkpoint tensor bytes | 16,054,262,240 bytes | includes 921,460,192-byte vision tower |
 | Text-only tensor bytes | 15,132,802,048 bytes | inventory value before target repacking; excludes vision tower |
-| GatedDeltaNet recurrent state | roughly 151 MB | retained across decode |
+| GatedDeltaNet recurrent state | 150,994,944 bytes / 144 MiB | `48 layers x 48 heads x 128 x 128 x FP32` |
 | Attention KV cache, FP16 | 64 KiB/token | 16 attention layers only |
 | Attention KV cache, Q8 planning value | 32 KiB/token | requires a separate quality gate |
 | 16K Q8 KV plus recurrent state | roughly 663 MB | excludes weights and scratch |

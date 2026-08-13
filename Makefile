@@ -35,17 +35,21 @@ WHISPER_SMALL_TRANSCRIBE := $(BUILD_DIR)/whisper-small-transcribe
 WHISPER_SMALL_A113X_TRANSCRIBE := $(BUILD_DIR)/whisper-small-transcribe-a113x
 QWEN36_M3 := models/qwen3.6-27b/targets/apple-m3-pro
 QWEN36_M3_AIR := $(BUILD_DIR)/qwen36-m3-q4.air
+QWEN36_M3_DELTANET_AIR := $(BUILD_DIR)/qwen36-m3-deltanet.air
 QWEN36_M3_METALLIB := $(BUILD_DIR)/qwen36-m3-q4.metallib
 QWEN36_M3_RUNTIME_OBJECT := $(BUILD_DIR)/qwen36-m3.o
 QWEN36_M3_BENCH_OBJECT := $(BUILD_DIR)/qwen36-m3-mlp-bench.o
 QWEN36_M3_BENCH := $(BUILD_DIR)/qwen36-m3-mlp-bench
+QWEN36_M3_DELTANET_OBJECT := $(BUILD_DIR)/qwen36-m3-deltanet.o
+QWEN36_M3_DELTANET_BENCH_OBJECT := $(BUILD_DIR)/qwen36-m3-deltanet-bench.o
+QWEN36_M3_DELTANET_BENCH := $(BUILD_DIR)/qwen36-m3-deltanet-bench
 QWEN36_IMPORT := models/qwen3.6-27b/import
 QWEN36_SAFETENSORS_INSPECT := $(BUILD_DIR)/qwen36-safetensors-inspect
 QWEN36_SAFETENSORS_TEST := $(BUILD_DIR)/qwen36-safetensors-test
 QWEN36_SHA256_TEST := $(BUILD_DIR)/qwen36-sha256-test
 QWEN36_M3_PACK := $(BUILD_DIR)/qwen36-m3-pack
 
-.PHONY: all a113x clean fixture linux-tools qwen36-m3-bench qwen36-tools test whisper-small-tools
+.PHONY: all a113x clean fixture linux-tools qwen36-m3-bench qwen36-m3-deltanet-bench qwen36-tools test whisper-small-tools
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
@@ -60,6 +64,9 @@ whisper-small-tools: $(WHISPER_SMALL_ENCODER_CHECK) $(WHISPER_SMALL_ENCODER_BENC
 
 qwen36-m3-bench: $(QWEN36_M3_BENCH) $(QWEN36_M3_METALLIB)
 	$(QWEN36_M3_BENCH) $(QWEN36_M3_METALLIB)
+
+qwen36-m3-deltanet-bench: $(QWEN36_M3_DELTANET_BENCH) $(QWEN36_M3_METALLIB)
+	$(QWEN36_M3_DELTANET_BENCH) $(QWEN36_M3_METALLIB)
 
 qwen36-tools: $(QWEN36_SAFETENSORS_INSPECT) $(QWEN36_M3_PACK)
 
@@ -246,8 +253,12 @@ $(QWEN36_M3_AIR): $(QWEN36_M3)/qwen36_q4.metal
 	mkdir -p $(BUILD_DIR)
 	xcrun -sdk macosx metal -c $< -o $@
 
-$(QWEN36_M3_METALLIB): $(QWEN36_M3_AIR)
-	xcrun -sdk macosx metallib $< -o $@
+$(QWEN36_M3_DELTANET_AIR): $(QWEN36_M3)/qwen36_deltanet.metal
+	mkdir -p $(BUILD_DIR)
+	xcrun -sdk macosx metal -c $< -o $@
+
+$(QWEN36_M3_METALLIB): $(QWEN36_M3_AIR) $(QWEN36_M3_DELTANET_AIR)
+	xcrun -sdk macosx metallib $^ -o $@
 
 $(QWEN36_M3_RUNTIME_OBJECT): $(QWEN36_M3)/qwen36_m3.m $(QWEN36_M3)/qwen36_m3.h \
 	$(QWEN36_M3)/qwen36_m3_image.h
@@ -259,6 +270,20 @@ $(QWEN36_M3_BENCH_OBJECT): tools/qwen36_m3_mlp_bench.c $(QWEN36_M3)/qwen36_m3.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN36_M3) -c $< -o $@
 
 $(QWEN36_M3_BENCH): $(QWEN36_M3_RUNTIME_OBJECT) $(QWEN36_M3_BENCH_OBJECT)
+	$(CC) $^ -o $@ -framework Foundation -framework Metal -lm
+
+$(QWEN36_M3_DELTANET_OBJECT): $(QWEN36_M3)/qwen36_m3_deltanet.m \
+	$(QWEN36_M3)/qwen36_m3.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O3 -std=c11 -Wall -Wextra -Wpedantic -fobjc-arc -I$(QWEN36_M3) -c $< -o $@
+
+$(QWEN36_M3_DELTANET_BENCH_OBJECT): tools/qwen36_m3_deltanet_bench.c \
+	$(QWEN36_M3)/qwen36_m3.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN36_M3) -c $< -o $@
+
+$(QWEN36_M3_DELTANET_BENCH): $(QWEN36_M3_DELTANET_OBJECT) \
+	$(QWEN36_M3_DELTANET_BENCH_OBJECT)
 	$(CC) $^ -o $@ -framework Foundation -framework Metal -lm
 
 $(QWEN36_SAFETENSORS_INSPECT): tools/qwen36_safetensors_inspect.c \
@@ -296,7 +321,10 @@ clean:
 		$(WHISPER_SMALL_ENCODER_BENCH) $(WHISPER_SMALL_A113X_BENCH) \
 		$(WHISPER_SMALL_A113X_CHECK) $(WHISPER_SMALL_DECODER_CHECK) \
 		$(WHISPER_SMALL_A113X_DECODER_CHECK) $(WHISPER_SMALL_TRANSCRIBE) \
-		$(WHISPER_SMALL_A113X_TRANSCRIBE) $(QWEN36_M3_AIR) $(QWEN36_M3_METALLIB) \
-		$(QWEN36_M3_RUNTIME_OBJECT) $(QWEN36_M3_BENCH_OBJECT) $(QWEN36_M3_BENCH)
+		$(WHISPER_SMALL_A113X_TRANSCRIBE) $(QWEN36_M3_AIR) \
+		$(QWEN36_M3_DELTANET_AIR) $(QWEN36_M3_METALLIB) \
+		$(QWEN36_M3_RUNTIME_OBJECT) $(QWEN36_M3_BENCH_OBJECT) $(QWEN36_M3_BENCH) \
+		$(QWEN36_M3_DELTANET_OBJECT) $(QWEN36_M3_DELTANET_BENCH_OBJECT) \
+		$(QWEN36_M3_DELTANET_BENCH)
 	rm -f $(QWEN36_SAFETENSORS_INSPECT) $(QWEN36_SAFETENSORS_TEST) \
 		$(QWEN36_SHA256_TEST) $(QWEN36_M3_PACK)

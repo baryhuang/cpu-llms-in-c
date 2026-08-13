@@ -11,7 +11,10 @@ enum {
     QWEN36_HIDDEN_SIZE = 5120,
     QWEN36_MLP_SIZE = 17408,
     QWEN36_Q4_GROUP_SIZE = 64,
-    QWEN36_Q4_GROUP_BYTES = 36
+    QWEN36_Q4_GROUP_BYTES = 36,
+    QWEN36_DELTA_KEY_HEADS = 16,
+    QWEN36_DELTA_VALUE_HEADS = 48,
+    QWEN36_DELTA_HEAD_SIZE = 128
 };
 
 typedef struct {
@@ -48,6 +51,24 @@ typedef struct {
     float full_mlp_output_first_8[8];
 } qwen36_m3_mlp_result;
 
+typedef struct {
+    char device_name[128];
+    unsigned warmup_iterations;
+    unsigned measured_iterations;
+    size_t state_bytes;
+    size_t footprint_before_bytes;
+    size_t footprint_peak_bytes;
+    double direct_device_ms;
+    double float2_vectorized_ms;
+    double speedup;
+    double direct_state_gbps;
+    double vectorized_state_gbps;
+    double max_abs_error_output;
+    double max_abs_error_state;
+    float reference_output_first_8[8];
+    float vectorized_output_first_8[8];
+} qwen36_m3_deltanet_core_result;
+
 /*
  * Runs the real Qwen3.6-27B layer-0 MLP shape. With image_path set, weights
  * come from the pinned checkpoint image; otherwise deterministic packed
@@ -61,6 +82,19 @@ int qwen36_m3_run_mlp_microbenchmark(const char *metallib_path,
                                     qwen36_m3_mlp_result *result,
                                     char *error_message,
                                     size_t error_message_capacity);
+
+/*
+ * Measures one exact-shape Qwen3.6 recurrent DeltaNet state update. Inputs are
+ * deterministic normalized projected tensors. This does not include Q4
+ * projections, convolution, normalization or the output projection.
+ */
+int qwen36_m3_run_deltanet_core_benchmark(
+    const char *metallib_path,
+    unsigned warmup_iterations,
+    unsigned measured_iterations,
+    qwen36_m3_deltanet_core_result *result,
+    char *error_message,
+    size_t error_message_capacity);
 
 #ifdef __cplusplus
 }

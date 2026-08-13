@@ -24,7 +24,8 @@
   },
   "build": {
     "runtime_binary_sha256": "7795b76e3f9d9071b39e0f2d114fd7dcb8ec1d12b7fba268fddeec72e1bf2621",
-    "metallib_sha256": "49477afe150d0bfab4792bffeac5fc8d2292e3402a340e3c97fa530ae7db4092",
+    "deltanet_benchmark_binary_sha256": "7a12451789753a4b3066ec73c13d2155260f9c6f7d2626e569dfafe9ad73db7f",
+    "metallib_sha256": "b40771e044791c85d475b5ff1cd8c0415c0aac4d479357fbc8e5f4efc107dfae",
     "metal_compiler": "Apple Metal 32023.864",
     "python_loaded_by_runtime": false,
     "mlx_loaded_by_runtime": false,
@@ -49,32 +50,76 @@
     {
       "path": "internal generic-layout reference",
       "work": "gate + up + SiLU",
-      "milliseconds": 1.076765,
+      "milliseconds": 1.072704,
       "incremental_speedup": null,
       "cumulative_speedup": 1.0
     },
     {
       "path": "Apple split-stream layout, unfused",
       "work": "gate + up + SiLU",
-      "milliseconds": 1.005700,
-      "incremental_speedup": 1.070660,
-      "cumulative_speedup": 1.070660
+      "milliseconds": 1.008423,
+      "incremental_speedup": 1.063744,
+      "cumulative_speedup": 1.063744
     },
     {
       "path": "Apple split-stream layout, fused",
       "work": "gate + up + SiLU",
-      "milliseconds": 0.966926,
-      "incremental_speedup": 1.040101,
-      "cumulative_speedup": 1.113594
+      "milliseconds": 0.969930,
+      "incremental_speedup": 1.039686,
+      "cumulative_speedup": 1.105960
     }
   ],
   "full_mlp_median": {
-    "milliseconds": 1.377035,
-    "effective_weight_gbps": 109.223859,
+    "milliseconds": 1.367039,
+    "effective_weight_gbps": 110.022589,
     "mapped_image_bytes": 150409216,
     "metal_owned_benchmark_buffer_bytes": 100648960,
     "physical_footprint_before_bytes": 4342912,
-    "physical_footprint_peak_bytes": 178407040
+    "physical_footprint_peak_bytes": 178390656
+  },
+  "deltanet_recurrent_core": {
+    "scope": "one-token recurrent state update; Q4 projections, convolution and output norm/projection excluded",
+    "shape": {
+      "key_heads": 16,
+      "value_heads": 48,
+      "key_head_dim": 128,
+      "value_head_dim": 128,
+      "key_head_repeat": 3,
+      "state_bytes_per_layer": 3145728,
+      "state_bytes_48_layers": 150994944
+    },
+    "protocol": {
+      "process_runs": 5,
+      "warmup_iterations_per_run": 10,
+      "samples_per_path_per_run": 5,
+      "measured_iterations_per_sample": 100,
+      "path_order": "alternated by sample; state reset before each sample",
+      "summary": "within-process sample median, then cross-process metric median"
+    },
+    "direct_scalar_per_value_ms": 0.152173,
+    "float2_per_thread_ms": 0.155072,
+    "selected_path": "direct scalar per value",
+    "selected_effective_state_gbps": 62.016185,
+    "physical_footprint_peak_bytes": 87327936,
+    "max_abs_error_both_outputs_vs_c": 0.0,
+    "max_abs_error_both_states_vs_c": 3.7252903e-9,
+    "c_reference_output_first_8": [
+      0.000769191945, 0.000802469149, 0.000835012936,
+      0.00086682057, 0.000897890131, 0.000928219,
+      0.000957807177, 0.000986652332
+    ],
+    "gpu_output_first_8": [
+      0.000769191945, 0.000802469149, 0.000835012936,
+      0.00086682057, 0.000897890131, 0.000928219,
+      0.000957807177, 0.000986652332
+    ],
+    "runs": [
+      {"direct_ms": 0.153577, "float2_ms": 0.159051, "direct_gbps": 61.449337, "peak_bytes": 87115008},
+      {"direct_ms": 0.154607, "float2_ms": 0.155072, "direct_gbps": 61.039958, "peak_bytes": 87393600},
+      {"direct_ms": 0.151376, "float2_ms": 0.153081, "direct_gbps": 62.342567, "peak_bytes": 87327936},
+      {"direct_ms": 0.148710, "float2_ms": 0.155258, "direct_gbps": 63.460144, "peak_bytes": 86934592},
+      {"direct_ms": 0.152173, "float2_ms": 0.154662, "direct_gbps": 62.016185, "peak_bytes": 87540992}
+    ]
   },
   "correctness": {
     "max_abs_error_fused_vs_split_gpu": 0.0,
@@ -100,11 +145,11 @@
     ]
   },
   "runs": [
-    {"generic_ms": 1.084032, "split_ms": 1.017016, "fused_ms": 0.973935, "full_mlp_ms": 1.357907, "full_mlp_gbps": 110.762436, "peak_bytes": 178669120, "threads": 512},
-    {"generic_ms": 1.076136, "split_ms": 1.000435, "fused_ms": 0.970549, "full_mlp_ms": 1.377035, "full_mlp_gbps": 109.223859, "peak_bytes": 178407040, "threads": 512},
-    {"generic_ms": 1.076765, "split_ms": 1.014786, "fused_ms": 0.955769, "full_mlp_ms": 1.398756, "full_mlp_gbps": 107.527755, "peak_bytes": 178292288, "threads": 256},
-    {"generic_ms": 1.070166, "split_ms": 1.005700, "fused_ms": 0.966926, "full_mlp_ms": 1.383405, "full_mlp_gbps": 108.720945, "peak_bytes": 178292288, "threads": 256},
-    {"generic_ms": 1.111260, "split_ms": 0.990167, "fused_ms": 0.960994, "full_mlp_ms": 1.347105, "full_mlp_gbps": 111.650612, "peak_bytes": 179078720, "threads": 256}
+    {"generic_ms": 1.062029, "split_ms": 1.015840, "fused_ms": 0.994131, "full_mlp_ms": 1.359882, "full_mlp_gbps": 110.601574, "peak_bytes": 178521728, "threads": 512},
+    {"generic_ms": 1.099658, "split_ms": 1.008423, "fused_ms": 0.955387, "full_mlp_ms": 1.384121, "full_mlp_gbps": 108.664733, "peak_bytes": 178390656, "threads": 128},
+    {"generic_ms": 1.060397, "split_ms": 1.001590, "fused_ms": 0.976365, "full_mlp_ms": 1.371098, "full_mlp_gbps": 109.696850, "peak_bytes": 178374208, "threads": 512},
+    {"generic_ms": 1.085348, "split_ms": 1.001706, "fused_ms": 0.964759, "full_mlp_ms": 1.365348, "full_mlp_gbps": 110.158823, "peak_bytes": 178308672, "threads": 256},
+    {"generic_ms": 1.072704, "split_ms": 1.011584, "fused_ms": 0.969930, "full_mlp_ms": 1.367039, "full_mlp_gbps": 110.022589, "peak_bytes": 178865728, "threads": 128}
   ],
   "rejected_experiments": [
     {
@@ -118,6 +163,24 @@
       "candidate_full_mlp_ms": 1.369155,
       "speedup": 0.997711,
       "decision": "rejected: no stable performance gain"
+    },
+    {
+      "name": "DeltaNet state in 32 KiB threadgroup tiles",
+      "direct_ms": 0.328170,
+      "candidate_ms": 0.488036,
+      "decision": "rejected: explicit load and synchronization are slower than cached device reads"
+    },
+    {
+      "name": "DeltaNet float4 per thread",
+      "direct_ms": 0.320628,
+      "candidate_ms": 0.400043,
+      "decision": "rejected: lower occupancy dominates load-width reuse"
+    },
+    {
+      "name": "DeltaNet float2 per thread",
+      "direct_ms": 0.152173,
+      "candidate_ms": 0.155072,
+      "decision": "rejected: balanced five-process measurement shows no gain"
     }
   ]
 }
