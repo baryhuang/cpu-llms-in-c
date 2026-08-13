@@ -1,0 +1,123 @@
+{
+  "schema": 2,
+  "status": "layer0-mlp-primitive-only",
+  "measured_at": "2026-08-14T00:32:05+08:00",
+  "scope": "Qwen3.6-27B layer-0 gate, up, SiLU, down and residual; not full-model token throughput",
+  "machine": {
+    "model_identifier": "Mac15,6",
+    "soc": "Apple M3 Pro",
+    "cpu": "5 performance + 6 efficiency cores",
+    "gpu_cores": 14,
+    "memory_bytes": 38654705664,
+    "metal": "Metal 3",
+    "macos": "15.7.3 (24G419)",
+    "power": "battery, discharging",
+    "thermal_warning": false
+  },
+  "source": {
+    "repository": "mlx-community/Qwen3.6-27B-4bit",
+    "revision": "c000ac2c2057d94be3fa931000c31723aac53282",
+    "source_shard_sha256": "2689680915661f040c50c35244d08b336def279e509e1ca11873f8dd1b0e7ce0",
+    "layer0_image_bytes": 150409216,
+    "layer0_image_sha256": "e403fc67a0cce60eed5a809c57e52507819971571e7cf8c59757fe61c40f0aea",
+    "image_committed": false
+  },
+  "build": {
+    "runtime_binary_sha256": "7795b76e3f9d9071b39e0f2d114fd7dcb8ec1d12b7fba268fddeec72e1bf2621",
+    "metallib_sha256": "49477afe150d0bfab4792bffeac5fc8d2292e3402a340e3c97fa530ae7db4092",
+    "metal_compiler": "Apple Metal 32023.864",
+    "python_loaded_by_runtime": false,
+    "mlx_loaded_by_runtime": false,
+    "llama_cpp_loaded_by_runtime": false
+  },
+  "shape": {
+    "hidden": 5120,
+    "intermediate": 17408,
+    "quantization": "affine Q4 group-64",
+    "bytes_per_projection": 50135040,
+    "full_mlp_weight_bytes": 150405120
+  },
+  "protocol": {
+    "process_runs": 5,
+    "warmup_iterations_per_run": 5,
+    "measured_iterations_per_path_per_run": 40,
+    "schedule_candidates_threads": [64, 128, 256, 512],
+    "schedule_sample": "median of five 10-iteration samples within each process",
+    "summary": "median of each metric across five independent process runs"
+  },
+  "incremental_median": [
+    {
+      "path": "internal generic-layout reference",
+      "work": "gate + up + SiLU",
+      "milliseconds": 1.076765,
+      "incremental_speedup": null,
+      "cumulative_speedup": 1.0
+    },
+    {
+      "path": "Apple split-stream layout, unfused",
+      "work": "gate + up + SiLU",
+      "milliseconds": 1.005700,
+      "incremental_speedup": 1.070660,
+      "cumulative_speedup": 1.070660
+    },
+    {
+      "path": "Apple split-stream layout, fused",
+      "work": "gate + up + SiLU",
+      "milliseconds": 0.966926,
+      "incremental_speedup": 1.040101,
+      "cumulative_speedup": 1.113594
+    }
+  ],
+  "full_mlp_median": {
+    "milliseconds": 1.377035,
+    "effective_weight_gbps": 109.223859,
+    "mapped_image_bytes": 150409216,
+    "metal_owned_benchmark_buffer_bytes": 100648960,
+    "physical_footprint_before_bytes": 4342912,
+    "physical_footprint_peak_bytes": 178407040
+  },
+  "correctness": {
+    "max_abs_error_fused_vs_split_gpu": 0.0,
+    "max_abs_error_fused_vs_generic_gpu": 2.98023224e-7,
+    "max_abs_error_fused_vs_c_first_8_rows": 6.2584877e-7,
+    "max_abs_error_fused_vs_source_bf16_first_8_rows": 6.2584877e-7,
+    "max_abs_error_full_mlp_vs_source_bf16_first_8_rows": 5.06639481e-7,
+    "source_bf16_gate_up_first_8": [
+      0.376946419, -0.0139522506, -0.0393279605, -0.162114337,
+      -0.0161591358, -0.0162833314, -0.0067269057, 0.0444968119
+    ],
+    "gpu_gate_up_first_8": [
+      0.37694639, -0.0139522357, -0.0393278077, -0.162113711,
+      -0.016159106, -0.0162833426, -0.00672694482, 0.0444968045
+    ],
+    "source_bf16_full_mlp_first_8": [
+      0.145588845, 0.340642303, 0.236884966, 0.177922145,
+      0.21115385, 0.309731871, 0.193791032, 0.203297257
+    ],
+    "gpu_full_mlp_first_8": [
+      0.145589232, 0.340641797, 0.236884803, 0.177922025,
+      0.211153775, 0.309731722, 0.193790987, 0.203297168
+    ]
+  },
+  "runs": [
+    {"generic_ms": 1.084032, "split_ms": 1.017016, "fused_ms": 0.973935, "full_mlp_ms": 1.357907, "full_mlp_gbps": 110.762436, "peak_bytes": 178669120, "threads": 512},
+    {"generic_ms": 1.076136, "split_ms": 1.000435, "fused_ms": 0.970549, "full_mlp_ms": 1.377035, "full_mlp_gbps": 109.223859, "peak_bytes": 178407040, "threads": 512},
+    {"generic_ms": 1.076765, "split_ms": 1.014786, "fused_ms": 0.955769, "full_mlp_ms": 1.398756, "full_mlp_gbps": 107.527755, "peak_bytes": 178292288, "threads": 256},
+    {"generic_ms": 1.070166, "split_ms": 1.005700, "fused_ms": 0.966926, "full_mlp_ms": 1.383405, "full_mlp_gbps": 108.720945, "peak_bytes": 178292288, "threads": 256},
+    {"generic_ms": 1.111260, "split_ms": 0.990167, "fused_ms": 0.960994, "full_mlp_ms": 1.347105, "full_mlp_gbps": 111.650612, "peak_bytes": 179078720, "threads": 256}
+  ],
+  "rejected_experiments": [
+    {
+      "name": "gate/up byte-paired copy",
+      "full_mlp_speedup_median": 1.0103,
+      "decision": "rejected: adds another full gate/up representation for an unstable one-percent result"
+    },
+    {
+      "name": "affine dot decomposition",
+      "baseline_full_mlp_ms": 1.366022,
+      "candidate_full_mlp_ms": 1.369155,
+      "speedup": 0.997711,
+      "decision": "rejected: no stable performance gain"
+    }
+  ]
+}
