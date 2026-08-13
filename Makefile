@@ -17,9 +17,6 @@ QWEN35_LAYER_FIXTURE := tests/fixtures/qwen35_layer_v1.bin
 QWEN35_A113X := models/qwen3.5-0.8b/targets/a113x
 QWEN35_TASK := $(BUILD_DIR)/qwen35-task
 QWEN35_A113X_TASK := $(BUILD_DIR)/qwen35-task-a113x
-WHISPER_GENERIC := models/whisper-large-v3/targets/generic
-WHISPER_LOG_MEL_TEST := $(BUILD_DIR)/whisper-log-mel-test
-WHISPER_LOG_MEL_FIXTURE := tests/fixtures/whisper_log_mel_128_v1.bin
 WHISPER_SMALL_GENERIC := models/whisper-small.en/targets/generic
 WHISPER_SMALL_LOG_MEL_TEST := $(BUILD_DIR)/whisper-small-log-mel-test
 WHISPER_SMALL_LOG_MEL_FIXTURE := tests/fixtures/whisper_log_mel_80_v1.bin
@@ -53,14 +50,12 @@ whisper-small-tools: $(WHISPER_SMALL_ENCODER_CHECK) $(WHISPER_SMALL_ENCODER_BENC
 fixture: $(GEMMA4_LAYER_FIXTURE)
 
 test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35_LAYER_FIXTURE) \
-	$(WHISPER_LOG_MEL_TEST) $(WHISPER_LOG_MEL_FIXTURE) \
 	$(WHISPER_SMALL_LOG_MEL_TEST) $(WHISPER_SMALL_LOG_MEL_FIXTURE) \
 	$(WHISPER_ENCODER_STEM_TEST) $(WHISPER_ENCODER_STEM_FIXTURE) \
 	$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_ENCODER_BLOCK_FIXTURE)
 	python3 -m unittest discover -s tests -p 'test_*.py'
 	$(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE)
 	$(QWEN35_LAYER_TEST) $(QWEN35_LAYER_FIXTURE)
-	$(WHISPER_LOG_MEL_TEST) $(WHISPER_LOG_MEL_FIXTURE)
 	$(WHISPER_SMALL_LOG_MEL_TEST) $(WHISPER_SMALL_LOG_MEL_FIXTURE)
 	$(WHISPER_ENCODER_STEM_TEST) $(WHISPER_ENCODER_STEM_FIXTURE)
 	$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_ENCODER_BLOCK_FIXTURE)
@@ -100,14 +95,6 @@ $(QWEN35_A113X_TASK): $(QWEN35_A113X)/qwen35_task.c $(QWEN35_A113X)/qwen35_a113x
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 $< \
 		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
-
-$(WHISPER_LOG_MEL_TEST): tests/whisper_log_mel_test.c $(WHISPER_GENERIC)/whisper_frontend.c $(WHISPER_GENERIC)/whisper_frontend.h
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_GENERIC) tests/whisper_log_mel_test.c \
-		$(WHISPER_GENERIC)/whisper_frontend.c -o $@ $(LDFLAGS) -lm
-
-$(WHISPER_LOG_MEL_FIXTURE): compiler/generate_whisper_log_mel_fixture.py
-	python3 $< --n-mels 128 --output $@
 
 $(WHISPER_SMALL_LOG_MEL_TEST): tests/whisper_small_log_mel_test.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h
@@ -238,7 +225,7 @@ $(WHISPER_SMALL_A113X_CHECK): tools/whisper_small_encoder_check.c \
 
 clean:
 	rm -f $(TARGET_PROBE) $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK) $(QWEN35_LAYER_TEST) \
-		$(QWEN35_TASK) $(QWEN35_A113X_TASK) $(WHISPER_LOG_MEL_TEST) \
+		$(QWEN35_TASK) $(QWEN35_A113X_TASK) \
 		$(WHISPER_SMALL_LOG_MEL_TEST) $(WHISPER_ENCODER_STEM_TEST) \
 		$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_SMALL_ENCODER_CHECK) \
 		$(WHISPER_SMALL_ENCODER_BENCH) $(WHISPER_SMALL_A113X_BENCH) \

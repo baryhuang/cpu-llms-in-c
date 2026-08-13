@@ -14,7 +14,6 @@ This command runs the Python unit tests and the miniature C layer fixture. It do
 | C layer fixture | `fixtures/gemma4_layer_v1.bin` | ten tensor boundaries for one miniature local layer |
 | Official layer-0 fixture | generated, ignored | two real token rows and official layer-0 weights |
 | Complete task graph | generated, ignored | all 35 text layers and two output labels |
-| Whisper large-v3 front end | `fixtures/whisper_log_mel_128_v1.bin` | pinned 128-bin filterbank, centered STFT, log clamp and normalization against the scalar C boundary |
 | Whisper small.en front end | `fixtures/whisper_log_mel_80_v1.bin` | pinned 80-bin filterbank, centered STFT, log clamp and normalization against the scalar C boundary |
 | Whisper encoder stem | `fixtures/whisper_encoder_stem_v1.bin` | Conv1D, exact GELU, stride-2 Conv1D, layout transpose and position addition |
 | Whisper encoder block | `fixtures/whisper_encoder_block_v1.bin` | pre-norm multi-head self-attention, residual, pre-norm GELU FFN and residual |
