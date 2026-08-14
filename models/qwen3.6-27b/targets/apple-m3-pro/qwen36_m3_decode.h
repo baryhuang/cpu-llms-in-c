@@ -46,6 +46,26 @@ int qwen36_m3_model_forward(
     char *error_message,
     size_t error_message_capacity);
 
+/* Submit one token without waiting for Metal completion. The model owns one
+ * workspace and therefore permits exactly one in-flight forward. This split
+ * lets the caller overlap CPU detokenization and output with GPU execution. */
+int qwen36_m3_model_forward_submit(
+    qwen36_m3_model *model,
+    uint32_t token_id,
+    uint32_t position,
+    char *error_message,
+    size_t error_message_capacity);
+
+/* Wait for the submitted forward and expose its read-only logits until the
+ * next submit. Calling this without an in-flight forward is an error. */
+int qwen36_m3_model_forward_wait(
+    qwen36_m3_model *model,
+    qwen36_m3_decode_result *result,
+    const float **logits,
+    size_t *logit_count,
+    char *error_message,
+    size_t error_message_capacity);
+
 void qwen36_m3_model_close(qwen36_m3_model *model);
 
 #endif

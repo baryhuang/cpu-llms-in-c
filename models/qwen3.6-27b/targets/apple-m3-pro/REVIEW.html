@@ -162,6 +162,28 @@ int max2(int a, int b) {
     </tbody>
   </table>
 
+  <h3>Streaming delivery A/B</h3>
+  <p>Decode is an asynchronous <code>submit</code>/<code>wait</code> pair around one in-flight Metal command. While the GPU runs the next forward, the CPU decodes and flushes the newest complete UTF-8 suffix to the descriptor named by <code>QWEN36_STREAM_FD</code>; JSON keeps standard output to itself. Thirteen fresh-process runs in one sitting: one discarded warmup, then four rounds of three variants with the variant order rotated each round. Same images, byte-identical metallib, the 36-token prompt above, greedy seed 42. All 12 measured runs produced identical token IDs and identical text.</p>
+  <table>
+    <thead><tr><th>Variant</th><th class="num">Decode decisions/s, mean of 4</th><th>Four rounds</th></tr></thead>
+    <tbody>
+      <tr><td>Parent commit <code>d99ef9f</code>, synchronous forward</td><td class="num">8.545635</td><td><code>8.5665 8.5885 8.3870 8.6405</code></td></tr>
+      <tr><td>Async submit/wait, streaming off</td><td class="num">8.576762</td><td><code>8.5568 8.6154 8.6450 8.4899</code></td></tr>
+      <tr><td>Async submit/wait, streaming on</td><td class="num">8.540470</td><td><code>8.5405 8.5891 8.5586 8.4737</code></td></tr>
+    </tbody>
+  </table>
+  <p>The three means differ by at most 0.037 decisions/s while per-variant round spread is 0.115 to 0.254 decisions/s: the async API and stream flush cost less than run-to-run variance. An earlier informal 7.679 decisions/s reading is attributed to that variance.</p>
+  <table>
+    <thead><tr><th>Streaming metric</th><th class="num">Across the four streaming runs</th></tr></thead>
+    <tbody>
+      <tr><td>Flushes per 30 visible tokens</td><td class="num">30</td></tr>
+      <tr><td>First streamed text after prompt start</td><td class="num">11,228.909 to 11,789.067 ms</td></tr>
+      <tr><td>Inter-flush interval P50</td><td class="num">116.317 to 117.166 ms</td></tr>
+      <tr><td>Inter-flush interval P95</td><td class="num">121.173 to 125.286 ms</td></tr>
+      <tr><td>Total CPU decode-and-flush work per run</td><td class="num">0.115 to 0.211 ms</td></tr>
+    </tbody>
+  </table>
+
   <h2>4. Verification</h2>
   <p>This section is not included in any benchmark duration above.</p>
   <table>
@@ -176,6 +198,8 @@ int max2(int a, int b) {
       <tr><td>Attention layer output</td><td>max abs error <code>9.65595245e-6</code> vs independent C</td><td class="pass">pass</td></tr>
       <tr><td>Attention q / k / v</td><td><code>1.07288361e-5</code> / <code>1.04904175e-5</code> / <code>6.91413879e-6</code></td><td class="pass">pass</td></tr>
       <tr><td>Smoke-case semantics / strict format</td><td>5/5 / 4/5</td><td>one documented format failure</td></tr>
+      <tr><td>Async decode API state machine</td><td>16/16 checks: double submit, wait without submit, invalid token, position bound, reset and close with a pending command</td><td class="pass">pass</td></tr>
+      <tr><td>Streaming A/B token parity</td><td>12/12 runs identical IDs and text across parent, async and streaming variants</td><td class="pass">pass</td></tr>
     </tbody>
   </table>
 
@@ -201,6 +225,7 @@ build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib \
     <tr><td>FP16/Q8 KV cache</td><td>Current cache costs 128 KiB per context token.</td></tr>
     <tr><td>Standardized quality suite</td><td>Five smoke cases are insufficient for a general quality claim.</td></tr>
     <tr><td>1K and 4K profiles</td><td>Short-prompt results do not establish long-context behavior.</td></tr>
+    <tr><td>Stateful incremental detokenizer</td><td>The stream decoder re-decodes the visible prefix each step, O(T^2) in generated length; measured at most 0.211 ms total at 30 tokens.</td></tr>
   </table>
 </main>
 </body>

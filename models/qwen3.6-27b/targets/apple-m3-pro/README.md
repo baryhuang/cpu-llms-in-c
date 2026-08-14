@@ -1,6 +1,6 @@
 # Qwen3.6-27B on Apple M3 Pro
 
-Status: free-text generation runs end to end. The deployment opens compiled images, tokenizes one UTF-8 user prompt, renders the pinned no-thinking chat template, executes the complete 64-layer text graph, samples, and decodes text. It does not load Python, MLX, llama.cpp, or a C++ runtime.
+Status: free-text generation runs end to end. The deployment opens compiled images, tokenizes one UTF-8 user prompt, renders the pinned no-thinking chat template, executes the complete 64-layer text graph, samples, and decodes text. Generated text streams incrementally while the next GPU forward is in flight. It does not load Python, MLX, llama.cpp, or a C++ runtime.
 
 ## Target pin
 
@@ -128,6 +128,62 @@ Five independent processes were run for each layer. Each process used two warmup
 | Delta layer 0 | complete one-token layer, including projections, convolution, recurrent update, gated norm, MLP and residuals | 1.840846 ms | 117.211300 GB/s |
 | Attention layer 3 | complete one-token layer at context 1, including RoPE, KV update, attention, MLP and residuals | 1.770885 ms | 118.263171 GB/s |
 
+## Streaming delivery
+
+Decode is an asynchronous submit/wait pair around exactly one in-flight Metal
+command; the model owns one workspace, so a second submit before wait is a
+checked error rather than a race.
+
+```c
+qwen36_m3_model_forward_submit(model, token, position, ...);
+/* CPU decodes and flushes the newest visible text while the GPU runs */
+qwen36_m3_model_forward_wait(model, &result, &logits, &logit_count, ...);
+```
+
+The generator samples on CPU, submits the next forward, flushes the newest
+complete UTF-8 suffix to the file descriptor named by `QWEN36_STREAM_FD`, then
+waits. Machine-readable JSON keeps standard output to itself; descriptor 1 is
+rejected for streaming so the two contracts never share a byte stream.
+`./qwen36-chat.sh` passes descriptor 3 and no longer requires `jq`. The
+synchronous `qwen36_m3_model_forward` remains as a wrapper.
+
+### Measured effect
+
+Thirteen fresh-process runs in one sitting: one discarded warmup, then four
+rounds of three variants with the variant order rotated each round to cancel
+thermal and load drift. Same model images, byte-identical metallib, the same
+36-token prompt as the timed benchmark, greedy seed 42. All 12 measured runs
+produced identical token IDs and identical text.
+
+| Variant | Decode decisions/s, mean of 4 rounds | Rounds |
+|---|---:|---|
+| Parent commit `d99ef9f`, synchronous forward | 8.545635 | 8.5665 / 8.5885 / 8.3870 / 8.6405 |
+| Async submit/wait, streaming off | 8.576762 | 8.5568 / 8.6154 / 8.6450 / 8.4899 |
+| Async submit/wait, streaming on | 8.540470 | 8.5405 / 8.5891 / 8.5586 / 8.4737 |
+
+The three means differ by at most 0.037 decisions/s while the per-variant
+spread across rounds is 0.115 to 0.254 decisions/s: the async API and the
+stream flush change decode throughput by less than run-to-run variance. An
+earlier informal 7.679 decisions/s reading from the first streaming smoke run
+is attributed to that variance, not to the API change.
+
+Streaming behavior across the four streaming runs:
+
+| Metric | Value |
+|---|---:|
+| Flushes per 30 visible tokens | 30 |
+| First streamed text after prompt start | 11,228.909 to 11,789.067 ms |
+| Inter-flush interval P50 | 116.317 to 117.166 ms |
+| Inter-flush interval P95 | 121.173 to 125.286 ms |
+| Total CPU decode-and-flush work per run | 0.115 to 0.211 ms |
+
+First text is still dominated by sequential prompt processing: the cold
+first forward plus 35 one-token forwards. The batched prefill graph in
+Current limits remains the controlling fix. The stream decoder re-decodes the
+visible token prefix each step, which is O(T^2) in generated length but
+measured at most 0.211 ms total for 30 tokens; a stateful incremental
+detokenizer replaces it when generation lengths grow.
+
 ## Verification
 
 Verification is outside the timed benchmark above.
@@ -144,6 +200,8 @@ Verification is outside the timed benchmark above.
 | Attention layer 3 output vs independent C | maximum absolute error `9.65595245e-6` |
 | Attention q / k / v vs independent C | `1.07288361e-5` / `1.04904175e-5` / `6.91413879e-6` |
 | Five free-text smoke cases | semantic 5/5; strict requested format 4/5 |
+| Async decode API state machine | 16/16 checks: double submit, wait without submit, invalid token, position bound, reset and close with a pending command (`make qwen36-m3-api-state-test`, needs the model images) |
+| Streaming A/B token parity | 12/12 runs identical IDs and text across parent, async and streaming variants |
 
 The norm oracle uses the deployed checkpoint convention: standard RMSNorm and q/k norm tensors are direct multiplicative weights, not Hugging Face-style delta weights. Delta q/k normalization uses the exact 128-dimensional epsilon algebra.
 

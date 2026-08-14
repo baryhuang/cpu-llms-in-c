@@ -26,22 +26,16 @@ if [ ! -f "$model_directory/global.q36global" ] ||
     exit 2
 fi
 
-if ! command -v jq >/dev/null 2>&1; then
-    echo "jq is required to display only the model text." >&2
-    echo "Install it with: brew install jq" >&2
-    exit 2
-fi
-
 run_prompt() {
-    result=$(
+    if [ "${QWEN36_RAW:-0}" = "1" ]; then
         "$runner" "$model_directory" "$metallib" "$tokenizer" \
             "$context" "$maximum_new" "$temperature" "$top_k" \
             "$seed" "$1"
-    )
-    if [ "${QWEN36_RAW:-0}" = "1" ]; then
-        printf '%s\n' "$result"
     else
-        printf '%s\n' "$result" | jq -r '.output'
+        QWEN36_STREAM_FD=3 \
+            "$runner" "$model_directory" "$metallib" "$tokenizer" \
+                "$context" "$maximum_new" "$temperature" "$top_k" \
+                "$seed" "$1" 3>&1 >/dev/null
     fi
 }
 

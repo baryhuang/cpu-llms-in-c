@@ -6,16 +6,26 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include <unicode/uchar.h>
 #include <unicode/utf8.h>
 
 enum { QWEN36_END_OF_TEXT = 248044, QWEN36_IM_END = 248046 };
+
+typedef struct {
+    FILE *file;
+    size_t emitted_bytes;
+    size_t flush_count;
+    double first_emit_ms;
+    double cpu_seconds;
+} qwen36_text_stream;
 
 static double seconds_now(void) {
     struct timespec value;
@@ -55,6 +65,106 @@ static float parse_float(const char *text, const char *name) {
         exit(2);
     }
     return value;
+}
+
+static FILE *open_text_stream(char *error, size_t error_capacity) {
+    const char *value = getenv("QWEN36_STREAM_FD");
+    if (value == NULL || *value == '\0') return NULL;
+    char *end = NULL;
+    errno = 0;
+    long descriptor = strtol(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || descriptor < 0 ||
+        descriptor > INT_MAX || descriptor == STDOUT_FILENO) {
+        snprintf(error, error_capacity,
+                 "QWEN36_STREAM_FD must name an open descriptor other than 1");
+        return (FILE *)-1;
+    }
+    int duplicate = dup((int)descriptor);
+    if (duplicate < 0) {
+        snprintf(error, error_capacity, "cannot duplicate stream fd %ld",
+                 descriptor);
+        return (FILE *)-1;
+    }
+    FILE *file = fdopen(duplicate, "w");
+    if (file == NULL) {
+        close(duplicate);
+        snprintf(error, error_capacity, "cannot open text stream: %s",
+                 strerror(errno));
+        return (FILE *)-1;
+    }
+    setvbuf(file, NULL, _IONBF, 0);
+    return file;
+}
+
+static size_t complete_utf8_prefix(const unsigned char *bytes,
+                                   size_t length) {
+    size_t cursor = 0;
+    while (cursor < length) {
+        unsigned char first = bytes[cursor];
+        size_t width;
+        if (first < 0x80) width = 1;
+        else if ((first & 0xe0) == 0xc0) width = 2;
+        else if ((first & 0xf0) == 0xe0) width = 3;
+        else if ((first & 0xf8) == 0xf0) width = 4;
+        else {
+            ++cursor;
+            continue;
+        }
+        if (length - cursor < width) break;
+        size_t continuation = 1;
+        while (continuation < width &&
+               (bytes[cursor + continuation] & 0xc0) == 0x80)
+            ++continuation;
+        if (continuation != width) {
+            ++cursor;
+            continue;
+        }
+        cursor += width;
+    }
+    return cursor;
+}
+
+static int stream_text(
+    qwen36_text_stream *stream, const qwen36_tokenizer *tokenizer,
+    const uint32_t *tokens, size_t token_count, double prompt_start,
+    double *emitted_ms, char *error, size_t error_capacity) {
+    if (stream->file == NULL) return 0;
+    double cpu_start = seconds_now();
+    size_t output_length = 0;
+    (void)qwen36_tokenizer_decode(tokenizer, tokens, token_count, NULL, 0,
+                                  &output_length, error, error_capacity);
+    char *output = malloc(output_length + 1);
+    if (output == NULL || qwen36_tokenizer_decode(
+            tokenizer, tokens, token_count, output, output_length + 1,
+            &output_length, error, error_capacity) != 0) {
+        free(output);
+        return -1;
+    }
+    size_t complete = complete_utf8_prefix(
+        (const unsigned char *)output, output_length);
+    if (complete < stream->emitted_bytes) {
+        free(output);
+        snprintf(error, error_capacity, "streamed text prefix changed");
+        return -1;
+    }
+    size_t amount = complete - stream->emitted_bytes;
+    if (amount != 0) {
+        if (fwrite(output + stream->emitted_bytes, 1, amount,
+                   stream->file) != amount || fflush(stream->file) != 0) {
+            free(output);
+            snprintf(error, error_capacity, "cannot write streamed text: %s",
+                     strerror(errno));
+            return -1;
+        }
+        stream->emitted_bytes = complete;
+        ++stream->flush_count;
+        double when_ms = (seconds_now() - prompt_start) * 1000.0;
+        if (stream->first_emit_ms < 0.0) stream->first_emit_ms = when_ms;
+        if (emitted_ms != NULL) *emitted_ms = when_ms;
+    }
+    stream->cpu_seconds += seconds_now() - cpu_start;
+    free(output);
+    return 0;
 }
 
 static void print_json_string(const char *text) {
@@ -134,6 +244,14 @@ int main(int argc, char **argv) {
         return 2;
     }
     char error[512];
+    FILE *stream_file = open_text_stream(error, sizeof(error));
+    if (stream_file == (FILE *)-1) {
+        fprintf(stderr, "stream setup failed: %s\n", error);
+        return 2;
+    }
+    qwen36_text_stream text_stream = {
+        .file = stream_file, .first_emit_ms = -1.0
+    };
     double start = seconds_now();
     qwen36_tokenizer *tokenizer =
         qwen36_tokenizer_open(argv[3], error, sizeof(error));
@@ -180,9 +298,10 @@ int main(int argc, char **argv) {
     double model_open_ms = (seconds_now() - start) * 1000.0;
     uint32_t *generated = malloc((size_t)maximum_new * sizeof(*generated));
     double *token_ms = malloc((size_t)maximum_new * sizeof(*token_ms));
-    if (generated == NULL || token_ms == NULL) {
+    double *emitted_ms = malloc((size_t)maximum_new * sizeof(*emitted_ms));
+    if (generated == NULL || token_ms == NULL || emitted_ms == NULL) {
         fprintf(stderr, "cannot allocate generation buffers\n");
-        free(generated); free(token_ms);
+        free(generated); free(token_ms); free(emitted_ms);
         qwen36_m3_model_close(model);
         free(trimmed_prompt); free(chat); free(prompt_ids);
         qwen36_tokenizer_close(tokenizer);
@@ -196,6 +315,7 @@ int main(int argc, char **argv) {
     qwen36_m3_decode_result result = {0};
     start = seconds_now();
     double prompt_first_forward_ms = 0.0;
+    double prompt_start = start;
     for (size_t position = 0; position < prompt_count; ++position) {
         double token_start = seconds_now();
         if (qwen36_m3_model_forward(
@@ -230,20 +350,47 @@ int main(int argc, char **argv) {
         }
         generated[generated_count] = token;
         token_ms[generated_count] = result.duration_ms;
+        emitted_ms[generated_count] = -1.0;
         ++generated_count;
         if (token == QWEN36_END_OF_TEXT || token == QWEN36_IM_END) break;
         text_token_count = generated_count;
-        if (index + 1 == maximum_new) break;
+        if (index + 1 == maximum_new) {
+            if (stream_text(&text_stream, tokenizer, generated,
+                            text_token_count, prompt_start,
+                            &emitted_ms[generated_count - 1], error,
+                            sizeof(error)) != 0) {
+                fprintf(stderr, "stream decode failed: %s\n", error);
+                return 9;
+            }
+            break;
+        }
         uint32_t position = (uint32_t)prompt_count + index;
         double continuation_start = seconds_now();
-        if (qwen36_m3_model_forward(model, token, position, &result,
-                                    &logits, &logit_count,
-                                    error, sizeof(error)) != 0) {
-            fprintf(stderr, "generation forward failed at %u: %s\n",
+        if (qwen36_m3_model_forward_submit(
+                model, token, position, error, sizeof(error)) != 0) {
+            fprintf(stderr, "generation submit failed at %u: %s\n",
+                    position, error);
+            return 7;
+        }
+        if (stream_text(&text_stream, tokenizer, generated,
+                        text_token_count, prompt_start,
+                        &emitted_ms[generated_count - 1], error,
+                        sizeof(error)) != 0) {
+            fprintf(stderr, "stream decode failed: %s\n", error);
+            return 9;
+        }
+        if (qwen36_m3_model_forward_wait(
+                model, &result, &logits, &logit_count,
+                error, sizeof(error)) != 0) {
+            fprintf(stderr, "generation wait failed at %u: %s\n",
                     position, error);
             return 7;
         }
         continuation_ms += (seconds_now() - continuation_start) * 1000.0;
+    }
+    if (text_stream.file != NULL) {
+        fputc('\n', text_stream.file);
+        fflush(text_stream.file);
     }
     size_t output_length = 0;
     (void)qwen36_tokenizer_decode(tokenizer, generated, text_token_count,
@@ -257,7 +404,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "generated text decode failed: %s\n", error);
         return 9;
     }
-    printf("{\n  \"schema\": 1,\n");
+    printf("{\n  \"schema\": 2,\n");
     printf("  \"scope\": \"Qwen3.6-27B free-text end-to-end generation\",\n");
     printf("  \"prompt\": "); print_json_string(argv[9]); printf(",\n");
     printf("  \"rendered_chat\": "); print_json_string(chat); printf(",\n");
@@ -268,9 +415,12 @@ int main(int argc, char **argv) {
     for (uint32_t index = 0; index < generated_count; ++index) {
         uint32_t produced_by = (uint32_t)prompt_count - 1 + index;
         printf("    {\"token_id\": %u, \"produced_by_position\": %u, "
-               "\"source_forward_duration_ms\": %.6f}%s\n",
-               generated[index], produced_by, token_ms[index],
-               index + 1 == generated_count ? "" : ",");
+               "\"source_forward_duration_ms\": %.6f, "
+               "\"stream_emitted_after_prompt_start_ms\": ",
+               generated[index], produced_by, token_ms[index]);
+        if (emitted_ms[index] >= 0.0) printf("%.6f", emitted_ms[index]);
+        else printf("null");
+        printf("}%s\n", index + 1 == generated_count ? "" : ",");
     }
     printf("  ],\n  \"output\": "); print_json_string(output); printf(",\n");
     printf("  \"stop_reason\": \"%s\",\n",
@@ -300,15 +450,27 @@ int main(int argc, char **argv) {
         printf("  \"prompt_tokens_per_second_after_first\": null,\n");
     if (generated_count > 1 && continuation_ms > 0.0)
         printf("  \"continuation_tokens_per_second\": %.6f,\n",
-               1000.0 * (generated_count - 1) / continuation_ms);
+           1000.0 * (generated_count - 1) / continuation_ms);
     else
         printf("  \"continuation_tokens_per_second\": null,\n");
+    printf("  \"streaming\": {\"enabled\": %s, \"flush_count\": %zu, "
+           "\"emitted_bytes\": %zu, "
+           "\"first_text_after_prompt_start_ms\": ",
+           text_stream.file != NULL ? "true" : "false",
+           text_stream.flush_count, text_stream.emitted_bytes);
+    if (text_stream.first_emit_ms >= 0.0)
+        printf("%.6f", text_stream.first_emit_ms);
+    else
+        printf("null");
+    printf(", \"cpu_decode_and_flush_ms\": %.6f},\n",
+           text_stream.cpu_seconds * 1000.0);
     printf("  \"memory\": {\"mapped_weights_bytes\": %zu, "
            "\"recurrent_state_bytes\": %zu, \"kv_cache_bytes\": %zu, "
            "\"physical_footprint_bytes\": %zu}\n}\n",
            result.mapped_weight_bytes, result.state_bytes,
            result.kv_cache_bytes, result.physical_footprint_bytes);
-    free(output); free(generated); free(token_ms);
+    if (text_stream.file != NULL) fclose(text_stream.file);
+    free(output); free(generated); free(token_ms); free(emitted_ms);
     qwen36_m3_model_close(model);
     free(trimmed_prompt); free(chat); free(prompt_ids);
     qwen36_tokenizer_close(tokenizer);

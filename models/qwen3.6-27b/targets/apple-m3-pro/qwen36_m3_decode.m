@@ -154,6 +154,10 @@ typedef struct {
 
 struct qwen36_m3_model {
     void *runtime;
+    void *pending_command;
+    uint32_t pending_token;
+    uint32_t pending_position;
+    double pending_start;
 };
 
 static void decode_error(char *message, size_t capacity_value,
@@ -763,6 +767,13 @@ qwen36_m3_model *qwen36_m3_model_open(
 
 void qwen36_m3_model_reset(qwen36_m3_model *model) {
     if (model == NULL || model->runtime == NULL) return;
+    if (model->pending_command != NULL) {
+        id<MTLCommandBuffer> pending =
+            (__bridge id<MTLCommandBuffer>)model->pending_command;
+        [pending waitUntilCompleted];
+        CFBridgingRelease(model->pending_command);
+        model->pending_command = NULL;
+    }
     Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
     for (Q36DecodeLayer *layer in r->layers) {
         if (layer->attention) {
@@ -778,15 +789,18 @@ void qwen36_m3_model_reset(qwen36_m3_model *model) {
     }
 }
 
-int qwen36_m3_model_forward(
+int qwen36_m3_model_forward_submit(
     qwen36_m3_model *model, uint32_t token_id, uint32_t position,
-    qwen36_m3_decode_result *result, const float **logits,
-    size_t *logit_count, char *error_message, size_t error_message_capacity) {
-    if (model == NULL || model->runtime == NULL || result == NULL ||
-        logits == NULL || logit_count == NULL ||
+    char *error_message, size_t error_message_capacity) {
+    if (model == NULL || model->runtime == NULL ||
         token_id >= QWEN36_VOCAB_SIZE) {
         decode_error(error_message, error_message_capacity,
-                     @"invalid decode arguments");
+                     @"invalid decode submit arguments");
+        return 1;
+    }
+    if (model->pending_command != NULL) {
+        decode_error(error_message, error_message_capacity,
+                     @"a decode forward is already in flight");
         return 1;
     }
     Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
@@ -795,7 +809,6 @@ int qwen36_m3_model_forward(
                      @"position exceeds configured context capacity");
         return 1;
     }
-    memset(result, 0, sizeof(*result));
     @autoreleasepool {
         id<MTLCommandBuffer> command = [r->queue commandBuffer];
         id<MTLComputeCommandEncoder> encoder =
@@ -836,19 +849,45 @@ int qwen36_m3_model_forward(
             MTLSizeMake((QWEN36_VOCAB_SIZE + 7) / 8, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
         [encoder endEncoding];
-        double start = decode_seconds();
+        model->pending_token = token_id;
+        model->pending_position = position;
+        model->pending_start = decode_seconds();
+        model->pending_command = (__bridge_retained void *)command;
         [command commit];
+        return 0;
+    }
+}
+
+int qwen36_m3_model_forward_wait(
+    qwen36_m3_model *model, qwen36_m3_decode_result *result,
+    const float **logits, size_t *logit_count, char *error_message,
+    size_t error_message_capacity) {
+    if (model == NULL || model->runtime == NULL || result == NULL ||
+        logits == NULL || logit_count == NULL ||
+        model->pending_command == NULL) {
+        decode_error(error_message, error_message_capacity,
+                     @"invalid decode wait arguments or no forward in flight");
+        return 1;
+    }
+    Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
+    @autoreleasepool {
+        id<MTLCommandBuffer> command =
+            (__bridge id<MTLCommandBuffer>)model->pending_command;
         [command waitUntilCompleted];
-        double duration = decode_seconds() - start;
-        if (command.status != MTLCommandBufferStatusCompleted) {
-            decode_error(error_message, error_message_capacity,
-                command.error != nil ? command.error.localizedDescription :
-                                       @"Metal decode failed");
+        double duration = decode_seconds() - model->pending_start;
+        MTLCommandBufferStatus status = command.status;
+        NSString *message = command.error != nil ?
+            command.error.localizedDescription : @"Metal decode failed";
+        CFBridgingRelease(model->pending_command);
+        model->pending_command = NULL;
+        if (status != MTLCommandBufferStatusCompleted) {
+            decode_error(error_message, error_message_capacity, message);
             return 2;
         }
-        result->input_token = token_id;
+        memset(result, 0, sizeof(*result));
+        result->input_token = model->pending_token;
         result->next_token = 0;
-        result->position = position;
+        result->position = model->pending_position;
         result->duration_ms = duration * 1000.0;
         result->mapped_weight_bytes = r->mapped_bytes;
         result->state_bytes = r->state_bytes;
@@ -858,6 +897,18 @@ int qwen36_m3_model_forward(
         *logit_count = QWEN36_VOCAB_SIZE;
         return 0;
     }
+}
+
+int qwen36_m3_model_forward(
+    qwen36_m3_model *model, uint32_t token_id, uint32_t position,
+    qwen36_m3_decode_result *result, const float **logits,
+    size_t *logit_count, char *error_message, size_t error_message_capacity) {
+    int status = qwen36_m3_model_forward_submit(
+        model, token_id, position, error_message, error_message_capacity);
+    if (status != 0) return status;
+    return qwen36_m3_model_forward_wait(
+        model, result, logits, logit_count, error_message,
+        error_message_capacity);
 }
 
 int qwen36_m3_model_decode(
@@ -884,6 +935,13 @@ int qwen36_m3_model_decode(
 
 void qwen36_m3_model_close(qwen36_m3_model *model) {
     if (model == NULL) return;
+    if (model->pending_command != NULL) {
+        id<MTLCommandBuffer> pending =
+            (__bridge id<MTLCommandBuffer>)model->pending_command;
+        [pending waitUntilCompleted];
+        CFBridgingRelease(model->pending_command);
+        model->pending_command = NULL;
+    }
     if (model->runtime != NULL) {
         CFBridgingRelease(model->runtime);
         model->runtime = NULL;

@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "status": "free-text-end-to-end",
   "measured_at": "2026-08-14T13:20:00+08:00",
   "machine": {
@@ -114,6 +114,141 @@
       "user_seconds": 0.03,
       "system_seconds": 2.16
     }
+  },
+  "streaming_increment": {
+    "measured_at": "2026-08-14T16:30:00+08:00",
+    "scope": "async submit/wait decode API with incremental UTF-8 text streaming on a caller-supplied descriptor",
+    "method": "13 fresh-process runs on one machine in one sitting: 1 discarded warmup, then 4 rounds of the 3 variants with the variant order rotated each round to cancel thermal and load drift. Same model images, byte-identical metallib, same prompt, context 128, maximum 64 new tokens, greedy temperature 0, top-k 1, seed 42.",
+    "variants": {
+      "parent": {
+        "description": "commit d99ef9f synchronous forward, streaming code absent",
+        "command": "PARENT_BUILD/qwen36-m3-generate MODEL_DIR PARENT_BUILD/qwen36-m3-q4.metallib MODEL_DIR/tokenizer.q36tok 128 64 0 1 42 PROMPT"
+      },
+      "async_no_stream": {
+        "description": "current async submit/wait decode loop, QWEN36_STREAM_FD unset",
+        "command": "build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib MODEL_DIR/tokenizer.q36tok 128 64 0 1 42 PROMPT"
+      },
+      "async_stream": {
+        "description": "current async submit/wait decode loop with incremental text flush to descriptor 3",
+        "command": "QWEN36_STREAM_FD=3 build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib MODEL_DIR/tokenizer.q36tok 128 64 0 1 42 PROMPT 3>/dev/null"
+      }
+    },
+    "prompt": "Write a C function int max2(int a, int b) that returns the larger value. Output only the function.",
+    "token_and_text_parity_across_all_12_runs": true,
+    "decode_decisions_per_second_including_eos": {
+      "parent": {
+        "per_round": [
+          8.566499,
+          8.588505,
+          8.387008,
+          8.640528
+        ],
+        "mean": 8.545635,
+        "min": 8.387008,
+        "max": 8.640528
+      },
+      "async_no_stream": {
+        "per_round": [
+          8.55677,
+          8.615409,
+          8.644965,
+          8.489906
+        ],
+        "mean": 8.576762,
+        "min": 8.489906,
+        "max": 8.644965
+      },
+      "async_stream": {
+        "per_round": [
+          8.540461,
+          8.589122,
+          8.558618,
+          8.473681
+        ],
+        "mean": 8.54047,
+        "min": 8.473681,
+        "max": 8.589122
+      }
+    },
+    "warm_prompt_tokens_per_second_after_first": {
+      "parent": [
+        8.445652,
+        8.618667,
+        7.296808,
+        8.551486
+      ],
+      "async_no_stream": [
+        8.522222,
+        8.595606,
+        8.621514,
+        8.685368
+      ],
+      "async_stream": [
+        8.477169,
+        8.569975,
+        8.585639,
+        8.624039
+      ]
+    },
+    "streaming_runs": [
+      {
+        "round": "r1",
+        "flush_count": 30,
+        "emitted_bytes": 63,
+        "first_text_after_prompt_start_ms": 11343.645,
+        "cpu_decode_and_flush_ms": 0.198,
+        "inter_flush_interval_ms": {
+          "count": 29,
+          "mean": 117.434,
+          "p50": 116.661,
+          "p95": 123.292,
+          "max": 123.793
+        }
+      },
+      {
+        "round": "r2",
+        "flush_count": 30,
+        "emitted_bytes": 63,
+        "first_text_after_prompt_start_ms": 11429.662,
+        "cpu_decode_and_flush_ms": 0.191,
+        "inter_flush_interval_ms": {
+          "count": 29,
+          "mean": 116.742,
+          "p50": 116.317,
+          "p95": 121.173,
+          "max": 121.399
+        }
+      },
+      {
+        "round": "r3",
+        "flush_count": 30,
+        "emitted_bytes": 63,
+        "first_text_after_prompt_start_ms": 11228.909,
+        "cpu_decode_and_flush_ms": 0.211,
+        "inter_flush_interval_ms": {
+          "count": 29,
+          "mean": 117.154,
+          "p50": 116.745,
+          "p95": 122.426,
+          "max": 123.509
+        }
+      },
+      {
+        "round": "r4",
+        "flush_count": 30,
+        "emitted_bytes": 63,
+        "first_text_after_prompt_start_ms": 11789.067,
+        "cpu_decode_and_flush_ms": 0.115,
+        "inter_flush_interval_ms": {
+          "count": 29,
+          "mean": 118.079,
+          "p50": 117.166,
+          "p95": 125.286,
+          "max": 125.63
+        }
+      }
+    ],
+    "verdict": "No decode-throughput regression: the three variant means differ by at most 0.037 decisions/s while per-variant round spread is 0.115 to 0.254 decisions/s. The 7.679 decisions/s reading in the first streaming smoke run is attributed to run-to-run variance, not to the async API change. Streaming adds 0.115 to 0.211 ms total CPU decode-and-flush work per 30-token generation."
   },
   "same_machine_omlx_baseline": {
     "scope": "oMLX BatchedEngine with the same rendered prompt and a checkpoint exported from the exact C deployment tensor images",

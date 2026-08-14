@@ -71,8 +71,9 @@ QWEN36_SAMPLER_OBJECT := $(BUILD_DIR)/qwen36-sampler.o
 QWEN36_M3_GENERATE_OBJECT := $(BUILD_DIR)/qwen36-m3-generate-cli.o
 QWEN36_M3_GENERATE := $(BUILD_DIR)/qwen36-m3-generate
 QWEN36_SAMPLER_TEST := $(BUILD_DIR)/qwen36-sampler-test
+QWEN36_M3_API_STATE_TEST := $(BUILD_DIR)/qwen36-m3-api-state-test
 
-.PHONY: all a113x clean fixture linux-tools qwen36-m3-bench qwen36-m3-deltanet-bench qwen36-m3-layer-bench qwen36-m3-attention-bench qwen36-m3-decode qwen36-m3-generate qwen36-tools test whisper-small-tools
+.PHONY: all a113x clean fixture linux-tools qwen36-m3-bench qwen36-m3-deltanet-bench qwen36-m3-layer-bench qwen36-m3-attention-bench qwen36-m3-decode qwen36-m3-generate qwen36-m3-api-state-test qwen36-tools test whisper-small-tools
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
@@ -99,6 +100,11 @@ qwen36-m3-attention-bench: $(QWEN36_M3_ATTENTION_BENCH) \
 qwen36-m3-decode: $(QWEN36_M3_DECODE) $(QWEN36_M3_METALLIB)
 
 qwen36-m3-generate: $(QWEN36_M3_GENERATE) $(QWEN36_M3_METALLIB)
+
+# Needs the packed model directory and metallib, so it is not part of the
+# fixture-only `test` target. Run it manually:
+#   build/qwen36-m3-api-state-test <model-directory> <metallib>
+qwen36-m3-api-state-test: $(QWEN36_M3_API_STATE_TEST) $(QWEN36_M3_METALLIB)
 
 qwen36-tools: $(QWEN36_SAFETENSORS_INSPECT) $(QWEN36_M3_PACK) \
 	$(QWEN36_M3_ATTENTION_PACK) $(QWEN36_M3_GLOBAL_PACK) \
@@ -423,6 +429,14 @@ $(QWEN36_M3_GENERATE): $(QWEN36_M3_DECODE_OBJECT) \
 	$(QWEN36_M3_GENERATE_OBJECT)
 	$(CC) $^ -o $@ -framework Foundation -framework Metal \
 		-framework CoreFoundation -licucore -lm
+
+$(QWEN36_M3_API_STATE_TEST): tests/qwen36_m3_api_state_test.c \
+	$(QWEN36_M3_DECODE_OBJECT) $(QWEN36_M3)/qwen36_m3_decode.h \
+	$(QWEN36_M3)/qwen36_m3_global_image.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN36_M3) \
+		tests/qwen36_m3_api_state_test.c $(QWEN36_M3_DECODE_OBJECT) \
+		-o $@ -framework Foundation -framework Metal -lm
 
 $(QWEN36_SAFETENSORS_INSPECT): tools/qwen36_safetensors_inspect.c \
 	$(QWEN36_IMPORT)/qwen36_safetensors.c $(QWEN36_IMPORT)/qwen36_safetensors.h
