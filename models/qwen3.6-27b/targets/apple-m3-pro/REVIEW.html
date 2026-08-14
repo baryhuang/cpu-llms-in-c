@@ -117,9 +117,26 @@ int max2(int a, int b) {
       <tr><td>Prompt after C cold first touch</td><td class="num">8.389157 tok/s</td><td class="num">not exposed</td><td>C still uses sequential one-token execution</td></tr>
       <tr><td>29 visible-token decode intervals</td><td class="num"><strong>8.422709 tok/s</strong></td><td class="num"><strong>5.850744 tok/s</strong></td><td><strong>C 1.439596x faster</strong></td></tr>
       <tr><td>Process real / user / system</td><td class="num">15.09 / 0.03 / 2.16 s</td><td class="num">14.43 / 2.96 / 5.52 s</td><td>Includes startup and request</td></tr>
+      <tr><td>Model tensor memory</td><td class="num">15.139 GB mapped</td><td class="num">15.135 GB active + 0.827 GB cache</td><td>Both exclude comparison-stack code pages</td></tr>
+      <tr><td>Peak process footprint</td><td class="num">0.277 GB + file-backed pages</td><td class="num">16.376 GB</td><td>Different accounting; see Memory</td></tr>
     </tbody>
   </table>
   <p>The C prompt duration is split into 7,129.150 ms for the first forward with cold mapped-page touches and 4,172.052 ms for the next 35 forwards. The next optimization is a batched prompt graph; kernel tuning of the one-token graph cannot remove this structural TTFT gap.</p>
+
+  <h3>Published upstream native reference</h3>
+  <p>The Qwen official model card publishes deployment commands but no Qwen3.6-27B throughput number. The closest published upstream implementation result is the official Hugging Face Transformers Qwen3.5/3.6 implementation benchmark.</p>
+  <table>
+    <thead><tr><th>Metric</th><th class="num">This C/Metal run</th><th class="num">Official Transformers native path</th></tr></thead>
+    <tbody>
+      <tr><td>Model / precision</td><td class="num">Qwen3.6-27B Q4 group-64</td><td class="num">Qwen/Qwen3.6-27B BF16</td></tr>
+      <tr><td>Hardware</td><td class="num">Apple M3 Pro, 14-core GPU</td><td class="num">NVIDIA GB10 / SM121</td></tr>
+      <tr><td>Prompt / generated</td><td class="num">36 / 30 visible tokens</td><td class="num">1,024 / 256 tokens</td></tr>
+      <tr><td>TTFT</td><td class="num">11.304 s</td><td class="num">1.11 s official GDN kernel; 1.66 s fallback</td></tr>
+      <tr><td>Decode</td><td class="num"><strong>8.423 tok/s</strong></td><td class="num">4.14 tok/s official GDN kernel; 4.11 tok/s fallback</td></tr>
+      <tr><td>Memory</td><td class="num">15.139 GB mapped model</td><td class="num">not reported</td></tr>
+    </tbody>
+  </table>
+  <p class="note">No ratio is valid here: hardware, precision, prompt length, generated length and memory accounting differ. Sources: <a href="https://huggingface.co/Qwen/Qwen3.6-27B">Qwen official model card</a> and <a href="https://github.com/huggingface/transformers/blob/main/docs/source/en/model_doc/qwen3_5.md#usage-tips-and-notes">official Transformers implementation notes</a>.</p>
 
   <h3>Memory</h3>
   <table>

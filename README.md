@@ -156,6 +156,14 @@ Consequences for target priority: A113X stays first. RK3588S and RK3576 remain e
 make test
 ```
 
+Run the compiled Qwen3.6-27B target interactively on the pinned Apple machine:
+
+```sh
+./qwen36-chat.sh
+```
+
+Enter one prompt at `You>` and read the decoded text under `Model>`. Enter `/quit` to exit. The script uses the local compiled image under `tmp/qwen36-27b-runtime`; weights remain outside Git.
+
 Model-specific compile and run commands live in each model record, e.g. the [Gemma 4 E2B build](models/gemma-4-e2b/README.md#build).
 
 ## Current limits

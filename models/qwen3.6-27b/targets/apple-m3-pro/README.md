@@ -83,10 +83,28 @@ The same-machine comparison uses the prompt above, the same 36 prompt IDs, greed
 | Decode, 29 intervals between 30 visible tokens | **8.422709 tok/s** | **5.850744 tok/s** | **C is 1.439596x faster** |
 | Request continuation including the EOS decision | 3,568.987 ms / 8.405747 decisions/s | EOS timestamp not exposed | not compared |
 | Process real / user / system time | 15.09 / 0.03 / 2.16 s | 14.43 / 2.96 / 5.52 s | includes startup and request |
+| Model tensor memory | 15.139 GB file-mapped | 15.135 GB MLX active + 0.827 GB MLX cache | both exclude comparison-stack code pages |
+| Peak process physical footprint | 0.277 GB plus file-backed mapped pages | 16.376 GB | accounting models differ; see Memory |
 
 The C TTFT result is not competitive yet. It runs the one-token graph 36 times; oMLX submits a batched prompt graph. The first C forward also takes 7,129.150 ms because it faults the mapped model pages into the process. The remaining 35 prompt forwards take 4,172.052 ms.
 
 oMLX 0.5.7 was built with its native `qwen35_prefill` extension available. Its default Q4 and FA256 routes start at 2,048 prompt tokens, so those native long-prefill kernels did not engage for this 36-token case.
+
+### Published upstream native reference
+
+The Qwen model card does not publish a token-throughput number for Qwen3.6-27B. It recommends vLLM or SGLang and shows an eight-GPU tensor-parallel serving configuration, but gives no hardware-specific speed result. The closest published upstream implementation result is in the official Hugging Face Transformers Qwen3.5/3.6 documentation.
+
+| Metric | This C/Metal run | Official Transformers native path |
+|---|---:|---:|
+| Model | Qwen3.6-27B text-only Q4 group-64 | `Qwen/Qwen3.6-27B` BF16 |
+| Hardware | Apple M3 Pro, 14-core GPU, 36 GB | NVIDIA GB10 / SM121 |
+| Prompt / generation | 36 / 30 visible tokens | 1,024 / 256 tokens |
+| Mode | greedy, no thinking | greedy |
+| TTFT | 11.304 s | 1.11 s with the official GDN Hub kernel; 1.66 s fallback |
+| Decode | **8.423 tok/s** | 4.14 tok/s with the official kernel; 4.11 tok/s fallback |
+| Reported memory | 15.139 GB mapped model; 0.277 GB process footprint plus file-backed pages | not reported |
+
+No speedup ratio is calculated: the hardware, precision, prompt length, generated length and memory accounting differ. Sources: [Qwen official model card](https://huggingface.co/Qwen/Qwen3.6-27B) and [official Transformers Qwen3.5/3.6 implementation notes](https://github.com/huggingface/transformers/blob/main/docs/source/en/model_doc/qwen3_5.md#usage-tips-and-notes).
 
 ### Memory
 
@@ -132,6 +150,14 @@ The norm oracle uses the deployed checkpoint convention: standard RMSNorm and q/
 ## Build and reproduce
 
 No Python command is used to compile or run the deployment.
+
+For an interactive prompt loop after the image exists:
+
+```sh
+./qwen36-chat.sh
+```
+
+Enter a prompt at `You>`; the script prints only decoded model text under `Model>`. Enter `/quit` to exit.
 
 ```sh
 make qwen36-tools qwen36-m3-generate

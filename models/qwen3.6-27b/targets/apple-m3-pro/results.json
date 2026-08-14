@@ -169,6 +169,29 @@
     "c_prompt_slowdown": 4.255358,
     "interpretation": "The model-specific C/Metal one-token graph is faster for decode. The correctness-first C prefill still invokes that graph once per prompt token and is slower than oMLX batched prefill."
   },
+  "published_upstream_native_reference": {
+    "qwen_official_model_card": {
+      "url": "https://huggingface.co/Qwen/Qwen3.6-27B",
+      "throughput_reported": false,
+      "deployment_example": "vLLM or SGLang with tensor parallelism across 8 GPUs"
+    },
+    "closest_published_implementation_result": {
+      "publisher": "Hugging Face Transformers official Qwen3.5/3.6 implementation documentation",
+      "url": "https://github.com/huggingface/transformers/blob/main/docs/source/en/model_doc/qwen3_5.md#usage-tips-and-notes",
+      "model": "Qwen/Qwen3.6-27B",
+      "precision": "BF16",
+      "hardware": "NVIDIA GB10, SM121",
+      "prompt_tokens": 1024,
+      "generated_tokens": 256,
+      "sampler": "greedy",
+      "fallback_ttft_seconds": 1.66,
+      "fallback_decode_tokens_per_second": 4.11,
+      "official_gdn_kernel_ttft_seconds": 1.11,
+      "official_gdn_kernel_decode_tokens_per_second": 4.14,
+      "memory_reported": false
+    },
+    "comparison_rule": "External reference only. No ratio is calculated because hardware, precision, prompt length, generated length and memory accounting differ."
+  },
   "quality_smoke_cases": [
     {
       "prompt": "What is 2+2? Answer with only the number.",
