@@ -16,24 +16,20 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const char *const GATE_WEIGHT =
-    "language_model.model.layers.0.mlp.gate_proj.weight";
-static const char *const GATE_SCALE =
-    "language_model.model.layers.0.mlp.gate_proj.scales";
-static const char *const GATE_BIAS =
-    "language_model.model.layers.0.mlp.gate_proj.biases";
-static const char *const UP_WEIGHT =
-    "language_model.model.layers.0.mlp.up_proj.weight";
-static const char *const UP_SCALE =
-    "language_model.model.layers.0.mlp.up_proj.scales";
-static const char *const UP_BIAS =
-    "language_model.model.layers.0.mlp.up_proj.biases";
-static const char *const DOWN_WEIGHT =
-    "language_model.model.layers.0.mlp.down_proj.weight";
-static const char *const DOWN_SCALE =
-    "language_model.model.layers.0.mlp.down_proj.scales";
-static const char *const DOWN_BIAS =
-    "language_model.model.layers.0.mlp.down_proj.biases";
+enum {
+    DELTA_QKV_ROWS = 10240,
+    DELTA_Z_ROWS = 6144,
+    DELTA_SCALAR_ROWS = 48,
+    DELTA_INPUT_ROWS = DELTA_QKV_ROWS + DELTA_Z_ROWS +
+                       2 * DELTA_SCALAR_ROWS,
+    DELTA_OUTPUT_INPUTS = 6144,
+    DELTA_CONV_VALUES = DELTA_QKV_ROWS * 4
+};
+
+static uint64_t align_page(uint64_t value) {
+    return (value + QWEN36_M3_IMAGE_HEADER_BYTES - 1) &
+           ~(uint64_t)(QWEN36_M3_IMAGE_HEADER_BYTES - 1);
+}
 
 static int pread_exact(int file, void *output, size_t length, uint64_t offset) {
     unsigned char *bytes = output;
@@ -369,6 +365,33 @@ static int validate_tensor(const qwen36_tensor_view *view, const char *name,
     return 0;
 }
 
+static int validate_vector(const qwen36_tensor_view *view, const char *name,
+                           uint64_t values) {
+    if (strcmp(view->dtype, "BF16") != 0 || view->rank != 1 ||
+        view->shape[0] != values ||
+        view->data_length != values * sizeof(uint16_t)) {
+        fprintf(stderr,
+                "%s: expected BF16 [%.0f] / %.0f bytes, got %s rank %zu / "
+                "%" PRIu64 " bytes\n",
+                name, (double)values, (double)(values * sizeof(uint16_t)),
+                view->dtype, view->rank, view->data_length);
+        return -1;
+    }
+    return 0;
+}
+
+static int validate_conv(const qwen36_tensor_view *view, const char *name) {
+    if (strcmp(view->dtype, "BF16") != 0 || view->rank != 3 ||
+        view->shape[0] != DELTA_QKV_ROWS || view->shape[1] != 4 ||
+        view->shape[2] != 1 ||
+        view->data_length != DELTA_CONV_VALUES * sizeof(uint16_t)) {
+        fprintf(stderr, "%s: expected BF16 [%u, 4, 1]\n",
+                name, DELTA_QKV_ROWS);
+        return -1;
+    }
+    return 0;
+}
+
 static int copy_weight(int source, int output,
                        const qwen36_tensor_view *weight,
                        uint64_t output_offset) {
@@ -397,9 +420,7 @@ static int copy_weight(int source, int output,
 static int convert_metadata(int source, int output,
                             const qwen36_tensor_view *scales,
                             const qwen36_tensor_view *biases,
-                            uint64_t output_offset) {
-    size_t value_count = (size_t)QWEN36_MLP_SIZE *
-                         (QWEN36_HIDDEN_SIZE / QWEN36_Q4_GROUP_SIZE);
+                            size_t value_count, uint64_t output_offset) {
     size_t source_bytes = value_count * sizeof(uint16_t);
     uint16_t *scale_data = malloc(source_bytes);
     uint16_t *bias_data = malloc(source_bytes);
@@ -424,6 +445,48 @@ static int convert_metadata(int source, int output,
     return status;
 }
 
+static int append_weight(int source, int output,
+                         const qwen36_tensor_view *weight,
+                         uint64_t *output_offset) {
+    int status = copy_weight(source, output, weight, *output_offset);
+    *output_offset += weight->data_length;
+    return status;
+}
+
+static int append_metadata(int source, int output,
+                           const qwen36_tensor_view *scales,
+                           const qwen36_tensor_view *biases,
+                           uint64_t *output_offset) {
+    size_t values = (size_t)(scales->data_length / sizeof(uint16_t));
+    int status = convert_metadata(source, output, scales, biases, values,
+                                  *output_offset);
+    *output_offset += values * 2 * sizeof(uint16_t);
+    return status;
+}
+
+static int write_bf16_as_f32(int source, int output,
+                             const qwen36_tensor_view *tensor,
+                             uint64_t output_offset) {
+    size_t values = (size_t)(tensor->data_length / sizeof(uint16_t));
+    uint16_t *input = malloc(values * sizeof(*input));
+    float *converted = malloc(values * sizeof(*converted));
+    if (input == NULL || converted == NULL ||
+        pread_exact(source, input, tensor->data_length,
+                    tensor->data_start) != 0) {
+        free(input);
+        free(converted);
+        return -1;
+    }
+    for (size_t index = 0; index < values; ++index) {
+        converted[index] = bf16_to_float(input[index]);
+    }
+    int status = pwrite_exact(output, converted,
+                              values * sizeof(*converted), output_offset);
+    free(input);
+    free(converted);
+    return status;
+}
+
 static int find_tensor(const char *path, const char *name,
                        qwen36_tensor_view *view) {
     char error[512];
@@ -436,27 +499,112 @@ static int find_tensor(const char *path, const char *name,
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4 || strlen(argv[3]) != QWEN36_M3_SOURCE_SHA256_LENGTH) {
-        fprintf(stderr, "usage: %s SOURCE.safetensors OUTPUT.q36m3 SOURCE_SHA256\n",
+    if ((argc != 5 && argc != 7) ||
+        strlen(argv[3]) != QWEN36_M3_SOURCE_SHA256_LENGTH ||
+        (argc == 7 &&
+         strlen(argv[6]) != QWEN36_M3_SOURCE_SHA256_LENGTH)) {
+        fprintf(stderr, "usage: %s SOURCE.safetensors OUTPUT.q36m3 "
+                        "SOURCE_SHA256 LAYER_INDEX "
+                        "[MLP_SOURCE.safetensors MLP_SOURCE_SHA256]\n",
                 argv[0]);
         return 2;
     }
-    if (strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256) != 0) {
+    char *layer_end = NULL;
+    errno = 0;
+    unsigned long parsed_layer = strtoul(argv[4], &layer_end, 10);
+    if (errno != 0 || layer_end == argv[4] || *layer_end != '\0' ||
+        parsed_layer >= 64 || parsed_layer % 4 == 3) {
+        fprintf(stderr, "layer index must select one of the 48 DeltaNet layers\n");
+        return 2;
+    }
+    unsigned layer_index = (unsigned)parsed_layer;
+    const char *mlp_path = argc == 7 ? argv[5] : argv[1];
+    const char *mlp_sha = argc == 7 ? argv[6] : argv[3];
+    if ((strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256) != 0 &&
+        strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256_2) != 0 &&
+        strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256_3) != 0) ||
+        (strcmp(mlp_sha, QWEN36_M3_EXPECTED_SOURCE_SHA256) != 0 &&
+         strcmp(mlp_sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_2) != 0 &&
+         strcmp(mlp_sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_3) != 0)) {
         fprintf(stderr, "source SHA-256 is not the compiled checkpoint pin\n");
         return 2;
     }
+#define MAKE_LAYER_NAME(variable, suffix) \
+    char variable##_storage[160]; \
+    snprintf(variable##_storage, sizeof(variable##_storage), \
+             "language_model.model.layers.%u.%s", layer_index, suffix); \
+    const char *const variable = variable##_storage
+    MAKE_LAYER_NAME(GATE_WEIGHT, "mlp.gate_proj.weight");
+    MAKE_LAYER_NAME(GATE_SCALE, "mlp.gate_proj.scales");
+    MAKE_LAYER_NAME(GATE_BIAS, "mlp.gate_proj.biases");
+    MAKE_LAYER_NAME(UP_WEIGHT, "mlp.up_proj.weight");
+    MAKE_LAYER_NAME(UP_SCALE, "mlp.up_proj.scales");
+    MAKE_LAYER_NAME(UP_BIAS, "mlp.up_proj.biases");
+    MAKE_LAYER_NAME(DOWN_WEIGHT, "mlp.down_proj.weight");
+    MAKE_LAYER_NAME(DOWN_SCALE, "mlp.down_proj.scales");
+    MAKE_LAYER_NAME(DOWN_BIAS, "mlp.down_proj.biases");
+    MAKE_LAYER_NAME(INPUT_NORM, "input_layernorm.weight");
+    MAKE_LAYER_NAME(POST_NORM, "post_attention_layernorm.weight");
+    MAKE_LAYER_NAME(DELTA_QKV_WEIGHT, "linear_attn.in_proj_qkv.weight");
+    MAKE_LAYER_NAME(DELTA_QKV_SCALE, "linear_attn.in_proj_qkv.scales");
+    MAKE_LAYER_NAME(DELTA_QKV_BIAS, "linear_attn.in_proj_qkv.biases");
+    MAKE_LAYER_NAME(DELTA_Z_WEIGHT, "linear_attn.in_proj_z.weight");
+    MAKE_LAYER_NAME(DELTA_Z_SCALE, "linear_attn.in_proj_z.scales");
+    MAKE_LAYER_NAME(DELTA_Z_BIAS, "linear_attn.in_proj_z.biases");
+    MAKE_LAYER_NAME(DELTA_A_WEIGHT, "linear_attn.in_proj_a.weight");
+    MAKE_LAYER_NAME(DELTA_A_SCALE, "linear_attn.in_proj_a.scales");
+    MAKE_LAYER_NAME(DELTA_A_BIAS, "linear_attn.in_proj_a.biases");
+    MAKE_LAYER_NAME(DELTA_B_WEIGHT, "linear_attn.in_proj_b.weight");
+    MAKE_LAYER_NAME(DELTA_B_SCALE, "linear_attn.in_proj_b.scales");
+    MAKE_LAYER_NAME(DELTA_B_BIAS, "linear_attn.in_proj_b.biases");
+    MAKE_LAYER_NAME(DELTA_OUT_WEIGHT, "linear_attn.out_proj.weight");
+    MAKE_LAYER_NAME(DELTA_OUT_SCALE, "linear_attn.out_proj.scales");
+    MAKE_LAYER_NAME(DELTA_OUT_BIAS, "linear_attn.out_proj.biases");
+    MAKE_LAYER_NAME(DELTA_CONV, "linear_attn.conv1d.weight");
+    MAKE_LAYER_NAME(DELTA_A_LOG, "linear_attn.A_log");
+    MAKE_LAYER_NAME(DELTA_DT_BIAS, "linear_attn.dt_bias");
+    MAKE_LAYER_NAME(DELTA_NORM, "linear_attn.norm.weight");
+#undef MAKE_LAYER_NAME
     qwen36_tensor_view gate_weight, gate_scale, gate_bias;
     qwen36_tensor_view up_weight, up_scale, up_bias;
     qwen36_tensor_view down_weight, down_scale, down_bias;
-    if (find_tensor(argv[1], GATE_WEIGHT, &gate_weight) != 0 ||
-        find_tensor(argv[1], GATE_SCALE, &gate_scale) != 0 ||
-        find_tensor(argv[1], GATE_BIAS, &gate_bias) != 0 ||
-        find_tensor(argv[1], UP_WEIGHT, &up_weight) != 0 ||
-        find_tensor(argv[1], UP_SCALE, &up_scale) != 0 ||
-        find_tensor(argv[1], UP_BIAS, &up_bias) != 0 ||
-        find_tensor(argv[1], DOWN_WEIGHT, &down_weight) != 0 ||
-        find_tensor(argv[1], DOWN_SCALE, &down_scale) != 0 ||
-        find_tensor(argv[1], DOWN_BIAS, &down_bias) != 0) {
+    qwen36_tensor_view input_norm, post_norm, delta_conv;
+    qwen36_tensor_view delta_a_log, delta_dt_bias, delta_norm;
+    qwen36_tensor_view delta_qkv_weight, delta_qkv_scale, delta_qkv_bias;
+    qwen36_tensor_view delta_z_weight, delta_z_scale, delta_z_bias;
+    qwen36_tensor_view delta_a_weight, delta_a_scale, delta_a_bias;
+    qwen36_tensor_view delta_b_weight, delta_b_scale, delta_b_bias;
+    qwen36_tensor_view delta_out_weight, delta_out_scale, delta_out_bias;
+    if (find_tensor(mlp_path, GATE_WEIGHT, &gate_weight) != 0 ||
+        find_tensor(mlp_path, GATE_SCALE, &gate_scale) != 0 ||
+        find_tensor(mlp_path, GATE_BIAS, &gate_bias) != 0 ||
+        find_tensor(mlp_path, UP_WEIGHT, &up_weight) != 0 ||
+        find_tensor(mlp_path, UP_SCALE, &up_scale) != 0 ||
+        find_tensor(mlp_path, UP_BIAS, &up_bias) != 0 ||
+        find_tensor(mlp_path, DOWN_WEIGHT, &down_weight) != 0 ||
+        find_tensor(mlp_path, DOWN_SCALE, &down_scale) != 0 ||
+        find_tensor(mlp_path, DOWN_BIAS, &down_bias) != 0 ||
+        find_tensor(argv[1], INPUT_NORM, &input_norm) != 0 ||
+        find_tensor(argv[1], POST_NORM, &post_norm) != 0 ||
+        find_tensor(argv[1], DELTA_CONV, &delta_conv) != 0 ||
+        find_tensor(argv[1], DELTA_A_LOG, &delta_a_log) != 0 ||
+        find_tensor(argv[1], DELTA_DT_BIAS, &delta_dt_bias) != 0 ||
+        find_tensor(argv[1], DELTA_NORM, &delta_norm) != 0 ||
+        find_tensor(argv[1], DELTA_QKV_WEIGHT, &delta_qkv_weight) != 0 ||
+        find_tensor(argv[1], DELTA_QKV_SCALE, &delta_qkv_scale) != 0 ||
+        find_tensor(argv[1], DELTA_QKV_BIAS, &delta_qkv_bias) != 0 ||
+        find_tensor(argv[1], DELTA_Z_WEIGHT, &delta_z_weight) != 0 ||
+        find_tensor(argv[1], DELTA_Z_SCALE, &delta_z_scale) != 0 ||
+        find_tensor(argv[1], DELTA_Z_BIAS, &delta_z_bias) != 0 ||
+        find_tensor(argv[1], DELTA_A_WEIGHT, &delta_a_weight) != 0 ||
+        find_tensor(argv[1], DELTA_A_SCALE, &delta_a_scale) != 0 ||
+        find_tensor(argv[1], DELTA_A_BIAS, &delta_a_bias) != 0 ||
+        find_tensor(argv[1], DELTA_B_WEIGHT, &delta_b_weight) != 0 ||
+        find_tensor(argv[1], DELTA_B_SCALE, &delta_b_scale) != 0 ||
+        find_tensor(argv[1], DELTA_B_BIAS, &delta_b_bias) != 0 ||
+        find_tensor(argv[1], DELTA_OUT_WEIGHT, &delta_out_weight) != 0 ||
+        find_tensor(argv[1], DELTA_OUT_SCALE, &delta_out_scale) != 0 ||
+        find_tensor(argv[1], DELTA_OUT_BIAS, &delta_out_bias) != 0) {
         return 3;
     }
     uint64_t groups_per_row = QWEN36_HIDDEN_SIZE / QWEN36_Q4_GROUP_SIZE;
@@ -486,6 +634,73 @@ int main(int argc, char **argv) {
                         metadata_plane_bytes) != 0) {
         return 4;
     }
+    const uint64_t delta_input_groups =
+        QWEN36_HIDDEN_SIZE / QWEN36_Q4_GROUP_SIZE;
+    const uint64_t delta_qkv_weight_bytes =
+        (uint64_t)DELTA_QKV_ROWS * QWEN36_HIDDEN_SIZE / 2;
+    const uint64_t delta_z_weight_bytes =
+        (uint64_t)DELTA_Z_ROWS * QWEN36_HIDDEN_SIZE / 2;
+    const uint64_t delta_scalar_weight_bytes =
+        (uint64_t)DELTA_SCALAR_ROWS * QWEN36_HIDDEN_SIZE / 2;
+    const uint64_t delta_output_groups =
+        DELTA_OUTPUT_INPUTS / QWEN36_Q4_GROUP_SIZE;
+    const uint64_t delta_output_weight_bytes =
+        (uint64_t)QWEN36_HIDDEN_SIZE * DELTA_OUTPUT_INPUTS / 2;
+    if (validate_vector(&input_norm, INPUT_NORM, QWEN36_HIDDEN_SIZE) != 0 ||
+        validate_vector(&post_norm, POST_NORM, QWEN36_HIDDEN_SIZE) != 0 ||
+        validate_conv(&delta_conv, DELTA_CONV) != 0 ||
+        validate_vector(&delta_a_log, DELTA_A_LOG, DELTA_SCALAR_ROWS) != 0 ||
+        validate_vector(&delta_dt_bias, DELTA_DT_BIAS,
+                        DELTA_SCALAR_ROWS) != 0 ||
+        validate_vector(&delta_norm, DELTA_NORM,
+                        QWEN36_DELTA_HEAD_SIZE) != 0 ||
+        validate_tensor(&delta_qkv_weight, DELTA_QKV_WEIGHT, "U32",
+                        DELTA_QKV_ROWS, QWEN36_HIDDEN_SIZE / 8,
+                        delta_qkv_weight_bytes) != 0 ||
+        validate_tensor(&delta_qkv_scale, DELTA_QKV_SCALE, "BF16",
+                        DELTA_QKV_ROWS, delta_input_groups,
+                        (uint64_t)DELTA_QKV_ROWS * delta_input_groups * 2) != 0 ||
+        validate_tensor(&delta_qkv_bias, DELTA_QKV_BIAS, "BF16",
+                        DELTA_QKV_ROWS, delta_input_groups,
+                        (uint64_t)DELTA_QKV_ROWS * delta_input_groups * 2) != 0 ||
+        validate_tensor(&delta_z_weight, DELTA_Z_WEIGHT, "U32",
+                        DELTA_Z_ROWS, QWEN36_HIDDEN_SIZE / 8,
+                        delta_z_weight_bytes) != 0 ||
+        validate_tensor(&delta_z_scale, DELTA_Z_SCALE, "BF16",
+                        DELTA_Z_ROWS, delta_input_groups,
+                        (uint64_t)DELTA_Z_ROWS * delta_input_groups * 2) != 0 ||
+        validate_tensor(&delta_z_bias, DELTA_Z_BIAS, "BF16",
+                        DELTA_Z_ROWS, delta_input_groups,
+                        (uint64_t)DELTA_Z_ROWS * delta_input_groups * 2) != 0 ||
+        validate_tensor(&delta_a_weight, DELTA_A_WEIGHT, "U32",
+                        DELTA_SCALAR_ROWS, QWEN36_HIDDEN_SIZE / 8,
+                        delta_scalar_weight_bytes) != 0 ||
+        validate_tensor(&delta_a_scale, DELTA_A_SCALE, "BF16",
+                        DELTA_SCALAR_ROWS, delta_input_groups,
+                        (uint64_t)DELTA_SCALAR_ROWS * delta_input_groups * 2) != 0 ||
+        validate_tensor(&delta_a_bias, DELTA_A_BIAS, "BF16",
+                        DELTA_SCALAR_ROWS, delta_input_groups,
+                        (uint64_t)DELTA_SCALAR_ROWS * delta_input_groups * 2) != 0 ||
+        validate_tensor(&delta_b_weight, DELTA_B_WEIGHT, "U32",
+                        DELTA_SCALAR_ROWS, QWEN36_HIDDEN_SIZE / 8,
+                        delta_scalar_weight_bytes) != 0 ||
+        validate_tensor(&delta_b_scale, DELTA_B_SCALE, "BF16",
+                        DELTA_SCALAR_ROWS, delta_input_groups,
+                        (uint64_t)DELTA_SCALAR_ROWS * delta_input_groups * 2) != 0 ||
+        validate_tensor(&delta_b_bias, DELTA_B_BIAS, "BF16",
+                        DELTA_SCALAR_ROWS, delta_input_groups,
+                        (uint64_t)DELTA_SCALAR_ROWS * delta_input_groups * 2) != 0 ||
+        validate_tensor(&delta_out_weight, DELTA_OUT_WEIGHT, "U32",
+                        QWEN36_HIDDEN_SIZE, DELTA_OUTPUT_INPUTS / 8,
+                        delta_output_weight_bytes) != 0 ||
+        validate_tensor(&delta_out_scale, DELTA_OUT_SCALE, "BF16",
+                        QWEN36_HIDDEN_SIZE, delta_output_groups,
+                        (uint64_t)QWEN36_HIDDEN_SIZE * delta_output_groups * 2) != 0 ||
+        validate_tensor(&delta_out_bias, DELTA_OUT_BIAS, "BF16",
+                        QWEN36_HIDDEN_SIZE, delta_output_groups,
+                        (uint64_t)QWEN36_HIDDEN_SIZE * delta_output_groups * 2) != 0) {
+        return 4;
+    }
 
     qwen36_m3_image_header header;
     memset(&header, 0, sizeof(header));
@@ -511,7 +726,52 @@ int main(int argc, char **argv) {
     header.down_quants_bytes = weight_bytes;
     header.down_metadata_offset = header.down_quants_offset + weight_bytes;
     header.down_metadata_bytes = metadata_plane_bytes * 2;
+    header.layer_index = layer_index;
+    header.delta_input_rows = DELTA_INPUT_ROWS;
+    header.delta_input_groups_per_row = delta_input_groups;
+    header.delta_output_rows = QWEN36_HIDDEN_SIZE;
+    header.delta_output_groups_per_row = delta_output_groups;
+    header.input_norm_constants_index = 0;
+    header.post_norm_constants_index = QWEN36_HIDDEN_SIZE;
+    header.conv_constants_index = 2 * QWEN36_HIDDEN_SIZE;
+    header.a_log_constants_index =
+        header.conv_constants_index + DELTA_CONV_VALUES;
+    header.dt_bias_constants_index =
+        header.a_log_constants_index + DELTA_SCALAR_ROWS;
+    header.recurrent_norm_constants_index =
+        header.dt_bias_constants_index + DELTA_SCALAR_ROWS;
+    header.constants_f32_count =
+        (uint32_t)(header.recurrent_norm_constants_index +
+                   QWEN36_DELTA_HEAD_SIZE);
+    header.constants_offset = align_page(header.down_metadata_offset +
+                                         header.down_metadata_bytes);
+    header.constants_bytes =
+        align_page((uint64_t)header.constants_f32_count * sizeof(float));
+    header.delta_input_quants_offset =
+        header.constants_offset + header.constants_bytes;
+    header.delta_input_quants_bytes =
+        delta_qkv_weight_bytes + delta_z_weight_bytes +
+        2 * delta_scalar_weight_bytes;
+    header.delta_input_metadata_offset =
+        header.delta_input_quants_offset + header.delta_input_quants_bytes;
+    uint64_t delta_input_metadata_payload =
+        (uint64_t)DELTA_INPUT_ROWS * delta_input_groups *
+        2 * sizeof(uint16_t);
+    header.delta_input_metadata_bytes =
+        align_page(delta_input_metadata_payload);
+    header.delta_output_quants_offset =
+        header.delta_input_metadata_offset +
+        header.delta_input_metadata_bytes;
+    header.delta_output_quants_bytes = delta_output_weight_bytes;
+    header.delta_output_metadata_offset =
+        header.delta_output_quants_offset +
+        header.delta_output_quants_bytes;
+    header.delta_output_metadata_bytes =
+        (uint64_t)QWEN36_HIDDEN_SIZE * delta_output_groups *
+        2 * sizeof(uint16_t);
     memcpy(header.source_sha256, argv[3], QWEN36_M3_SOURCE_SHA256_LENGTH);
+    memcpy(header.mlp_source_sha256, mlp_sha,
+           QWEN36_M3_SOURCE_SHA256_LENGTH);
 
     int source = open(argv[1], O_RDONLY);
     if (source < 0) {
@@ -522,17 +782,29 @@ int main(int argc, char **argv) {
         close(source);
         return 6;
     }
+    int mlp_source = source;
+    if (strcmp(mlp_path, argv[1]) != 0) {
+        mlp_source = open(mlp_path, O_RDONLY);
+        if (mlp_source < 0 ||
+            verify_source_sha256(mlp_source, mlp_sha) != 0) {
+            if (mlp_source >= 0) close(mlp_source);
+            close(source);
+            return 6;
+        }
+    }
     int output = open(argv[2], O_WRONLY | O_CREAT | O_EXCL, 0644);
     if (output < 0) {
         fprintf(stderr, "open: %s\n", strerror(errno));
+        if (mlp_source != source) close(mlp_source);
         close(source);
         return 5;
     }
     header.source_reference_count = 8;
-    if (source_reference_first_8(source, &gate_weight, &gate_scale, &gate_bias,
+    if (source_reference_first_8(mlp_source, &gate_weight, &gate_scale, &gate_bias,
                                  &up_weight, &up_scale, &up_bias,
                                  header.source_reference_first_8) != 0) {
         fprintf(stderr, "cannot calculate BF16 source reference\n");
+        if (mlp_source != source) close(mlp_source);
         close(source);
         close(output);
         unlink(argv[2]);
@@ -540,32 +812,90 @@ int main(int argc, char **argv) {
     }
     header.source_mlp_reference_count = 8;
     if (source_mlp_reference_first_8(
-            source, &gate_weight, &gate_scale, &gate_bias,
+            mlp_source, &gate_weight, &gate_scale, &gate_bias,
             &up_weight, &up_scale, &up_bias,
             &down_weight, &down_scale, &down_bias,
             header.source_mlp_reference_first_8) != 0) {
         fprintf(stderr, "cannot calculate full MLP BF16 source reference\n");
+        if (mlp_source != source) close(mlp_source);
         close(source);
         close(output);
         unlink(argv[2]);
         return 7;
     }
+    uint64_t delta_quant_cursor = header.delta_input_quants_offset;
+    uint64_t delta_metadata_cursor = header.delta_input_metadata_offset;
     int failed = pwrite_exact(output, &header, sizeof(header), 0) != 0 ||
-                 copy_weight(source, output, &gate_weight,
+                 copy_weight(mlp_source, output, &gate_weight,
                              header.gate_quants_offset) != 0 ||
-                 convert_metadata(source, output, &gate_scale, &gate_bias,
+                 convert_metadata(mlp_source, output, &gate_scale, &gate_bias,
+                                  (size_t)(gate_scale.data_length / 2),
                                   header.gate_metadata_offset) != 0 ||
-                 copy_weight(source, output, &up_weight,
+                 copy_weight(mlp_source, output, &up_weight,
                              header.up_quants_offset) != 0 ||
-                 convert_metadata(source, output, &up_scale, &up_bias,
+                 convert_metadata(mlp_source, output, &up_scale, &up_bias,
+                                  (size_t)(up_scale.data_length / 2),
                                   header.up_metadata_offset) != 0 ||
-                 copy_weight(source, output, &down_weight,
+                 copy_weight(mlp_source, output, &down_weight,
                              header.down_quants_offset) != 0 ||
-                 convert_metadata(source, output, &down_scale, &down_bias,
+                 convert_metadata(mlp_source, output, &down_scale, &down_bias,
+                                  (size_t)(down_scale.data_length / 2),
                                   header.down_metadata_offset) != 0 ||
-                 ftruncate(output, (off_t)(header.down_metadata_offset +
-                                           header.down_metadata_bytes)) != 0 ||
+                 write_bf16_as_f32(source, output, &input_norm,
+                    header.constants_offset +
+                    header.input_norm_constants_index * sizeof(float)) != 0 ||
+                 write_bf16_as_f32(source, output, &post_norm,
+                    header.constants_offset +
+                    header.post_norm_constants_index * sizeof(float)) != 0 ||
+                 write_bf16_as_f32(source, output, &delta_conv,
+                    header.constants_offset +
+                    header.conv_constants_index * sizeof(float)) != 0 ||
+                 write_bf16_as_f32(source, output, &delta_a_log,
+                    header.constants_offset +
+                    header.a_log_constants_index * sizeof(float)) != 0 ||
+                 write_bf16_as_f32(source, output, &delta_dt_bias,
+                    header.constants_offset +
+                    header.dt_bias_constants_index * sizeof(float)) != 0 ||
+                 write_bf16_as_f32(source, output, &delta_norm,
+                    header.constants_offset +
+                    header.recurrent_norm_constants_index * sizeof(float)) != 0 ||
+                 append_weight(source, output, &delta_qkv_weight,
+                               &delta_quant_cursor) != 0 ||
+                 append_weight(source, output, &delta_z_weight,
+                               &delta_quant_cursor) != 0 ||
+                 append_weight(source, output, &delta_a_weight,
+                               &delta_quant_cursor) != 0 ||
+                 append_weight(source, output, &delta_b_weight,
+                               &delta_quant_cursor) != 0 ||
+                 append_metadata(source, output, &delta_qkv_scale,
+                                 &delta_qkv_bias,
+                                 &delta_metadata_cursor) != 0 ||
+                 append_metadata(source, output, &delta_z_scale,
+                                 &delta_z_bias,
+                                 &delta_metadata_cursor) != 0 ||
+                 append_metadata(source, output, &delta_a_scale,
+                                 &delta_a_bias,
+                                 &delta_metadata_cursor) != 0 ||
+                 append_metadata(source, output, &delta_b_scale,
+                                 &delta_b_bias,
+                                 &delta_metadata_cursor) != 0 ||
+                 copy_weight(source, output, &delta_out_weight,
+                             header.delta_output_quants_offset) != 0 ||
+                 convert_metadata(source, output, &delta_out_scale,
+                                  &delta_out_bias,
+                                  (size_t)(delta_out_scale.data_length / 2),
+                                  header.delta_output_metadata_offset) != 0 ||
+                 delta_quant_cursor !=
+                    header.delta_input_quants_offset +
+                    header.delta_input_quants_bytes ||
+                 delta_metadata_cursor !=
+                    header.delta_input_metadata_offset +
+                    delta_input_metadata_payload ||
+                 ftruncate(output,
+                    (off_t)(header.delta_output_metadata_offset +
+                            header.delta_output_metadata_bytes)) != 0 ||
                  fsync(output) != 0;
+    if (mlp_source != source) close(mlp_source);
     close(source);
     close(output);
     if (failed) {
@@ -576,6 +906,7 @@ int main(int argc, char **argv) {
     printf("{\"source\":\"%s\",\"output\":\"%s\","
            "\"source_sha256\":\"%s\",\"bytes\":%" PRIu64 "}\n",
            argv[1], argv[2], argv[3],
-           header.down_metadata_offset + header.down_metadata_bytes);
+           header.delta_output_metadata_offset +
+           header.delta_output_metadata_bytes);
     return 0;
 }

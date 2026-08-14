@@ -14,7 +14,12 @@ enum {
     QWEN36_Q4_GROUP_BYTES = 36,
     QWEN36_DELTA_KEY_HEADS = 16,
     QWEN36_DELTA_VALUE_HEADS = 48,
-    QWEN36_DELTA_HEAD_SIZE = 128
+    QWEN36_DELTA_HEAD_SIZE = 128,
+    QWEN36_DELTA_QKV_ROWS = 10240,
+    QWEN36_DELTA_Z_ROWS = 6144,
+    QWEN36_DELTA_INPUT_ROWS = 16480,
+    QWEN36_DELTA_OUTPUT_INPUTS = 6144,
+    QWEN36_DELTA_CONV_SIZE = 4
 };
 
 typedef struct {
@@ -69,6 +74,46 @@ typedef struct {
     float vectorized_output_first_8[8];
 } qwen36_m3_deltanet_core_result;
 
+typedef struct {
+    char device_name[128];
+    char weight_source[256];
+    unsigned warmup_iterations;
+    unsigned measured_iterations;
+    size_t mapped_image_bytes;
+    size_t recurrent_state_bytes;
+    size_t convolution_state_bytes;
+    size_t metal_owned_buffer_bytes;
+    size_t footprint_before_bytes;
+    size_t footprint_peak_bytes;
+    double layer_ms;
+    double effective_weight_gbps;
+    double max_abs_error_output_first_8;
+    double max_abs_error_recurrent_state;
+    double max_abs_error_convolution_state;
+    float reference_output_first_8[8];
+    float metal_output_first_8[8];
+} qwen36_m3_layer_result;
+
+typedef struct {
+    char device_name[128];
+    char weight_source[256];
+    unsigned warmup_iterations;
+    unsigned measured_iterations;
+    size_t mapped_image_bytes;
+    size_t kv_cache_bytes_at_context_1;
+    size_t metal_owned_buffer_bytes;
+    size_t footprint_before_bytes;
+    size_t footprint_peak_bytes;
+    double layer_ms_at_context_1;
+    double effective_weight_gbps_at_context_1;
+    double max_abs_error_output_first_8;
+    double max_abs_error_query;
+    double max_abs_error_key_cache;
+    double max_abs_error_value_cache;
+    float reference_output_first_8[8];
+    float metal_output_first_8[8];
+} qwen36_m3_attention_result;
+
 /*
  * Runs the real Qwen3.6-27B layer-0 MLP shape. With image_path set, weights
  * come from the pinned checkpoint image; otherwise deterministic packed
@@ -93,6 +138,30 @@ int qwen36_m3_run_deltanet_core_benchmark(
     unsigned warmup_iterations,
     unsigned measured_iterations,
     qwen36_m3_deltanet_core_result *result,
+    char *error_message,
+    size_t error_message_capacity);
+
+/*
+ * Runs a complete real layer-0 decode step:
+ * RMSNorm -> DeltaNet projections/convolution/recurrent update/gated norm/
+ * output projection -> residual -> RMSNorm -> MLP -> residual.
+ * The first correctness run starts from zero recurrent and convolution state.
+ */
+int qwen36_m3_run_layer_benchmark(
+    const char *metallib_path,
+    const char *image_path,
+    unsigned warmup_iterations,
+    unsigned measured_iterations,
+    qwen36_m3_layer_result *result,
+    char *error_message,
+    size_t error_message_capacity);
+
+int qwen36_m3_run_attention_layer_benchmark(
+    const char *metallib_path,
+    const char *image_path,
+    unsigned warmup_iterations,
+    unsigned measured_iterations,
+    qwen36_m3_attention_result *result,
     char *error_message,
     size_t error_message_capacity);
 

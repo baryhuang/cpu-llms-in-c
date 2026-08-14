@@ -459,10 +459,16 @@ int qwen36_m3_run_mlp_microbenchmark(const char *metallib_path,
                 expected_up_metadata_offset + metadata_bytes;
             uint64_t expected_down_metadata_offset =
                 expected_down_quants_offset + down_quant_bytes;
-            uint64_t image_end = image_header->down_metadata_offset +
-                                 image_header->down_metadata_bytes;
+            uint64_t image_end =
+                image_header->version == QWEN36_M3_MLP_ONLY_IMAGE_VERSION ?
+                image_header->down_metadata_offset +
+                    image_header->down_metadata_bytes :
+                image_header->delta_output_metadata_offset +
+                    image_header->delta_output_metadata_bytes;
             if (memcmp(image_header->magic, QWEN36_M3_IMAGE_MAGIC, 8) != 0 ||
-                image_header->version != QWEN36_M3_IMAGE_VERSION ||
+                (image_header->version != QWEN36_M3_IMAGE_VERSION &&
+                 image_header->version !=
+                    QWEN36_M3_MLP_ONLY_IMAGE_VERSION) ||
                 image_header->header_bytes != QWEN36_M3_IMAGE_HEADER_BYTES ||
                 image_header->hidden_size != QWEN36_HIDDEN_SIZE ||
                 image_header->rows != QWEN36_MLP_SIZE ||

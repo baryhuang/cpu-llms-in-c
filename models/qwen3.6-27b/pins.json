@@ -28,9 +28,10 @@
     }
   },
   "artifact_scope": "text-only",
-  "status": "quantized-input-pinned-layer0-full-mlp-measured",
+  "status": "text-only-free-text-end-to-end-measured-on-apple-m3-pro",
   "release_blockers": [
-    "emit and hash the complete 64-layer text image",
-    "complete tensor-boundary and output-quality verification"
+    "implement and verify batched prompt prefill",
+    "run a pinned standardized text quality benchmark",
+    "measure 1K and 4K same-machine profiles"
   ]
 }

@@ -1,8 +1,7 @@
 {
-  "schema": 2,
-  "status": "layer0-mlp-primitive-only",
-  "measured_at": "2026-08-14T00:32:05+08:00",
-  "scope": "Qwen3.6-27B layer-0 gate, up, SiLU, down and residual; not full-model token throughput",
+  "schema": 3,
+  "status": "free-text-end-to-end",
+  "measured_at": "2026-08-14T13:20:00+08:00",
   "machine": {
     "model_identifier": "Mac15,6",
     "soc": "Apple M3 Pro",
@@ -10,177 +9,227 @@
     "gpu_cores": 14,
     "memory_bytes": 38654705664,
     "metal": "Metal 3",
-    "macos": "15.7.3 (24G419)",
-    "power": "battery, discharging",
-    "thermal_warning": false
+    "macos": "15.7.3 (24G419)"
   },
   "source": {
-    "repository": "mlx-community/Qwen3.6-27B-4bit",
-    "revision": "c000ac2c2057d94be3fa931000c31723aac53282",
-    "source_shard_sha256": "2689680915661f040c50c35244d08b336def279e509e1ca11873f8dd1b0e7ce0",
-    "layer0_image_bytes": 150409216,
-    "layer0_image_sha256": "e403fc67a0cce60eed5a809c57e52507819971571e7cf8c59757fe61c40f0aea",
-    "image_committed": false
+    "model_repository": "Qwen/Qwen3.6-27B",
+    "model_config_commit": "1b559cf7215ebe67ff10758e14f6293ba883223b",
+    "quantized_repository": "mlx-community/Qwen3.6-27B-4bit",
+    "quantized_revision": "c000ac2c2057d94be3fa931000c31723aac53282",
+    "quantization": "affine Q4 group-64",
+    "artifact_scope": "text-only"
+  },
+  "compiled_artifact": {
+    "global_and_layer_files": 65,
+    "global_and_layer_bytes": 15138643968,
+    "tokenizer_bytes": 9781808,
+    "manifest_sha256": "dadbd9457bcfa809befa2f28087cb89be495de4063b5ebb16da7e58ed6771d63",
+    "all_local_entries_match_remote_compiled_artifact": true,
+    "images_committed": false
   },
   "build": {
-    "runtime_binary_sha256": "7795b76e3f9d9071b39e0f2d114fd7dcb8ec1d12b7fba268fddeec72e1bf2621",
-    "deltanet_benchmark_binary_sha256": "7a12451789753a4b3066ec73c13d2155260f9c6f7d2626e569dfafe9ad73db7f",
-    "metallib_sha256": "b40771e044791c85d475b5ff1cd8c0415c0aac4d479357fbc8e5f4efc107dfae",
-    "metal_compiler": "Apple Metal 32023.864",
-    "python_loaded_by_runtime": false,
-    "mlx_loaded_by_runtime": false,
-    "llama_cpp_loaded_by_runtime": false
+    "generator_sha256": "92e61119cb58c10595544ade204642bbd793461e824c8fcd9a7d5b2e0ff0db53",
+    "metallib_sha256": "d43fe32c1082161f181acd6cdf3eb59bf12c08a5fdebe493fd183d8aac8c25bf",
+    "tokenizer_cli_sha256": "6d709eed58c4cf7d043990474bafa658562a455d011ac5424f4beb088da22a78",
+    "python_loaded_by_deployment": false,
+    "mlx_loaded_by_deployment": false,
+    "llama_cpp_loaded_by_deployment": false,
+    "cpp_runtime_loaded_by_deployment": false,
+    "dynamic_dependencies": [
+      "Foundation",
+      "Metal",
+      "CoreFoundation",
+      "libicucore",
+      "libSystem",
+      "libobjc"
+    ]
   },
-  "shape": {
-    "hidden": 5120,
-    "intermediate": 17408,
-    "quantization": "affine Q4 group-64",
-    "bytes_per_projection": 50135040,
-    "full_mlp_weight_bytes": 150405120
-  },
-  "protocol": {
-    "process_runs": 5,
-    "warmup_iterations_per_run": 5,
-    "measured_iterations_per_path_per_run": 40,
-    "schedule_candidates_threads": [64, 128, 256, 512],
-    "schedule_sample": "median of five 10-iteration samples within each process",
-    "summary": "median of each metric across five independent process runs"
-  },
-  "incremental_median": [
-    {
-      "path": "internal generic-layout reference",
-      "work": "gate + up + SiLU",
-      "milliseconds": 1.072704,
-      "incremental_speedup": null,
-      "cumulative_speedup": 1.0
-    },
-    {
-      "path": "Apple split-stream layout, unfused",
-      "work": "gate + up + SiLU",
-      "milliseconds": 1.008423,
-      "incremental_speedup": 1.063744,
-      "cumulative_speedup": 1.063744
-    },
-    {
-      "path": "Apple split-stream layout, fused",
-      "work": "gate + up + SiLU",
-      "milliseconds": 0.969930,
-      "incremental_speedup": 1.039686,
-      "cumulative_speedup": 1.105960
-    }
-  ],
-  "full_mlp_median": {
-    "milliseconds": 1.367039,
-    "effective_weight_gbps": 110.022589,
-    "mapped_image_bytes": 150409216,
-    "metal_owned_benchmark_buffer_bytes": 100648960,
-    "physical_footprint_before_bytes": 4342912,
-    "physical_footprint_peak_bytes": 178390656
-  },
-  "deltanet_recurrent_core": {
-    "scope": "one-token recurrent state update; Q4 projections, convolution and output norm/projection excluded",
-    "shape": {
-      "key_heads": 16,
-      "value_heads": 48,
-      "key_head_dim": 128,
-      "value_head_dim": 128,
-      "key_head_repeat": 3,
-      "state_bytes_per_layer": 3145728,
-      "state_bytes_48_layers": 150994944
-    },
+  "layer_benchmarks": {
     "protocol": {
       "process_runs": 5,
-      "warmup_iterations_per_run": 10,
-      "samples_per_path_per_run": 5,
-      "measured_iterations_per_sample": 100,
-      "path_order": "alternated by sample; state reset before each sample",
-      "summary": "within-process sample median, then cross-process metric median"
+      "warmup_iterations_per_run": 2,
+      "measured_iterations_per_run": 20,
+      "summary": "cross-process median"
     },
-    "direct_scalar_per_value_ms": 0.152173,
-    "float2_per_thread_ms": 0.155072,
-    "selected_path": "direct scalar per value",
-    "selected_effective_state_gbps": 62.016185,
-    "physical_footprint_peak_bytes": 87327936,
-    "max_abs_error_both_outputs_vs_c": 0.0,
-    "max_abs_error_both_states_vs_c": 3.7252903e-9,
-    "c_reference_output_first_8": [
-      0.000769191945, 0.000802469149, 0.000835012936,
-      0.00086682057, 0.000897890131, 0.000928219,
-      0.000957807177, 0.000986652332
-    ],
-    "gpu_output_first_8": [
-      0.000769191945, 0.000802469149, 0.000835012936,
-      0.00086682057, 0.000897890131, 0.000928219,
-      0.000957807177, 0.000986652332
-    ],
-    "runs": [
-      {"direct_ms": 0.153577, "float2_ms": 0.159051, "direct_gbps": 61.449337, "peak_bytes": 87115008},
-      {"direct_ms": 0.154607, "float2_ms": 0.155072, "direct_gbps": 61.039958, "peak_bytes": 87393600},
-      {"direct_ms": 0.151376, "float2_ms": 0.153081, "direct_gbps": 62.342567, "peak_bytes": 87327936},
-      {"direct_ms": 0.148710, "float2_ms": 0.155258, "direct_gbps": 63.460144, "peak_bytes": 86934592},
-      {"direct_ms": 0.152173, "float2_ms": 0.154662, "direct_gbps": 62.016185, "peak_bytes": 87540992}
-    ]
-  },
-  "correctness": {
-    "max_abs_error_fused_vs_split_gpu": 0.0,
-    "max_abs_error_fused_vs_generic_gpu": 2.98023224e-7,
-    "max_abs_error_fused_vs_c_first_8_rows": 6.2584877e-7,
-    "max_abs_error_fused_vs_source_bf16_first_8_rows": 6.2584877e-7,
-    "max_abs_error_full_mlp_vs_source_bf16_first_8_rows": 5.06639481e-7,
-    "source_bf16_gate_up_first_8": [
-      0.376946419, -0.0139522506, -0.0393279605, -0.162114337,
-      -0.0161591358, -0.0162833314, -0.0067269057, 0.0444968119
-    ],
-    "gpu_gate_up_first_8": [
-      0.37694639, -0.0139522357, -0.0393278077, -0.162113711,
-      -0.016159106, -0.0162833426, -0.00672694482, 0.0444968045
-    ],
-    "source_bf16_full_mlp_first_8": [
-      0.145588845, 0.340642303, 0.236884966, 0.177922145,
-      0.21115385, 0.309731871, 0.193791032, 0.203297257
-    ],
-    "gpu_full_mlp_first_8": [
-      0.145589232, 0.340641797, 0.236884803, 0.177922025,
-      0.211153775, 0.309731722, 0.193790987, 0.203297168
-    ]
-  },
-  "runs": [
-    {"generic_ms": 1.062029, "split_ms": 1.015840, "fused_ms": 0.994131, "full_mlp_ms": 1.359882, "full_mlp_gbps": 110.601574, "peak_bytes": 178521728, "threads": 512},
-    {"generic_ms": 1.099658, "split_ms": 1.008423, "fused_ms": 0.955387, "full_mlp_ms": 1.384121, "full_mlp_gbps": 108.664733, "peak_bytes": 178390656, "threads": 128},
-    {"generic_ms": 1.060397, "split_ms": 1.001590, "fused_ms": 0.976365, "full_mlp_ms": 1.371098, "full_mlp_gbps": 109.696850, "peak_bytes": 178374208, "threads": 512},
-    {"generic_ms": 1.085348, "split_ms": 1.001706, "fused_ms": 0.964759, "full_mlp_ms": 1.365348, "full_mlp_gbps": 110.158823, "peak_bytes": 178308672, "threads": 256},
-    {"generic_ms": 1.072704, "split_ms": 1.011584, "fused_ms": 0.969930, "full_mlp_ms": 1.367039, "full_mlp_gbps": 110.022589, "peak_bytes": 178865728, "threads": 128}
-  ],
-  "rejected_experiments": [
-    {
-      "name": "gate/up byte-paired copy",
-      "full_mlp_speedup_median": 1.0103,
-      "decision": "rejected: adds another full gate/up representation for an unstable one-percent result"
+    "delta_layer_0": {
+      "scope": "complete one-token GatedDeltaNet layer, including Q4 projections, convolution, recurrent update, gated norm, MLP and residuals",
+      "median_duration_ms": 1.840846,
+      "median_effective_weight_gbps": 117.211300,
+      "max_abs_error_output_vs_independent_c": 0.00000149011612,
+      "max_abs_error_recurrent_state_vs_independent_c": 0.00000169873238,
+      "max_abs_error_convolution_state_vs_independent_c": 0.0000109672546,
+      "runs_ms": [1.981433, 1.829994, 1.840846, 1.829581, 1.856967]
     },
-    {
-      "name": "affine dot decomposition",
-      "baseline_full_mlp_ms": 1.366022,
-      "candidate_full_mlp_ms": 1.369155,
-      "speedup": 0.997711,
-      "decision": "rejected: no stable performance gain"
-    },
-    {
-      "name": "DeltaNet state in 32 KiB threadgroup tiles",
-      "direct_ms": 0.328170,
-      "candidate_ms": 0.488036,
-      "decision": "rejected: explicit load and synchronization are slower than cached device reads"
-    },
-    {
-      "name": "DeltaNet float4 per thread",
-      "direct_ms": 0.320628,
-      "candidate_ms": 0.400043,
-      "decision": "rejected: lower occupancy dominates load-width reuse"
-    },
-    {
-      "name": "DeltaNet float2 per thread",
-      "direct_ms": 0.152173,
-      "candidate_ms": 0.155072,
-      "decision": "rejected: balanced five-process measurement shows no gain"
+    "attention_layer_3": {
+      "scope": "complete one-token full-attention layer at context length 1, including Q4 projections, RoPE, KV update, attention, MLP and residuals",
+      "median_duration_ms": 1.770885,
+      "median_effective_weight_gbps": 118.263171,
+      "max_abs_error_output_vs_independent_c": 0.00000965595245,
+      "max_abs_error_query_vs_independent_c": 0.0000107288361,
+      "max_abs_error_key_cache_vs_independent_c": 0.0000104904175,
+      "max_abs_error_value_cache_vs_independent_c": 0.00000691413879,
+      "runs_ms": [1.899646, 1.768506, 1.770885, 1.794715, 1.718742]
     }
+  },
+  "c_end_to_end": {
+    "command": "build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib MODEL_DIR/tokenizer.q36tok 128 64 0 1 42 'Write a C function int max2(int a, int b) that returns the larger value. Output only the function.'",
+    "prompt": "Write a C function int max2(int a, int b) that returns the larger value. Output only the function.",
+    "rendered_chat": "<|im_start|>user\nWrite a C function int max2(int a, int b) that returns the larger value. Output only the function.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "prompt_token_ids": [248045, 846, 198, 7734, 264, 351, 709, 514, 1866, 17, 1494, 264, 11, 514, 292, 8, 421, 4523, 279, 7875, 869, 13, 8984, 1132, 279, 709, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
+    "output_token_ids": [71093, 66, 198, 390, 1866, 17, 1494, 264, 11, 514, 292, 8, 313, 198, 262, 460, 318, 64, 835, 292, 8, 907, 264, 535, 292, 26, 198, 92, 198, 71093],
+    "stop_token_id": 248046,
+    "output": "```c\nint max2(int a, int b) {\n    return (a > b) ? a : b;\n}\n```",
+    "sampler": {
+      "temperature": 0.0,
+      "top_k": 1,
+      "seed": 42
+    },
+    "durations_ms": {
+      "tokenizer_open": 5.963,
+      "tokenizer_encode": 2.589,
+      "model_open": 97.968,
+      "prompt_processing": 11301.202,
+      "prompt_first_forward_cold_page_touch": 7129.150,
+      "prompt_after_first": 4172.052,
+      "time_to_first_token_after_model_open": 11303.791,
+      "continuation_including_eos_decision": 3568.987,
+      "visible_token_intervals": 3443.072666
+    },
+    "throughput": {
+      "prompt_tokens_per_second_including_cold_first_touch": 3.185502,
+      "prompt_tokens_per_second_after_first": 8.389157,
+      "visible_decode_intervals_per_second": 8.422709252,
+      "continuation_decisions_per_second_including_eos": 8.405747
+    },
+    "memory": {
+      "mapped_weight_bytes": 15138643968,
+      "recurrent_and_convolution_state_bytes": 158859264,
+      "fp32_kv_cache_bytes_at_capacity_128": 16777216,
+      "reported_process_physical_footprint_bytes": 270034496,
+      "time_maximum_rss_bytes": 215007232,
+      "time_peak_memory_footprint_bytes": 277030400
+    },
+    "process_time": {
+      "real_seconds": 15.09,
+      "user_seconds": 0.03,
+      "system_seconds": 2.16
+    }
+  },
+  "same_machine_omlx_baseline": {
+    "scope": "oMLX BatchedEngine with the same rendered prompt and a checkpoint exported from the exact C deployment tensor images",
+    "versions": {
+      "omlx": "0.5.7",
+      "mlx": "0.32.0",
+      "mlx_lm": "0.31.3",
+      "mlx_vlm": "0.6.3"
+    },
+    "checkpoint": {
+      "tensor_count": 1847,
+      "tensor_data_bytes": 15132802048,
+      "file_sha256": "e274e534c4764315c57bb9f5af00013e007689dc1b7691aa75069f618b2e9f95",
+      "note": "Q4 payloads and deployed F16 metadata are preserved; source-BF16 constants are restored exactly to their BF16-origin values. This is value-equivalent to the deployed C image, not byte-identical to the original repository files."
+    },
+    "native_qwen35_prefill_kernel_available": true,
+    "native_qwen35_prefill_kernel_used_for_36_tokens": false,
+    "native_kernel_gate": "the oMLX Q4 and FA256 prefill routes require at least 2048 tokens by default",
+    "prompt_token_ids_equal": true,
+    "visible_output_token_ids_equal": true,
+    "output": "```c\nint max2(int a, int b) {\n    return (a > b) ? a : b;\n}\n```",
+    "durations_ms": {
+      "engine_start": 4971.697375,
+      "time_to_first_token_after_request": 2655.758292,
+      "request_wall": 7810.367667,
+      "visible_token_intervals": 4956.634250
+    },
+    "throughput": {
+      "prompt_tokens_per_second": 13.555450475,
+      "visible_decode_intervals_per_second": 5.850744384
+    },
+    "memory": {
+      "mlx_active_bytes": 15134588968,
+      "mlx_cache_bytes": 826530040,
+      "mlx_peak_bytes": 15888122986,
+      "sampled_rss_bytes": 2688434176,
+      "time_maximum_rss_bytes": 10625630208,
+      "time_peak_memory_footprint_bytes": 16376235264
+    },
+    "process_time": {
+      "real_seconds": 14.43,
+      "user_seconds": 2.96,
+      "system_seconds": 5.52
+    }
+  },
+  "same_machine_comparison": {
+    "visible_decode_intervals": 29,
+    "c_decode_tokens_per_second": 8.422709252,
+    "omlx_decode_tokens_per_second": 5.850744384,
+    "c_decode_speedup": 1.439596,
+    "c_prompt_tokens_per_second": 3.185502,
+    "omlx_prompt_tokens_per_second": 13.555450475,
+    "c_prompt_slowdown": 4.255358,
+    "interpretation": "The model-specific C/Metal one-token graph is faster for decode. The correctness-first C prefill still invokes that graph once per prompt token and is slower than oMLX batched prefill."
+  },
+  "quality_smoke_cases": [
+    {
+      "prompt": "What is 2+2? Answer with only the number.",
+      "output": "4",
+      "prompt_tokens": 25,
+      "prompt_processing_ms": 10422.904,
+      "continuation_tokens_per_second": 8.395671,
+      "semantic_result": "pass",
+      "format_result": "pass"
+    },
+    {
+      "prompt": "Complete the analogy: bird is to sky as fish is to __. Answer with one word.",
+      "output": "water",
+      "prompt_tokens": 31,
+      "prompt_processing_ms": 11247.067,
+      "continuation_tokens_per_second": 8.263780,
+      "semantic_result": "pass",
+      "format_result": "pass"
+    },
+    {
+      "prompt": "A train travels 60 km in one hour. How far in 3 hours? Answer with only the number and unit.",
+      "output": "180 km",
+      "prompt_tokens": 38,
+      "prompt_processing_ms": 11593.539,
+      "continuation_tokens_per_second": 8.348221,
+      "semantic_result": "pass",
+      "format_result": "pass"
+    },
+    {
+      "prompt": "Write a C function int max2(int a, int b) that returns the larger value. Output only the function.",
+      "output": "```c\nint max2(int a, int b) {\n    return (a > b) ? a : b;\n}\n```",
+      "prompt_tokens": 36,
+      "prompt_processing_ms": 11503.846,
+      "continuation_tokens_per_second": 8.354061,
+      "semantic_result": "pass",
+      "format_result": "fail: markdown fences were emitted despite the output-only instruction"
+    },
+    {
+      "prompt": "法国的首都是哪里？只回答城市名。",
+      "output": "巴黎",
+      "prompt_tokens": 23,
+      "prompt_processing_ms": 9865.872,
+      "continuation_tokens_per_second": 8.500582,
+      "semantic_result": "pass",
+      "format_result": "pass"
+    }
+  ],
+  "verification": {
+    "tokenizer_parity": "five English, chat-template, contraction/newline, Chinese and NFC cases matched the pinned official Rust tokenizer",
+    "same_prompt_ids_c_and_omlx": "36/36",
+    "same_visible_generation_ids_c_and_omlx": "30/30",
+    "same_visible_output_c_and_omlx": true,
+    "quality_semantic_passes": "5/5",
+    "quality_strict_format_passes": "4/5"
+  },
+  "open_limits": [
+    "prompt prefill is sequential one-token execution; a batched prefill graph is not implemented",
+    "the CLI renders one user message with enable_thinking=false; system and multi-turn message APIs are not implemented",
+    "the KV cache is FP32 and allocated to the configured context capacity",
+    "the artifact is text-only; vision and MTP are not compiled",
+    "the five quality cases are smoke tests, not a standardized quality benchmark",
+    "1K and 4K same-machine profiles have not been run"
   ]
 }

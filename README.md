@@ -25,7 +25,7 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 | Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | target runtime measured; answer scoring and greedy free generation implemented | target vs local generic generation IDs 19/19; classification decisions vs x86 12/12; tokenizer parity 20/20 | **3.6353 prompt tokens/s** classification prefill; **2.6005 tokens/s** steady decode; 488 MiB generation RSS; zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [generation review](models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html) · [ARC-Easy 5-case HTML](models/qwen3.5-0.8b/benchmarks/arc-easy-5/REVIEW.html) · [PDF](output/pdf/qwen35-arc-easy-5-review.pdf) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
 | Qwen3.5-0.8B | Rockchip RK3588S: 4x Cortex-A76 + 4x Cortex-A55, NPU | 2022 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3588s/README.md) |
 | Qwen3.5-0.8B | Rockchip RK3576: 4x Cortex-A72 + 4x Cortex-A53, NPU | 2024 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3576/README.md) |
-| Qwen3.6-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | real layer-0 Q4 MLP and exact-shape DeltaNet recurrent core implemented; full graph open | source-BF16 MLP error below 6.3e-7; DeltaNet output vs C exact | MLP **1.367039 ms / 110.023 GB/s**; DeltaNet core **0.152173 ms**; primitive results only, not model tokens/s or an oMLX comparison | [model](models/qwen3.6-27b/README.md) · [target](models/qwen3.6-27b/targets/apple-m3-pro/README.md) · [raw data](models/qwen3.6-27b/targets/apple-m3-pro/results.json) |
+| Qwen3.6-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | free-text end-to-end C/Metal runtime measured; batched prefill open | C vs oMLX: prompt IDs 36/36 and visible output IDs 30/30; layer boundaries within 1.1e-5 | **8.4227 tok/s decode**, 1.4396x same-machine oMLX; **3.1855 prompt tok/s**, 4.2554x slower than oMLX | [model](models/qwen3.6-27b/README.md) · [target](models/qwen3.6-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.6-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.6-27b/targets/apple-m3-pro/results.json) |
 | Whisper small.en | generic CPU | not pinned | complete C FFT front end, encoder, cached decoder, tokenizer and full-graph image compiler | F32 boundaries pass; three real-weight decoder tokens match NumPy; quantized error recorded separately | arbitrary PCM16 WAV to English text implemented; target-neutral speed is not a release result | [model](models/whisper-small.en/README.md) · [decision record](models/whisper-small.en/DECISIONS.md) · [generic target](models/whisper-small.en/targets/generic/README.md) |
 | Whisper small.en | Amlogic A113X: 4x Cortex-A53 | 2017 | mixed Q4/Q8 full graph; compact window, Q4 row/output reuse, NEON kernels and four-thread scheduling measured | public JFK smoke case normalized word edits 0/22; relative-WER suite remains open | 11 s WAV, 3-run median: **45.047 s, RTF 4.095**, 388% CPU, 251,396 KiB RSS, zero swap; **13.08x** vs fixed30 | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [HTML review](models/whisper-small.en/targets/a113x/benchmarks/jfk-11s/REVIEW.html) · [PDF review](output/pdf/whisper-small-en-a113x-jfk-11s-review.pdf) · [raw data](models/whisper-small.en/targets/a113x/results.json) |
 
@@ -55,13 +55,13 @@ Decode must stream every visited weight byte from DRAM for each token, so the ha
 tokens/s  ≤  usable memory bandwidth / weight bytes visited per token
 ```
 
-| Quantity | Gemma 4 E2B on dev x86 (measured) | Qwen3.5-0.8B on A113X (measured) |
-|---|---:|---:|
-| Weight bytes visited per decode token | 960 MB | ~350 MB (Q8 DeltaNet projections included) |
-| Usable DRAM bandwidth | not the limit yet | 3.591 GiB/s, four-thread read probe |
-| Achieved measured paths | 0.598 token/s (different model/workload) | 3.6353 prompt tokens/s classification; 2.6005 tokens/s steady greedy decode |
-| CPU optimization gain | — | 4.42x cumulative; still compute-bound |
-| Image / peak RSS vs RAM | 966 MB image, 926 MiB RSS, zero swap | 470 MiB image; 367 MiB answer scoring / 488 MiB generation RSS vs 1.92 GiB; zero swap |
+| Quantity | Gemma 4 E2B on dev x86 (measured) | Qwen3.5-0.8B on A113X (measured) | Qwen3.6-27B on M3 Pro (measured) |
+|---|---:|---:|---:|
+| Weight bytes visited per decode token | 960 MB | ~350 MB (Q8 DeltaNet projections included) | 15,138.6 MB mapped text image |
+| Usable/effective memory rate | not the limit yet | 3.591 GiB/s, four-thread read probe | 117.2 GB/s complete Delta layer; 118.3 GB/s complete attention layer |
+| Achieved measured paths | 0.598 token/s (different model/workload) | 3.6353 prompt tokens/s classification; 2.6005 tokens/s steady greedy decode | 8.4227 decode tok/s; 3.1855 sequential prompt tok/s |
+| Target optimization result | — | 4.42x cumulative; still compute-bound | decode 1.4396x oMLX; prompt 4.2554x slower than oMLX |
+| Image / state vs RAM | 966 MB image, 926 MiB RSS, zero swap | 470 MiB image; 367 MiB answer scoring / 488 MiB generation RSS vs 1.92 GiB; zero swap | 15.139 GB mapped weights + 158.9 MB recurrent/conv state + 16.8 MB FP32 KV at capacity 128 vs 36 GB |
 
 Two regimes follow, and they map exactly onto the two optimization axes:
 
@@ -163,8 +163,8 @@ Model-specific compile and run commands live in each model record, e.g. the [Gem
 | Limit | Where it is addressed |
 |---|---|
 | Gemma runtime has no tokenizer or free-text input | restricted legacy artifact; Qwen implements the current contract |
-| No TBL or multi-token prefill kernel | A113X CPU-axis roadmap steps 4-6 |
-| No full-graph tensor-by-tensor differential test | required before any kernel swap lands |
+| Qwen3.6-27B prompt path is sequential | Apple M3 Pro target: batched prefill is the next measured optimization |
+| Qwen3.6-27B has representative layer and end-to-end token parity, not all 64 layer boundaries | extend the independent oracle before changing numerical kernels |
 | No held-out application-quality evaluation | open |
 | Cross-model compiler remains a design | the second model record starts generalizing it |
 
