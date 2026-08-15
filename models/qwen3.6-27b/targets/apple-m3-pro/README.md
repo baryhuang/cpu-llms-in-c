@@ -1,8 +1,8 @@
 # Qwen3.6-27B on Apple M3 Pro
 
-Status: free-text generation runs end to end. The deployment opens compiled images, tokenizes one UTF-8 user prompt, renders the pinned no-thinking chat template, prefills the prompt through batched S32/S16 graphs, executes the complete 64-layer text graph, samples, and decodes text. Generated text streams incrementally while the next GPU forward is in flight. It does not load Python, MLX, llama.cpp, or a C++ runtime.
+Status: free-text generation runs end to end. The deployment opens compiled images, tokenizes one UTF-8 user prompt, renders the official chat template (thinking disabled by default), prefills the prompt through batched S64/S32/S16/S8/S4 graphs, executes the complete 64-layer text graph, samples, and decodes text. Generated text streams incrementally while the next GPU forward is in flight. It does not load Python, MLX, llama.cpp, or a C++ runtime.
 
-## Target pin
+## Target machine
 
 | Property | Value |
 |---|---|
@@ -488,23 +488,28 @@ kernels, which also keeps verify logits bitwise-anchored to decode.
 ### Overall throughput matrix
 
 Five cases, one resident process per arm, greedy seed 42, output
-token-identical on 5/5. Decode rate is tokens divided by time after the
-first token.
+token-identical on 5/5. The headline rate is end-to-end: completion
+tokens divided by the full request wall, from request start through
+prompt prefill, first token and the last generated token. Decode
+(tokens per interval after the first token) is kept as the
+kernel-level detail.
 
-| Case | Tokens | Decode, MTP off | Decode, adaptive MTP | Speedup | Request wall off/on |
-|---|---:|---:|---:|---:|---:|
-| C `max2` function | 30 | 8.30 tok/s | 12.06 tok/s | 1.45x | 4.7 / 4.0 s |
-| Hash-table prose | 446 | 8.24 | 9.35 | 1.13x | 54.9 / 48.7 s |
-| Python `LRUCache` class | 1,031 | 7.92 | 11.12 | 1.40x | 132.2 / 94.9 s |
-| Virtual-memory essay | 1,757 | 8.13 | 9.08 | 1.12x | 217.6 / 195.3 s |
-| Notes summary, 159-token prompt | 130 | 8.42 | 10.24 | 1.22x | 19.8 / 17.4 s |
-| **Aggregate, 3,394 tokens** | | **8.09** | **9.72** | **1.20x** | |
+| Case | Tokens | End-to-end tok/s, MTP off | End-to-end, adaptive MTP | Speedup | Decode off -> on | Request wall off/on |
+|---|---:|---:|---:|---:|---:|---:|
+| C `max2` function | 30 | 6.41 | 7.59 | 1.18x | 8.30 -> 12.06 | 4.7 / 4.0 s |
+| Hash-table prose | 446 | 8.12 | 9.16 | 1.13x | 8.24 -> 9.35 | 54.9 / 48.7 s |
+| Python `LRUCache` class | 1,031 | 7.80 | 10.86 | 1.39x | 7.92 -> 11.12 | 132.2 / 94.9 s |
+| Virtual-memory essay | 1,757 | 8.07 | 9.00 | 1.11x | 8.13 -> 9.08 | 217.6 / 195.3 s |
+| Notes summary, 159-token prompt | 130 | 6.56 | 7.47 | 1.14x | 8.42 -> 10.24 | 19.8 / 17.4 s |
+| **Aggregate, 3,394 tokens** | | **7.91** | **9.42** | **1.19x** | 8.09 -> 9.72 | 429.2 / 360.2 s |
 
-Code-heavy generation sits at 1.40-1.45x because the adaptive
-controller keeps the draft chain deep; free prose holds 1.12-1.13x.
-The plain-decode baseline itself declines slightly with generated
-length (8.42 at position ~150 to 7.92-8.13 past 1,000) as the KV
-context grows.
+End-to-end sits below decode exactly where prompt prefill amortizes
+over few output tokens (the short code case, the 159-token-prompt
+summary). Code-heavy generation reaches 1.39x end-to-end because the
+adaptive controller keeps the draft chain deep; free prose holds
+1.11-1.13x. The plain decode baseline itself declines slightly with
+generated length (8.42 at position ~150 to 7.92-8.13 past 1,000) as
+the KV context grows.
 
 ## Requests, sampling and conversations
 

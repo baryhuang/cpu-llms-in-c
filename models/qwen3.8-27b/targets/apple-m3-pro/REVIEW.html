@@ -41,8 +41,8 @@
   <p class="meta">Port review · measured 2026-08-15 · Mac15,6 · macOS 15.7.3 · same runtime binaries as the Qwen3.6-27B target</p>
 
   <div class="summary">
-    <div class="metric"><b>9.98 tok/s</b><span>aggregate decode, adaptive MTP, 3,305-token battery</span></div>
-    <div class="metric"><b>1.23x</b><span>vs plain greedy (8.13 tok/s), output token-identical</span></div>
+    <div class="metric"><b>9.66 tok/s</b><span>end-to-end aggregate, adaptive MTP, 3,305-token battery</span></div>
+    <div class="metric"><b>1.22x</b><span>vs plain greedy (7.94 end-to-end), output token-identical</span></div>
     <div class="metric"><b>0 code changes</b><span>graph, kernels and binaries reused from Qwen3.6</span></div>
     <div class="metric"><b>15.139 GB</b><span>mapped compiled model image (byte-count-identical to 3.6)</span></div>
   </div>
@@ -73,17 +73,17 @@
   <h2>3. Timed battery</h2>
   <p>The same five-case matrix, procedure and greedy seed as the Qwen3.6 record; one resident process per arm.</p>
   <table>
-    <thead><tr><th>Case</th><th class="num">Tokens</th><th class="num">Decode, MTP off</th><th class="num">Decode, adaptive MTP</th><th class="num">Speedup</th></tr></thead>
+    <thead><tr><th>Case</th><th class="num">Tokens</th><th class="num">End-to-end tok/s, MTP off</th><th class="num">End-to-end, adaptive MTP</th><th class="num">Speedup</th><th class="num">Decode off &rarr; on</th></tr></thead>
     <tbody>
-      <tr><td>C <code>max2</code> function</td><td class="num">28</td><td class="num">8.29 tok/s</td><td class="num"><strong>12.16 tok/s</strong></td><td class="num">1.47x</td></tr>
-      <tr><td>Hash-table prose</td><td class="num">531</td><td class="num">8.01</td><td class="num">9.56</td><td class="num">1.19x</td></tr>
-      <tr><td>Python <code>LRUCache</code> class</td><td class="num">1,155</td><td class="num">8.10</td><td class="num">11.54</td><td class="num">1.42x</td></tr>
-      <tr><td>Virtual-memory essay</td><td class="num">1,463</td><td class="num">8.18</td><td class="num">9.06</td><td class="num">1.11x</td></tr>
-      <tr><td>Notes summary, 159-token prompt</td><td class="num">128</td><td class="num">8.27</td><td class="num">11.01</td><td class="num">1.33x</td></tr>
-      <tr><td><strong>Aggregate</strong></td><td class="num">3,305</td><td class="num"><strong>8.13</strong></td><td class="num"><strong>9.98</strong></td><td class="num"><strong>1.23x</strong></td></tr>
+      <tr><td>C <code>max2</code> function</td><td class="num">28</td><td class="num">6.22</td><td class="num">7.37</td><td class="num">1.18x</td><td class="num">8.29 &rarr; 12.16</td></tr>
+      <tr><td>Hash-table prose</td><td class="num">531</td><td class="num">7.91</td><td class="num">9.40</td><td class="num">1.19x</td><td class="num">8.01 &rarr; 9.56</td></tr>
+      <tr><td>Python <code>LRUCache</code> class</td><td class="num">1,155</td><td class="num">7.99</td><td class="num"><strong>11.29</strong></td><td class="num">1.41x</td><td class="num">8.10 &rarr; 11.54</td></tr>
+      <tr><td>Virtual-memory essay</td><td class="num">1,463</td><td class="num">8.11</td><td class="num">8.97</td><td class="num">1.11x</td><td class="num">8.18 &rarr; 9.06</td></tr>
+      <tr><td>Notes summary, 159-token prompt</td><td class="num">128</td><td class="num">6.46</td><td class="num">7.85</td><td class="num">1.22x</td><td class="num">8.27 &rarr; 11.01</td></tr>
+      <tr><td><strong>Aggregate</strong></td><td class="num">3,305</td><td class="num"><strong>7.94</strong></td><td class="num"><strong>9.66</strong></td><td class="num"><strong>1.22x</strong></td><td class="num">8.13 &rarr; 9.98</td></tr>
     </tbody>
   </table>
-  <p>Qwen3.6-27B measured 8.09 → 9.72 tok/s (1.20x) on the same battery: the identical graph runs at the same base speed, with slightly better 3.8 draft acceptance.</p>
+  <p>End-to-end is completion tokens over the full request wall — prompt prefill, first token and decode included. Qwen3.6-27B measured 7.91 → 9.42 tok/s end-to-end (1.19x) on the same battery: the identical graph runs at the same base speed, with slightly better 3.8 draft acceptance.</p>
 
   <h2>4. Template semantics</h2>
   <p>The serving layer implements the 3.8 template: per-request <code>reasoning_effort</code> (low/medium/xhigh, none to disable) injects the verbatim effort instructions at the top of the system turn, thinking replies open at <code>&lt;think&gt;</code> and stream the think block as <code>reasoning_content</code>, and prior turns replay their reasoning (<code>preserve_thinking</code>). A low-effort request that exhausted a 400-token budget mid-think returned the truncated thinking with empty content and <code>finish_reason: length</code> — the reasoning-model convention; give thinking mode a larger budget. Raw record: <a href="results.json">results.json</a>.</p>

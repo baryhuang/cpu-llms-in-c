@@ -11,11 +11,12 @@ Qwen3.6-27B (verified tensor-by-tensor; see the
 adaptive multi-step MTP speculative decoding, incremental detokenizer)
 apply to these images unchanged.
 
-## Target pin
+## Target machine
 
-Machine, OS and toolchain: identical to the
-[Qwen3.6-27B target pin](../../../qwen3.6-27b/targets/apple-m3-pro/README.md#target-pin)
-(MacBook Pro `Mac15,6`, M3 Pro, 36 GB, macOS 15.7.3).
+The same machine, OS and toolchain as the
+[Qwen3.6-27B target](../../../qwen3.6-27b/targets/apple-m3-pro/README.md#target-machine):
+MacBook Pro `Mac15,6`, Apple M3 Pro, 36 GB unified memory,
+macOS 15.7.3.
 
 | Source | Pin |
 |---|---|
@@ -72,12 +73,12 @@ the answer as `content`, and replays prior turns' reasoning
 (`preserve_thinking`). Greedy thinking requests keep lossless
 speculative decoding. Verified end to end against these images: an
 xhigh request streamed 301 characters of reasoning and the correct
-split answer; `reasoning_effort: none` reproduces the pinned no-think
+split answer; `reasoning_effort: none` reproduces the default no-thinking
 behavior exactly; a low-effort request that exhausted a 400-token
 budget mid-think returned the truncated thinking in
 `reasoning_content` with empty `content` and `finish_reason: length`
 (the OpenAI reasoning-model convention — give thinking mode a larger
-token budget). The default remains the pinned no-think template.
+token budget). The default remains the no-thinking template.
 
 ## Verification
 
@@ -89,24 +90,27 @@ token budget). The default remains the pinned no-think template.
 | Smoke | "What is 2+2" → `4`; C `max2` function correct; 法国首都 → `巴黎` |
 | MTP | auto-enables against the 3.8 draft head; the code smoke accepted 19 drafts over 9 adaptive steps |
 | Thinking mode | xhigh request: correct answer with reasoning split into `reasoning_content`; `none` reproduces no-think byte behavior |
-| Quality (pinned ARC-Easy-5 smoke) | 3/5 strict at the 32-token budget, 4/5 at 96; every miss states the correct answer's content in prose without the required `Answer: X` line — under the no-think template 3.8 drifts toward explanation where 3.6 stays format-compliant (5/5). [Record](../../benchmarks/arc-easy-5/results-macos-m3-pro.json) |
+| Quality (pinned ARC-Easy-5 smoke) | 3/5 strict at the 32-token budget, 4/5 at 96; every miss states the correct answer's content in prose without the required `Answer: X` line — under the no-thinking template 3.8 drifts toward explanation where 3.6 stays format-compliant (5/5). [Record](../../benchmarks/arc-easy-5/results-macos-m3-pro.json) |
 
 ## Measured throughput
 
 Five-case resident-chat matrix (the same prompts, procedure and greedy
 seed as the Qwen3.6 matrix), one process per arm; output
 token-identical on 5/5 cases between plain greedy and adaptive MTP.
+The headline rate is end-to-end: completion tokens divided by the full
+request wall (prompt prefill, first token and decode included); decode
+per-interval rates are the kernel-level detail.
 
-| Case | Tokens | Decode, MTP off | Decode, adaptive MTP | Speedup | Request wall off/on |
-|---|---:|---:|---:|---:|---:|
-| C `max2` function | 28 | 8.29 tok/s | 12.16 tok/s | 1.47x | 4.5 / 3.8 s |
-| Hash-table prose | 531 | 8.01 | 9.56 | 1.19x | 67.1 / 56.5 s |
-| Python `LRUCache` class | 1,155 | 8.10 | 11.54 | 1.42x | 144.6 / 102.3 s |
-| Virtual-memory essay | 1,463 | 8.18 | 9.06 | 1.11x | 180.3 / 163.1 s |
-| Notes summary, 159-token prompt | 128 | 8.27 | 11.01 | 1.33x | 19.8 / 16.3 s |
-| **Aggregate, 3,305 tokens** | | **8.13** | **9.98** | **1.23x** | |
+| Case | Tokens | End-to-end tok/s, MTP off | End-to-end, adaptive MTP | Speedup | Decode off -> on | Request wall off/on |
+|---|---:|---:|---:|---:|---:|---:|
+| C `max2` function | 28 | 6.22 | 7.37 | 1.18x | 8.29 -> 12.16 | 4.5 / 3.8 s |
+| Hash-table prose | 531 | 7.91 | 9.40 | 1.19x | 8.01 -> 9.56 | 67.1 / 56.5 s |
+| Python `LRUCache` class | 1,155 | 7.99 | 11.29 | 1.41x | 8.10 -> 11.54 | 144.6 / 102.3 s |
+| Virtual-memory essay | 1,463 | 8.11 | 8.97 | 1.11x | 8.18 -> 9.06 | 180.3 / 163.1 s |
+| Notes summary, 159-token prompt | 128 | 6.46 | 7.85 | 1.22x | 8.27 -> 11.01 | 19.8 / 16.3 s |
+| **Aggregate, 3,305 tokens** | | **7.94** | **9.66** | **1.22x** | 8.13 -> 9.98 | 416.3 / 342.0 s |
 
-Qwen3.6-27B measured 8.09 → 9.72 tok/s (1.20x) on the same battery
-with the same runtime, so the 3.8 weights run at the same base speed
-(identical graph) with slightly better draft acceptance. Raw record:
-[`results.json`](results.json).
+Qwen3.6-27B measured 7.91 → 9.42 tok/s end-to-end (1.19x) on the same
+battery with the same runtime, so the 3.8 weights run at the same base
+speed (identical graph) with slightly better draft acceptance. Raw
+record: [`results.json`](results.json).

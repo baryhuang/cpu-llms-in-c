@@ -253,16 +253,17 @@ int max2(int a, int b) {
   <h3>Adaptive multi-step MTP, FP16 KV cache and the five-case matrix</h3>
   <p>The MTP layer now drafts recursively up to depth 3 (adaptive: a per-draft acceptance EMA holds prose at depth 1 and lets code climb), the attention KV cache stores half precision (64 KiB per context token), prefill runs S64/S32/S16/S8/S4 buckets, and the engine continues conversations from the live token history or a prompt-boundary GDN checkpoint. Every step kept output token-identical to plain greedy on its battery. The five-case throughput matrix (one resident process per arm, greedy seed 42, 3,394 generated tokens):</p>
   <table>
-    <thead><tr><th>Case</th><th class="num">Tokens</th><th class="num">Decode, MTP off</th><th class="num">Decode, adaptive MTP</th><th class="num">Speedup</th></tr></thead>
+    <thead><tr><th>Case</th><th class="num">Tokens</th><th class="num">End-to-end tok/s, MTP off</th><th class="num">End-to-end, adaptive MTP</th><th class="num">Speedup</th><th class="num">Decode off &rarr; on</th></tr></thead>
     <tbody>
-      <tr><td>C <code>max2</code> function</td><td class="num">30</td><td class="num">8.30 tok/s</td><td class="num"><strong>12.06 tok/s</strong></td><td class="num">1.45x</td></tr>
-      <tr><td>Hash-table prose</td><td class="num">446</td><td class="num">8.24</td><td class="num">9.35</td><td class="num">1.13x</td></tr>
-      <tr><td>Python <code>LRUCache</code> class</td><td class="num">1,031</td><td class="num">7.92</td><td class="num">11.12</td><td class="num">1.40x</td></tr>
-      <tr><td>Virtual-memory essay</td><td class="num">1,757</td><td class="num">8.13</td><td class="num">9.08</td><td class="num">1.12x</td></tr>
-      <tr><td>Notes summary, 159-token prompt</td><td class="num">130</td><td class="num">8.42</td><td class="num">10.24</td><td class="num">1.22x</td></tr>
-      <tr><td><strong>Aggregate</strong></td><td class="num">3,394</td><td class="num"><strong>8.09</strong></td><td class="num"><strong>9.72</strong></td><td class="num"><strong>1.20x</strong></td></tr>
+      <tr><td>C <code>max2</code> function</td><td class="num">30</td><td class="num">6.41</td><td class="num">7.59</td><td class="num">1.18x</td><td class="num">8.30 &rarr; 12.06</td></tr>
+      <tr><td>Hash-table prose</td><td class="num">446</td><td class="num">8.12</td><td class="num">9.16</td><td class="num">1.13x</td><td class="num">8.24 &rarr; 9.35</td></tr>
+      <tr><td>Python <code>LRUCache</code> class</td><td class="num">1,031</td><td class="num">7.80</td><td class="num"><strong>10.86</strong></td><td class="num">1.39x</td><td class="num">7.92 &rarr; 11.12</td></tr>
+      <tr><td>Virtual-memory essay</td><td class="num">1,757</td><td class="num">8.07</td><td class="num">9.00</td><td class="num">1.11x</td><td class="num">8.13 &rarr; 9.08</td></tr>
+      <tr><td>Notes summary, 159-token prompt</td><td class="num">130</td><td class="num">6.56</td><td class="num">7.47</td><td class="num">1.14x</td><td class="num">8.42 &rarr; 10.24</td></tr>
+      <tr><td><strong>Aggregate</strong></td><td class="num">3,394</td><td class="num"><strong>7.91</strong></td><td class="num"><strong>9.42</strong></td><td class="num"><strong>1.19x</strong></td><td class="num">8.09 &rarr; 9.72</td></tr>
     </tbody>
   </table>
+  <p>End-to-end is completion tokens over the full request wall — prompt prefill, first token and decode included; decode is tokens per interval after the first token, which is why the short-generation cases (a 30-token reply, a 159-token prompt) show lower end-to-end rates.</p>
   <p>Long context: 920/1,808/3,473-token document prompts prefill at ~52 tok/s throughout, decode declines 10.2 to 8.45 tok/s as the KV context grows, capacity 8192 verified, every answer correct. Multi-turn conversations continue instead of re-prefilling: four-turn TTFT 5.30&rarr;1.70 s, 8.79&rarr;1.45 s, 13.74&rarr;6.49 s (checkpoint fallback when a code reply does not survive the tokenize round trip), outputs token-identical. Per-request sampling (top-p, min-p, presence penalty) flows from the OpenAI API to the C sampler; greedy requests keep lossless speculation. Quality: 5/5 on the pinned ARC-Easy five-case smoke at both budgets.</p>
 
   <h2>4. Verification</h2>

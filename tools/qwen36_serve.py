@@ -5,7 +5,7 @@ Wraps the resident C chat binary (machine protocol mode) behind
 POST /v1/chat/completions with SSE streaming and GET /v1/models, so any
 OpenAI-compatible client - Chatbox, Cherry Studio, Open WebUI, Raycast,
 Continue, Cline - can talk to the local model. Standard library only;
-the shim renders the pinned no-thinking chat template and owns the HTTP
+the shim renders the official chat template (thinking optional) and owns the HTTP
 protocol, while all model execution stays in the C/Metal runtime.
 
 Usage:

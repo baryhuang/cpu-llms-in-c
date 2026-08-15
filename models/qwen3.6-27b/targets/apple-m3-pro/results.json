@@ -1065,7 +1065,9 @@
         "speedup": 1.452,
         "wall_off_s": 4.68,
         "wall_on_s": 3.95,
-        "accepts": "15/15"
+        "accepts": "15/15",
+        "e2e_tok_s_off": 6.41,
+        "e2e_tok_s_on": 7.59
       },
       {
         "case": "hash table (prose ~450)",
@@ -1079,7 +1081,9 @@
         "speedup": 1.134,
         "wall_off_s": 54.92,
         "wall_on_s": 48.71,
-        "accepts": "196/209"
+        "accepts": "196/209",
+        "e2e_tok_s_off": 8.12,
+        "e2e_tok_s_on": 9.16
       },
       {
         "case": "LRUCache (code, long)",
@@ -1093,7 +1097,9 @@
         "speedup": 1.404,
         "wall_off_s": 132.16,
         "wall_on_s": 94.9,
-        "accepts": "600/387"
+        "accepts": "600/387",
+        "e2e_tok_s_off": 7.8,
+        "e2e_tok_s_on": 10.86
       },
       {
         "case": "virtual memory essay (~1600)",
@@ -1107,7 +1113,9 @@
         "speedup": 1.116,
         "wall_off_s": 217.59,
         "wall_on_s": 195.25,
-        "accepts": "736/838"
+        "accepts": "736/838",
+        "e2e_tok_s_off": 8.07,
+        "e2e_tok_s_on": 9.0
       },
       {
         "case": "notes summary (150-tok prompt)",
@@ -1121,7 +1129,9 @@
         "speedup": 1.217,
         "wall_off_s": 19.82,
         "wall_on_s": 17.41,
-        "accepts": "67/57"
+        "accepts": "67/57",
+        "e2e_tok_s_off": 6.56,
+        "e2e_tok_s_on": 7.47
       }
     ],
     "aggregate": {
@@ -1131,7 +1141,11 @@
       "overall_speedup": 1.2,
       "code_speedup": "1.40-1.45x",
       "prose_speedup": "1.12-1.13x",
-      "longest_request_wall": "132.2 -> 94.9 s (1031-token code generation, 1.39x)"
+      "longest_request_wall": "132.2 -> 94.9 s (1031-token code generation, 1.39x)",
+      "e2e_tok_s_mtp_off": 7.91,
+      "e2e_tok_s_mtp_on": 9.42,
+      "e2e_speedup": 1.19,
+      "definition": "end-to-end = completion tokens / full request wall (prompt prefill + first token + decode); decode = tokens per interval after the first token"
     },
     "measured_at": "2026-08-14 evening battery, after the half-MMA, multi-step-MTP, FP16-KV, S64 and detokenizer increments"
   },

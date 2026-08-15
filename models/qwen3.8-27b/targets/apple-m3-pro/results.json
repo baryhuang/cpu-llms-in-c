@@ -33,7 +33,9 @@
         "speedup": 1.466,
         "wall_off": 4.5,
         "wall_on": 3.8,
-        "accepts": "14/14"
+        "accepts": "14/14",
+        "e2e_tok_s_off": 6.22,
+        "e2e_tok_s_on": 7.37
       },
       {
         "case": "hash table prose",
@@ -44,7 +46,9 @@
         "speedup": 1.194,
         "wall_off": 67.1,
         "wall_on": 56.5,
-        "accepts": "230/254"
+        "accepts": "230/254",
+        "e2e_tok_s_off": 7.91,
+        "e2e_tok_s_on": 9.4
       },
       {
         "case": "LRUCache (code, long)",
@@ -55,7 +59,9 @@
         "speedup": 1.424,
         "wall_off": 144.6,
         "wall_on": 102.3,
-        "accepts": "708/409"
+        "accepts": "708/409",
+        "e2e_tok_s_off": 7.99,
+        "e2e_tok_s_on": 11.29
       },
       {
         "case": "virtual memory essay",
@@ -66,7 +72,9 @@
         "speedup": 1.108,
         "wall_off": 180.3,
         "wall_on": 163.1,
-        "accepts": "590/709"
+        "accepts": "590/709",
+        "e2e_tok_s_off": 8.11,
+        "e2e_tok_s_on": 8.97
       },
       {
         "case": "notes summary (159-tok prompt)",
@@ -77,7 +85,9 @@
         "speedup": 1.331,
         "wall_off": 19.8,
         "wall_on": 16.3,
-        "accepts": "72/51"
+        "accepts": "72/51",
+        "e2e_tok_s_off": 6.46,
+        "e2e_tok_s_on": 7.85
       }
     ],
     "aggregate": {
@@ -86,9 +96,13 @@
       "decode_tok_s_mtp_on": 9.98,
       "overall_speedup": 1.23,
       "code_speedup": "1.42-1.47x",
-      "prose_speedup": "1.11-1.19x"
+      "prose_speedup": "1.11-1.19x",
+      "e2e_tok_s_mtp_off": 7.94,
+      "e2e_tok_s_mtp_on": 9.66,
+      "e2e_speedup": 1.22,
+      "definition": "end-to-end = completion tokens / full request wall (prompt prefill + first token + decode); decode = tokens per interval after the first token"
     },
-    "comparison_to_qwen36": "3.6 measured 8.09 -> 9.72 tok/s (1.20x) on the same battery; 3.8 drafts accept slightly better on the summary case (1.33x vs 1.22x)"
+    "comparison_to_qwen36": "3.6 measured 7.91 -> 9.42 tok/s end-to-end (1.19x) on the same battery; identical graph, slightly better 3.8 draft acceptance"
   },
   "thinking_mode": {
     "implemented": "per-request reasoning_effort (low/medium/xhigh/none) with the verbatim template injections; reply opens at <think>; reasoning_content/content split in stream and plain paths; preserve_thinking replay",
