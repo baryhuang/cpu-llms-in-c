@@ -22,11 +22,11 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 | Model | CPU / SoC target | Chip year | Status | Verification | Measured performance | Record |
 |---|---|---:|---|---|---|---|
 | Gemma 4 E2B | two-vCPU x86-64 dev machine | — | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
-| Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | measured on device: answer scoring and greedy generation | output matches the x86 reference token for token (19/19 generation, 12/12 classification, 20/20 tokenizer) | **3.64 prompt tok/s**, **2.60 decode tok/s**; 488 MiB RSS, zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [generation review](models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html) · [ARC-Easy 5-case HTML](models/qwen3.5-0.8b/benchmarks/arc-easy-5/REVIEW.html) · [PDF](output/pdf/qwen35-arc-easy-5-review.pdf) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
-| Qwen3.6-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | complete chat runtime: batched prompt reading, lossless speculative decoding, FP16 KV cache, multi-turn serving, OpenAI-compatible API, thinking mode | output matches oMLX token for token; speculative output identical to plain decoding on every test set; ARC-Easy 5-question check 5/5 | **9.42 tok/s end-to-end** (7.91 without speculation); **1.5-1.6x mlx-lm/oMLX**, **1.46x llama.cpp** with speculation; first token ~1 s | [model](models/qwen3.6-27b/README.md) · [target](models/qwen3.6-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.6-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.6-27b/targets/apple-m3-pro/results.json) |
-| Qwen3.8-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | runs on the Qwen3.6 runtime unchanged (architecture verified identical tensor by tensor); adds reasoning-effort thinking mode | all runtime test suites pass; speculative output identical to plain decoding; ARC-Easy 5-question check 3/5 (each miss answers correctly but skips the required format line) | **9.66 tok/s end-to-end** (7.94 without speculation); **1.56x llama.cpp** with speculation | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.8-27b/targets/apple-m3-pro/results.json) |
-| Whisper small.en | generic CPU | — | complete C FFT front end, encoder, cached decoder, tokenizer and full-graph image compiler | F32 boundaries pass; three real-weight decoder tokens match NumPy; quantized error recorded separately | arbitrary PCM16 WAV to English text implemented; target-neutral speed is not a release result | [model](models/whisper-small.en/README.md) · [decision record](models/whisper-small.en/DECISIONS.md) · [generic target](models/whisper-small.en/targets/generic/README.md) |
-| Whisper small.en | Amlogic A113X: 4x Cortex-A53 | 2017 | mixed Q4/Q8 full graph with NEON kernels and four-thread scheduling, measured on device | JFK reference sample transcribed with 0 word errors in 22; broader word-error-rate suite still open | 11 s WAV in **45.0 s** (3-run median), 251 MiB RSS, zero swap; **13.08x** faster than the unoptimized baseline | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [HTML review](models/whisper-small.en/targets/a113x/benchmarks/jfk-11s/REVIEW.html) · [PDF review](output/pdf/whisper-small-en-a113x-jfk-11s-review.pdf) · [raw data](models/whisper-small.en/targets/a113x/results.json) |
+| Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | answer scoring + greedy generation, measured on device | matches x86 reference: 19/19 generation, 12/12 classification, 20/20 tokenizer | **3.64 prompt tok/s**, **2.60 decode tok/s**; 488 MiB RSS, zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [generation review](models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html) · [ARC-Easy 5-case HTML](models/qwen3.5-0.8b/benchmarks/arc-easy-5/REVIEW.html) · [PDF](output/pdf/qwen35-arc-easy-5-review.pdf) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
+| Qwen3.6-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | full chat runtime: batched prefill, lossless speculative decoding, FP16 KV, multi-turn serving, OpenAI API, thinking mode | matches oMLX token-for-token; speculation lossless; ARC-Easy 5/5 | **9.42 tok/s end-to-end**; 1.5-1.6x mlx-lm/oMLX; 1.46x llama.cpp; first token ~1 s | [model](models/qwen3.6-27b/README.md) · [target](models/qwen3.6-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.6-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.6-27b/targets/apple-m3-pro/results.json) |
+| Qwen3.8-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | Qwen3.6 runtime unchanged (architecture verified identical); adds reasoning-effort control | all suites pass; speculation lossless; ARC-Easy 3/5 (misses correct in content, wrong format) | **9.66 tok/s end-to-end**; 1.56x llama.cpp | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.8-27b/targets/apple-m3-pro/results.json) |
+| Whisper small.en | generic CPU | — | complete C FFT front end, encoder, cached decoder, tokenizer and full-graph image compiler | F32 boundaries pass; decoder tokens match NumPy; quantized error recorded | WAV → English text; target-neutral speed not a release result | [model](models/whisper-small.en/README.md) · [decision record](models/whisper-small.en/DECISIONS.md) · [generic target](models/whisper-small.en/targets/generic/README.md) |
+| Whisper small.en | Amlogic A113X: 4x Cortex-A53 | 2017 | mixed Q4/Q8 full graph, NEON kernels, four threads, measured on device | JFK sample: 0/22 word errors; WER suite open | 11 s WAV in **45.0 s**; 251 MiB RSS, zero swap; **13.08x** vs baseline | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [HTML review](models/whisper-small.en/targets/a113x/benchmarks/jfk-11s/REVIEW.html) · [PDF review](output/pdf/whisper-small-en-a113x-jfk-11s-review.pdf) · [raw data](models/whisper-small.en/targets/a113x/results.json) |
 
 Chip year means first public MP release, official launch, or official development-board sale; it is not the board manufacture year. The evidence and exact event are recorded in each target file.
 
@@ -42,28 +42,26 @@ this runtime and produced identical output; llama.cpp build 10360
 the same model. Raw record:
 [`results.json`](models/qwen3.6-27b/targets/apple-m3-pro/results.json).
 
-| Tokens per second | This runtime | llama.cpp | mlx-lm | oMLX |
+| Qwen3.6-27B, one request | This runtime | llama.cpp | mlx-lm | oMLX |
 |---|---:|---:|---:|---:|
-| End-to-end, plain decoding | 6.54 | 6.06 | 3.96 | 3.74 |
-| **End-to-end, speculative decoding (this runtime's default)** | **8.83** | — | — | — |
-| Prompt reading | 36.4 | 39.3 | 13.9 | 11.6 |
-| Generation | 8.48 | 7.44 | 6.03 | 5.90 |
+| End-to-end tok/s | 6.54 | 6.06 | 3.96 | 3.74 |
+| End-to-end tok/s, speculative | **8.83** | — | — | — |
+| Prompt tok/s | 36.4 | 39.3 | 13.9 | 11.6 |
+| Decode tok/s | 8.48 | 7.44 | 6.03 | 5.90 |
+| Request wall, s | 4.59 | 4.95 | 7.58 | 8.03 |
+| First token, s | 0.99 | 0.92 | 2.60 | 3.11 |
 
-| Seconds | This runtime | llama.cpp | mlx-lm | oMLX |
-|---|---:|---:|---:|---:|
-| Full request | 4.59 | 4.95 | 7.58 | 8.03 |
-| First token | 0.99 | 0.92 | 2.60 | 3.11 |
+| Five-workload set | End-to-end tok/s, speculative | Plain |
+|---|---:|---:|
+| Qwen3.6-27B | **9.42** | 7.91 |
+| Qwen3.8-27B | **9.66** | 7.94 |
 
-End-to-end = reply tokens / full request time, prompt reading and
-first token included. Speculative output is token-identical to plain
-decoding; the other stacks have no equivalent mode. On longer work the
-rate rises because long replies amortize the prompt: across a
-five-workload set (28 to 1,757 reply tokens each), this runtime
-averages **9.42 tok/s** end-to-end on Qwen3.6-27B and **9.66 tok/s**
-on Qwen3.8-27B — the per-case tables are in the
-[Qwen3.6](models/qwen3.6-27b/targets/apple-m3-pro/README.md) and
-[Qwen3.8](models/qwen3.8-27b/targets/apple-m3-pro/README.md) target
-files. Long prompts read at 63.6 tok/s (llama.cpp: 73.0).
+End-to-end = reply tokens / full request time. Speculative decoding is
+this runtime's default and its output is token-identical to plain
+decoding; the other stacks have no equivalent mode. The workload-set
+rates are higher because long replies amortize the prompt. Per-case
+tables: [Qwen3.6](models/qwen3.6-27b/targets/apple-m3-pro/README.md) ·
+[Qwen3.8](models/qwen3.8-27b/targets/apple-m3-pro/README.md).
 
 ## Evaluation isolation
 
