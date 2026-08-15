@@ -301,7 +301,7 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 
 | Limit | Consequence | Next work |
 |---|---|---|
-| Per-process cold page touch | roughly 7.4 s of the 9.73 s TTFT faults mapped model pages | prefault or advise the mapping before the first chunk |
+| Per-process cold weight wiring | roughly 7.4 s of the 9.73 s TTFT is Metal first-use residency wiring of the mapped buffers; parallel CPU prefault was measured and made TTFT 7 s worse | investigate GPU-side residency; the cost amortizes in a long-lived process |
 | Untuned batched kernels | the warm S32 chunk spends about 1.4 s on 32 tokens | tune GEMM tiling and the blocked recurrence after profiling |
 | Prompts under 16 tokens | still run the sequential one-token path | add smaller buckets only if short-prompt TTFT matters |
 | Single user-message CLI | free text works, but system and multi-turn message APIs do not | expose a message-array C API without changing the graph |

@@ -182,10 +182,24 @@ Attention: packed Q/K/V -> QK norm + RoPE -> causal attention -> output
 MLP: packed gate/up -> activation -> down
 ```
 
+## Measured negative result: CPU prefault does not help cold TTFT
+
+Touching all mapped image pages from 8 parallel CPU threads at model open
+(plus `MADV_WILLNEED`) took 7.1 s and did NOT shrink the first S32 chunk,
+which still took 11.2 s; the control without prefault ran model open in
+0.12 s and the first chunk in 8.9 s. Total time to first token got about
+7 s worse. Conclusion: the first-chunk cost is Metal's first-use residency
+wiring of the `newBufferWithBytesNoCopy` mapped buffers, not process page
+faults, and CPU touching cannot satisfy it. The change was reverted. A
+future attempt should target GPU-side residency (for example
+`MTLResidencySet` on macOS 15) or accept the cost as a one-time
+per-process constant that amortizes in a server process.
+
 ## Work not yet implemented
 
-- Cold-page prefault/advise for the 15.1 GB mapping: about 7.4 s of the
-  9.73 s TTFT is per-process page faulting, now the controlling limit.
+- Cold-start weight wiring: about 7.4-8.9 s of the ~9.9 s cold TTFT is
+  Metal first-use residency wiring of the mapped weight buffers, now the
+  controlling limit. See the negative result above before retrying.
 - Batched kernel tuning: the warm S32 chunk spends about 1.4 s of compute
   on 32 tokens; profile GEMM tiling and the blocked recurrence.
 - S64/S128 prompt buckets for long prompts, after tuning.
@@ -200,17 +214,15 @@ MLP: packed gate/up -> activation -> down
 
 ## Recommended continuation order
 
-1. Measure and remove the cold page-fault cost: try `madvise(MADV_WILLNEED)`
-   or an explicit prefault pass on the mapped images before the first chunk,
-   and measure TTFT with the same rotated-round A/B method.
-2. Profile the S32 chunk (GPU counters or per-dispatch timing) and tune the
+1. Profile the S32 chunk (GPU counters or per-dispatch timing) and tune the
    dominant batched kernels; re-run the prefill parity test after every
-   kernel change.
-3. Add S64/S128 buckets once tuned kernels justify them; verify with the
+   kernel change. CPU prefaulting was tried and rejected; see the negative
+   result above.
+2. Add S64/S128 buckets once tuned kernels justify them; verify with the
    same parity gates.
-4. Continue the streaming pipeline: input-byte tokenizer API, token ring
+3. Continue the streaming pipeline: input-byte tokenizer API, token ring
    buffer, GPU sampling, prefix-state snapshots.
-5. Update docs/results only with measured incremental effects and exact raw
+4. Update docs/results only with measured incremental effects and exact raw
    commands. Commit and push after verification.
 
 ## Relevant files

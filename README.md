@@ -171,7 +171,7 @@ Model-specific compile and run commands live in each model record, e.g. the [Gem
 | Limit | Where it is addressed |
 |---|---|
 | Gemma runtime has no tokenizer or free-text input | restricted legacy artifact; Qwen implements the current contract |
-| Qwen3.6-27B TTFT is dominated by per-process cold page faults | Apple M3 Pro target: prefault or advise the 15.1 GB mapping before the first prefill chunk |
+| Qwen3.6-27B TTFT is dominated by per-process cold weight wiring | Apple M3 Pro target: CPU prefault measured and rejected; investigate GPU-side residency |
 | Qwen3.6-27B has representative layer and end-to-end token parity, not all 64 layer boundaries | extend the independent oracle before changing numerical kernels |
 | No held-out application-quality evaluation | open |
 | Cross-model compiler remains a design | the second model record starts generalizing it |

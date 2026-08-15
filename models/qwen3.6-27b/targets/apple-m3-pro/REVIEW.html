@@ -235,7 +235,7 @@ build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib \
   <h2>6. Open work</h2>
   <table>
     <tr><th>Open item</th><th>Measured reason</th></tr>
-    <tr><td>Cold page prefault</td><td>Roughly 7.4 s of the 9.73 s TTFT faults mapped model pages per process.</td></tr>
+    <tr><td>Cold weight wiring</td><td>Roughly 7.4 s of the 9.73 s TTFT is Metal first-use residency wiring of the mapped buffers; parallel CPU prefault was measured and rejected (7 s worse).</td></tr>
     <tr><td>Batched kernel tuning</td><td>The warm S32 chunk spends about 1.4 s of compute on 32 tokens; correctness-first, untuned.</td></tr>
     <tr><td>Message-array C API</td><td>Current CLI accepts arbitrary text but only as one user message.</td></tr>
     <tr><td>FP16/Q8 KV cache</td><td>Current cache costs 128 KiB per context token.</td></tr>
