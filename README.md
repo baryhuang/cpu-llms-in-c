@@ -23,8 +23,6 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 |---|---|---:|---|---|---|---|
 | Gemma 4 E2B | two-vCPU x86-64 dev machine (unpinned) | not pinned | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
 | Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | target runtime measured; answer scoring and greedy free generation implemented | target vs local generic generation IDs 19/19; classification decisions vs x86 12/12; tokenizer parity 20/20 | **3.6353 prompt tokens/s** classification prefill; **2.6005 tokens/s** steady decode; 488 MiB generation RSS; zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [generation review](models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html) · [ARC-Easy 5-case HTML](models/qwen3.5-0.8b/benchmarks/arc-easy-5/REVIEW.html) · [PDF](output/pdf/qwen35-arc-easy-5-review.pdf) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
-| Qwen3.5-0.8B | Rockchip RK3588S: 4x Cortex-A76 + 4x Cortex-A55, NPU | 2022 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3588s/README.md) |
-| Qwen3.5-0.8B | Rockchip RK3576: 4x Cortex-A72 + 4x Cortex-A53, NPU | 2024 | target plan recorded | external baseline only; no target run | nothing measured by this repository | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/rk3576/README.md) |
 | Qwen3.6-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | free-text end-to-end C/Metal runtime measured; adaptive multi-step MTP speculation, half-tile MMA prefill (S64..S4), FP16 KV, conversation continuation, per-request sampling, thinking mode; three-way vs mlx-lm/oMLX: decode 1.41x/1.44x faster | C vs oMLX: prompt IDs 36/36 and visible output IDs 30/30; MTP output token-identical on every battery; ARC-Easy-5 smoke 5/5 | **9.72 tok/s decode** aggregate over a 3,394-token five-case battery with adaptive MTP (8.09 plain; code up to 13.5 tok/s); warm TTFT 0.81 s; multi-turn TTFT up to 6.1x via continuation | [model](models/qwen3.6-27b/README.md) · [target](models/qwen3.6-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.6-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.6-27b/targets/apple-m3-pro/results.json) |
 | Qwen3.8-27B | Apple M3 Pro: same pin | 2023 | released 2026-08; verified architecture-identical to Qwen3.6-27B, so the same image format, kernels and binaries serve it — the port added source pins, two MTP packers, and full 3.8 template semantics (reasoning_effort thinking mode with reasoning_content streaming, preserve_thinking) | api-state and prefill parity pass against the 3.8 images; MTP output token-identical on 5/5 matrix cases; ARC-Easy-5 smoke 3/5 strict (misses carry correct content without the format line) | **9.98 tok/s decode** aggregate over a 3,305-token five-case battery with adaptive MTP (8.13 plain; code 1.42-1.47x) | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.8-27b/targets/apple-m3-pro/results.json) |
 | Whisper small.en | generic CPU | not pinned | complete C FFT front end, encoder, cached decoder, tokenizer and full-graph image compiler | F32 boundaries pass; three real-weight decoder tokens match NumPy; quantized error recorded separately | arbitrary PCM16 WAV to English text implemented; target-neutral speed is not a release result | [model](models/whisper-small.en/README.md) · [decision record](models/whisper-small.en/DECISIONS.md) · [generic target](models/whisper-small.en/targets/generic/README.md) |
@@ -33,6 +31,32 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 Chip year means first public MP release, official launch, or official development-board sale; it is not the board manufacture year. The evidence and exact event are recorded in each target file.
 
 The Gemma artifact predates the prompt-defined output contract and compiles its two labels in — now the restricted special case. The Qwen artifact carries the default contract: runtime tokenizer, full output head, per-call answer sets.
+
+## End-to-end token throughput, same machine, same checkpoint
+
+Single-session three-way measurement on the pinned M3 Pro: this C/Metal
+runtime, bare mlx-lm 0.31.3 and the oMLX 0.5.7 server engine, all on
+the same value-equivalent Q4 checkpoint and the same published 36-token
+prompt with a 30-token greedy completion. One discarded warmup per
+stack, then four rounds with rotated order, fresh process per run,
+identical output tokens in all 12 runs. Full record:
+[`results.json`](models/qwen3.6-27b/targets/apple-m3-pro/results.json)
+`same_window_three_way`.
+
+| Metric (mean of 4) | C/Metal (this repo) | bare mlx-lm | oMLX server | C advantage |
+|---|---:|---:|---:|---:|
+| **End-to-end request wall, ready to last token** | **4.935 s** | 7.575 s | 8.031 s | **1.53x / 1.63x** |
+| End-to-end completion tokens/s | **6.08** | 3.96 | 3.74 | 1.54x / 1.63x |
+| Decode tokens/s | 8.479 | 6.028 | 5.898 | 1.41x / 1.44x |
+| Time to first token after ready | 1.385 s | 2.598 s | 3.113 s | 1.88x / 2.25x |
+| Prompt tokens/s after ready | 26.0 | 13.9 | 11.6 | 1.88x / 2.25x |
+| Ready (open/load/start) | 7.09 s | 3.93 s | 4.67 s | C pays one-time weight wiring |
+
+The three-way ran with speculative decoding off (2026-08-14, before it
+landed). The C runtime has since been measured at 9.72 tok/s aggregate
+decode over a 3,394-token five-case battery with adaptive MTP (8.09
+plain; up to 13.5 tok/s on code), output token-identical to plain
+greedy; the Python stacks were not re-run against that battery.
 
 ## Evaluation isolation
 
@@ -60,9 +84,9 @@ tokens/s  ≤  usable memory bandwidth / weight bytes visited per token
 |---|---:|---:|---:|
 | Weight bytes visited per decode token | 960 MB | ~350 MB (Q8 DeltaNet projections included) | 15,138.6 MB mapped text image |
 | Usable/effective memory rate | not the limit yet | 3.591 GiB/s, four-thread read probe | 117.2 GB/s complete Delta layer; 118.3 GB/s complete attention layer |
-| Achieved measured paths | 0.598 token/s (different model/workload) | 3.6353 prompt tokens/s classification; 2.6005 tokens/s steady greedy decode | 8.4227 decode tok/s; 3.1855 sequential prompt tok/s |
-| Target optimization result | — | 4.42x cumulative; still compute-bound | decode 1.4396x oMLX; prompt 4.2554x slower than oMLX |
-| Image / state vs RAM | 966 MB image, 926 MiB RSS, zero swap | 470 MiB image; 367 MiB answer scoring / 488 MiB generation RSS vs 1.92 GiB; zero swap | 15.139 GB mapped weights + 158.9 MB recurrent/conv state + 16.8 MB FP32 KV at capacity 128 vs 36 GB |
+| Achieved measured paths | 0.598 token/s (different model/workload) | 3.6353 prompt tokens/s classification; 2.6005 tokens/s steady greedy decode | 8.09 plain decode tok/s; 9.72 with adaptive MTP (battery aggregate); ~52 prompt tok/s sustained prefill |
+| Target optimization result | — | 4.42x cumulative; still compute-bound | end-to-end request 1.53x/1.63x vs mlx-lm/oMLX; decode 1.44x oMLX; prompt after ready 1.88x/2.25x faster |
+| Image / state vs RAM | 966 MB image, 926 MiB RSS, zero swap | 470 MiB image; 367 MiB answer scoring / 488 MiB generation RSS vs 1.92 GiB; zero swap | 15.139 GB mapped weights + 158.9 MB recurrent/conv state + FP16 KV at 64 KiB per context token (0.27 GB at capacity 4096) vs 36 GB |
 
 Two regimes follow, and they map exactly onto the two optimization axes:
 
@@ -72,45 +96,6 @@ Two regimes follow, and they map exactly onto the two optimization axes:
 | Bandwidth-bound (after SIMD kernels) | DRAM bandwidth itself | fewer bytes per token: smaller model, answer-set scoring, lower bits | model |
 
 Capacity is a gate, not a tunable: the image and state must stay resident with zero swap — exceeding RAM means paging from eMMC at ~100-300 MB/s and an order-of-magnitude collapse.
-
-The Rockchip NPU changes the memory/compute trade. The following numbers are external RKLLM v1.3 reference data with sequence length 128 and 64 generated tokens. They are not measurements by this repository.
-
-| Model | Target | Quantization | TTFT | Decode | Reported memory | 1 GB implication |
-|---|---|---|---:|---:|---:|---|
-| Qwen3.5-0.8B | RK3588 | W8A8 | 587.74 ms | 27.05 tokens/s | 1039.66 MB | no OS/runtime headroom |
-| Qwen3.5-0.8B | RK3576 | W4A16 | 1369.31 ms | 18.79 tokens/s | 689.50 MB | fits on paper; board RSS and zero swap still unverified |
-
-Source: [Rockchip RKLLM benchmark, revision `878f936`](https://github.com/airockchip/rknn-llm/blob/878f9361fd3afa7e167b7079918918f78d2c1c2a/benchmark.md). RK3588S shares the RK3588 compute/NPU block used by this planning baseline, but the exact board must still be measured.
-
-## Optimization roadmap
-
-Measured and planned steps are labeled separately. Factors do not multiply cleanly and the stack is capped by the target's memory bandwidth. A step lands only after output/logit correctness checks for the code it touches.
-
-| Step | Axis | Mechanism | Result or estimate |
-|---|---|---|---|
-| 1. Switch to Qwen3.5-0.8B | model | per-token matrix traffic 960 MB → ~350 MB (Q8 DeltaNet projections — see the model record) | ~2.7x per token |
-| 2. Batched prefill | model | read each matrix once per layer per prompt, not per token | up to ~40x on prompt prefill |
-| 3. Per-call answer-set scoring | model | skip the 248K-row output head unless generating | ~130 MB saved per decision |
-| 4. NEON Q4/Q8 GEMV | CPU | Cortex-A53 signed nibble unpack and vector MAC | **measured prefill: 2.95x**, 0.8230 → 2.4297 prompt tokens/s |
-| 5. DeltaNet state kernel | CPU | contiguous row traversal and four-thread static head partition | **measured prefill: 1.50x**, 2.4297 → 3.6353 prompt tokens/s |
-| 6. Lower-bit LUT (experimental) | CPU | Q3/Q2 with linear LUT cost scaling, only if task quality survives | further 1.3-2x |
-
-Model-axis details: [`models/qwen3.5-0.8b/README.md`](models/qwen3.5-0.8b/README.md). Target details: [A113X](models/qwen3.5-0.8b/targets/a113x/README.md) · [RK3588S](models/qwen3.5-0.8b/targets/rk3588s/README.md) · [RK3576](models/qwen3.5-0.8b/targets/rk3576/README.md).
-
-### Whisper transcription paths
-
-Transcript remains an open natural-language input to the downstream model. Whisper therefore retains its tokenizer, reachable output vocabulary and ordered timestamp segments. It is not compiled into a fixed classifier.
-
-The active A113X deployment challenge is `small.en`-derived: English-only, continuous RTF `<=1.0`, less than or equal to 10% relative WER increase against the pinned unmodified `small.en`, peak RSS below 1 GiB and zero swap. `tiny.en` and `base.en` remain speed/quality controls. `medium.en` can be an offline English teacher. The feature losses, size comparison and structural plan are recorded in the [`small.en` decision record](models/whisper-small.en/DECISIONS.md).
-
-| Step | Axis | Mechanism | Status / evidence |
-|---|---|---|---|
-| 1. Portable C graph | model | 80-bin Mel front end, 12-layer encoder, cached 12-layer decoder, tokenizer and no-timestamps decode | implemented and tensor-verified |
-| 2. Compact audio window | model + workload | compile the encoder frame count from actual audio instead of unconditional 30-second padding | measured on 11-second JFK input: 589.056 → 160.803 seconds |
-| 3. Cortex-A53 packed Q4/NEON | CPU | output-column tiling, four-output dot and two-row weight reuse | measured E9 median: 45.047 seconds, RTF 4.095, 13.08x cumulative |
-| 4. Teacher-guided structural reduction | model | prune/distill encoder layers using `medium.en` or the pinned `small.en` baseline | required research branch; derived artifact needs a new identity and full WER rerun |
-
-Full definitions, incremental gates, raw process output and review artifacts are in the [`small.en` A113X target record](models/whisper-small.en/targets/a113x/README.md).
 
 ## Why rewrite instead of using an existing stack
 
@@ -123,7 +108,7 @@ A general inference stack must accept any model and any prompt at load time. Thi
 | PyTorch + Transformers | no | ~1.6 GB | BF16 weights alone exceed RAM — kept only as the numerical oracle |
 | ONNX Runtime | no | — | cannot run the architecture: no operators for non-softmax attention as of 2026 |
 
-That leaves llama.cpp as the only stack that runs at all, and kernels are not what separate us from it: its NEON vectorization is imported here as CPU-axis roadmap step 4, after which both stacks face the same DRAM bandwidth wall. The remaining gap is structural — each row below depends on information a generic runtime does not have at load time:
+That leaves llama.cpp as the only stack that runs at all, and kernels are not what separate us from it: its NEON vectorization is imported here as the measured A113X NEON kernels (2.95x prefill), after which both stacks face the same DRAM bandwidth wall. The remaining gap is structural — each row below depends on information a generic runtime does not have at load time:
 
 | Structural advantage | Estimated effect on the A113X | Why a generic stack cannot absorb it |
 |---|---|---|
@@ -149,7 +134,6 @@ The section above compares stacks on the same board. This one compares boards: t
 
 The battleground is the bottom two rows: low-cost boxes already deployed in the field (smart-home hubs, gateways), 1 GB RAM, A53/A55 cores, hardware no vendor LLM stack serves or plans to serve. A $249 Jetson cannot reach a $20 BOM, and RKLLM requires chips and memory these boxes do not have — a dependency-free Q4 C runtime with ~30 MB overhead is the only path onto them.
 
-Consequences for target priority: A113X stays first. RK3588S and RK3576 remain external reference baselines with no kernel investment. RK3562 is the interesting middle case — its A53-class CPU can reuse this kernel family, but every target still needs its own measurement.
 
 ## Build and test
 
@@ -163,9 +147,9 @@ Run the compiled Qwen3.6-27B target interactively on the pinned Apple machine:
 tools/qwen36_chat.sh
 ```
 
-Interactive mode is resident: the model loads and wires once at startup (about 7 s), then every prompt answers at the ready-state latency — about 1.4 s to first token, streaming under `Model>` as tokens complete, with a `[first token …, tok/s]` status line after each reply. Defaults allow long replies: 4,096-token context and up to 3,072 new tokens per reply, generation stopping at the model's end token; a long prompt shrinks that reply budget instead of erroring (override with `QWEN36_CONTEXT` / `QWEN36_MAX_TOKENS`). Enter `/quit` to exit. A prompt passed as an argument runs the one-shot generator instead. The script uses the local compiled image under `tmp/qwen36-27b-runtime`; weights remain outside Git.
+Interactive mode is resident: the model loads and wires once at startup (about 7 s), then every prompt answers at the ready-state latency — about 1 s to first token, streaming under `Model>` as tokens complete, with a `[first token …, tok/s]` status line after each reply. Defaults allow long replies: 4,096-token context and up to 3,072 new tokens per reply, generation stopping at the model's end token; a long prompt shrinks that reply budget instead of erroring (override with `QWEN36_CONTEXT` / `QWEN36_MAX_TOKENS`). Enter `/quit` to exit. A prompt passed as an argument runs the one-shot generator instead. The script uses the local compiled image under `tmp/qwen36-27b-runtime` (`QWEN36_MODEL_DIR=tmp/qwen38-27b-runtime` serves Qwen3.8-27B); weights remain outside Git.
 
-Running `tools/qwen36_chat.sh` with no arguments is the one-command app experience: it starts the OpenAI-compatible server if it is not already running, installs the Chatbox client on first use (Homebrew cask), copies the API address to the clipboard, and opens the client. First time only, add a provider in Chatbox: API host `http://127.0.0.1:8199/v1`, any API key, model `qwen3.6-27b`. `--terminal` keeps the resident terminal chat instead.
+Running `tools/qwen36_chat.sh` with no arguments is the one-command app experience: it starts the OpenAI-compatible server if it is not already running, installs the Chatbox client on first use (Homebrew cask), writes the provider configuration into Chatbox automatically, and opens the client. `--terminal` keeps the resident terminal chat instead.
 
 The server can also be run directly and used from any OpenAI-compatible client — Cherry Studio, Open WebUI, Raycast, Continue, Cline:
 
@@ -173,7 +157,7 @@ The server can also be run directly and used from any OpenAI-compatible client �
 tools/qwen36_serve.py            # http://127.0.0.1:8199/v1, model id qwen3.6-27b
 ```
 
-The shim (standard library only) renders multi-turn history into the pinned no-thinking template and streams SSE deltas; all model execution stays in the resident C/Metal runtime, so after the one-time startup wiring every request answers at ready-state latency.
+The shim (standard library only) renders multi-turn history into the official template, passes each request's sampling fields (`temperature`, `top_k`, `top_p`, `min_p`, `presence_penalty`, `max_tokens`) through to the C sampler, and streams SSE deltas; a per-request `reasoning_effort` field (low/medium/xhigh, `none` to disable) switches to thinking mode with the think block streamed as `reasoning_content`. All model execution stays in the resident C/Metal runtime; the engine continues conversations, so a follow-up request prefills only the new turn (multi-turn time to first token up to 6.1x faster, measured), and greedy requests keep output-lossless speculative decoding.
 
 To watch CPU, memory, GPU utilization and memory pressure while a run is active, start the stdlib-only monitor in a second terminal (no root needed). On a terminal it draws a live sparkline dashboard; it can also record a run and render it as an HTML chart page:
 
