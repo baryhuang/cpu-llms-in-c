@@ -3,6 +3,7 @@ set -eu
 
 repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runner="$repository/build/qwen36-m3-generate"
+chat="$repository/build/qwen36-m3-chat"
 model_directory=${QWEN36_MODEL_DIR:-"$repository/tmp/qwen36-27b-runtime"}
 metallib=${QWEN36_METALLIB:-"$repository/build/qwen36-m3-q4.metallib"}
 tokenizer=${QWEN36_TOKENIZER:-"$model_directory/tokenizer.q36tok"}
@@ -12,9 +13,9 @@ temperature=${QWEN36_TEMPERATURE:-0}
 top_k=${QWEN36_TOP_K:-1}
 seed=${QWEN36_SEED:-42}
 
-if [ ! -x "$runner" ] || [ ! -f "$metallib" ]; then
+if [ ! -x "$runner" ] || [ ! -x "$chat" ] || [ ! -f "$metallib" ]; then
     echo "Building the Qwen3.6 runner..." >&2
-    make -C "$repository" qwen36-m3-generate
+    make -C "$repository" qwen36-m3-generate qwen36-m3-chat
 fi
 
 if [ ! -f "$model_directory/global.q36global" ] ||
@@ -39,24 +40,14 @@ run_prompt() {
     fi
 }
 
+# One-shot mode (a prompt as arguments) and QWEN36_RAW keep the
+# per-invocation generator with its JSON contract.
 if [ "$#" -gt 0 ]; then
     run_prompt "$*"
     exit 0
 fi
 
-echo "Qwen3.6-27B on Apple M3 Pro"
-echo "Enter /quit to exit."
-
-while :; do
-    printf '\nYou> '
-    if ! IFS= read -r prompt; then
-        printf '\n'
-        break
-    fi
-    case "$prompt" in
-        /quit|/exit) break ;;
-        '') continue ;;
-    esac
-    printf '\nModel>\n'
-    run_prompt "$prompt"
-done
+# Interactive mode runs the resident chat: the model loads and wires once
+# at startup, then every prompt answers at the ready-state latency.
+exec "$chat" "$model_directory" "$metallib" "$tokenizer" \
+    "$context" "$maximum_new" "$temperature" "$top_k" "$seed"

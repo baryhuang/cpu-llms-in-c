@@ -265,8 +265,9 @@ elementwise/norm kernels. Profile per-dispatch before changing anything.
 
 | File | Role |
 |---|---|
-| `tools/qwen36_chat.sh` | human-facing prompt shell; streams descriptor 3 |
-| `tools/qwen36_monitor.py` | live CPU/memory/GPU monitor for local runs; stdlib-only, no root |
+| `tools/qwen36_chat.sh` | human-facing shell; interactive mode execs the resident chat binary |
+| `tools/qwen36_m3_chat.c` | resident chat: model opens and wires once, prompt loop at ready-state latency |
+| `tools/qwen36_monitor.py` | live CPU/memory/GPU monitor with sparkline dashboard, JSONL recording and HTML chart rendering |
 | `tools/qwen36_m3_generate.c` | tokenizer, prompt loop, sampler, stream output, JSON report |
 | `qwen36_m3_decode.h` | public sync and async C runtime API |
 | `qwen36_m3_decode.m` | Objective-C Metal runtime implementation |

@@ -366,7 +366,12 @@ For an interactive prompt loop after the image exists:
 tools/qwen36_chat.sh
 ```
 
-Enter a prompt at `You>`; the script prints only decoded model text under `Model>`. Enter `/quit` to exit.
+Interactive mode runs the resident chat binary (`make qwen36-m3-chat`):
+the model opens and wires once at startup, then every prompt answers at
+the ready-state latency (about 1.4 s to first token) with layer state
+reset between prompts. Enter a prompt at `You>`; text streams under
+`Model>`. Enter `/quit` to exit. One-shot and `QWEN36_RAW=1` invocations
+keep the per-run generator and its JSON contract.
 
 `tools/qwen36_monitor.py` (stdlib-only, no root) samples the run's CPU,
 RSS, physical footprint, GPU utilization and the system's

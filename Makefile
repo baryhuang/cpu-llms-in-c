@@ -71,11 +71,13 @@ QWEN36_TOKENIZER_CLI := $(BUILD_DIR)/qwen36-tokenizer
 QWEN36_SAMPLER_OBJECT := $(BUILD_DIR)/qwen36-sampler.o
 QWEN36_M3_GENERATE_OBJECT := $(BUILD_DIR)/qwen36-m3-generate-cli.o
 QWEN36_M3_GENERATE := $(BUILD_DIR)/qwen36-m3-generate
+QWEN36_M3_CHAT_OBJECT := $(BUILD_DIR)/qwen36-m3-chat-cli.o
+QWEN36_M3_CHAT := $(BUILD_DIR)/qwen36-m3-chat
 QWEN36_SAMPLER_TEST := $(BUILD_DIR)/qwen36-sampler-test
 QWEN36_M3_API_STATE_TEST := $(BUILD_DIR)/qwen36-m3-api-state-test
 QWEN36_M3_PREFILL_PARITY_TEST := $(BUILD_DIR)/qwen36-m3-prefill-parity-test
 
-.PHONY: all a113x clean fixture linux-tools qwen36-m3-bench qwen36-m3-deltanet-bench qwen36-m3-layer-bench qwen36-m3-attention-bench qwen36-m3-decode qwen36-m3-generate qwen36-m3-api-state-test qwen36-m3-prefill-parity-test qwen36-tools test whisper-small-tools
+.PHONY: all a113x clean fixture linux-tools qwen36-m3-bench qwen36-m3-deltanet-bench qwen36-m3-layer-bench qwen36-m3-attention-bench qwen36-m3-decode qwen36-m3-generate qwen36-m3-chat qwen36-m3-api-state-test qwen36-m3-prefill-parity-test qwen36-tools test whisper-small-tools
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
@@ -102,6 +104,8 @@ qwen36-m3-attention-bench: $(QWEN36_M3_ATTENTION_BENCH) \
 qwen36-m3-decode: $(QWEN36_M3_DECODE) $(QWEN36_M3_METALLIB)
 
 qwen36-m3-generate: $(QWEN36_M3_GENERATE) $(QWEN36_M3_METALLIB)
+
+qwen36-m3-chat: $(QWEN36_M3_CHAT) $(QWEN36_M3_METALLIB)
 
 # Needs the packed model directory and metallib, so it is not part of the
 # fixture-only `test` target. Run it manually:
@@ -438,6 +442,18 @@ $(QWEN36_M3_GENERATE_OBJECT): tools/qwen36_m3_generate.c \
 $(QWEN36_M3_GENERATE): $(QWEN36_M3_DECODE_OBJECT) \
 	$(QWEN36_TOKENIZER_OBJECT) $(QWEN36_SAMPLER_OBJECT) \
 	$(QWEN36_M3_GENERATE_OBJECT)
+	$(CC) $^ -o $@ -framework Foundation -framework Metal \
+		-framework CoreFoundation -licucore -lm
+
+$(QWEN36_M3_CHAT_OBJECT): tools/qwen36_m3_chat.c \
+	$(QWEN36_M3)/qwen36_m3_decode.h $(QWEN36_M3)/qwen36_tokenizer.h \
+	$(QWEN36_M3)/qwen36_sampler.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN36_M3) -c $< -o $@
+
+$(QWEN36_M3_CHAT): $(QWEN36_M3_DECODE_OBJECT) \
+	$(QWEN36_TOKENIZER_OBJECT) $(QWEN36_SAMPLER_OBJECT) \
+	$(QWEN36_M3_CHAT_OBJECT)
 	$(CC) $^ -o $@ -framework Foundation -framework Metal \
 		-framework CoreFoundation -licucore -lm
 
