@@ -710,6 +710,146 @@ kernel void qwen36_prefill_q4_gemm_f32_residual_f32_mma(
 #undef STORE_RESIDUAL_FLOAT
 }
 
+/* Half-precision MMA path. The float MMA above is FP32-ALU-bound on M3
+ * (measured ~13-14 ms per layer for a 32-token chunk against a ~1.8 ms
+ * weight-streaming floor), so the 2x-rate half pipes are the remaining
+ * lever. Tiles are staged in half and consumed with half 8x8 MMAs; the
+ * half accumulators spill into per-thread float accumulators every four
+ * K-groups (256 columns), which bounds the half-precision accumulation
+ * window. Gated by the argmax/token-parity standard like the float MMA
+ * path; QWEN36_PREFILL_MMA=1 restores the float MMA, =0 the exact path. */
+
+constant uint kGemmSpillGroups = 1;
+
+/* All three variants read half activations directly from device memory
+ * with strided simdgroup loads (no activation staging), so float
+ * activations are converted once into a half scratch first. Activation
+ * rows at batch indices >= kBatch hold stale data; their products stay
+ * inside accumulator rows that the guarded store discards. */
+kernel void qwen36_prefill_convert_x(
+    device const float *input [[buffer(0)]],
+    device half *output [[buffer(1)]],
+    constant uint &columns [[buffer(2)]],
+    uint2 position [[thread_position_in_grid]]) {
+    uint index = position.x;
+    uint s = position.y;
+    if (index >= columns || s >= kBatch) return;
+    output[s * columns + index] = half(input[s * columns + index]);
+}
+
+#define QWEN36_PREFILL_GEMM_MMA2_BODY(STORE)                              \
+    threadgroup half w_tile[kGemmTileK * kGemmTileRows];                  \
+    threadgroup half spill[kGemmTileBatch * kGemmTileRows];               \
+    uint row0 = group_id.x * kGemmTileRows;                               \
+    uint columns = p.groups_per_row * 64;                                 \
+    simdgroup_half8x8 accumulator[4];                                     \
+    for (uint n = 0; n < 4; ++n)                                          \
+        accumulator[n] = make_filled_simdgroup_matrix<half, 8, 8>(0.0h);  \
+    float c_acc[8];                                                       \
+    for (uint i = 0; i < 8; ++i) c_acc[i] = 0.0f;                         \
+    uint b0 = simdgroup_index * 8;                                        \
+    uint r = tid & 31u;                                                   \
+    uint k_base = (tid >> 5) * 16;                                        \
+    for (uint group = 0; group < p.groups_per_row; ++group) {             \
+        uint block = (row0 + r) * p.groups_per_row + group;               \
+        Q4PrefillMeta meta = metadata[block];                             \
+        half scale = meta.scale;                                          \
+        half bias = meta.bias;                                            \
+        for (uint i = 0; i < 16; i += 2) {                                \
+            uchar bits = quants[block * 32 + ((k_base + i) >> 1)];        \
+            w_tile[(k_base + i) * kGemmTileRows + r] =                    \
+                scale * half(bits & 0x0f) + bias;                         \
+            w_tile[(k_base + i + 1) * kGemmTileRows + r] =                \
+                scale * half(bits >> 4) + bias;                           \
+        }                                                                 \
+        threadgroup_barrier(mem_flags::mem_threadgroup);                  \
+        for (uint kk = 0; kk < kGemmTileK; kk += 8) {                     \
+            simdgroup_half8x8 a;                                          \
+            simdgroup_load(a, x + b0 * columns + group * 64 + kk,         \
+                           columns);                                      \
+            for (uint n = 0; n < 4; ++n) {                                \
+                simdgroup_half8x8 b_fragment;                             \
+                simdgroup_load(b_fragment,                                \
+                               w_tile + kk * kGemmTileRows + n * 8,       \
+                               kGemmTileRows);                            \
+                simdgroup_multiply_accumulate(accumulator[n], a,          \
+                                              b_fragment,                 \
+                                              accumulator[n]);            \
+            }                                                             \
+        }                                                                 \
+        threadgroup_barrier(mem_flags::mem_threadgroup);                  \
+        if ((group & (kGemmSpillGroups - 1)) == kGemmSpillGroups - 1 ||   \
+            group == p.groups_per_row - 1) {                              \
+            for (uint n = 0; n < 4; ++n) {                                \
+                simdgroup_store(accumulator[n],                           \
+                                spill + b0 * kGemmTileRows + n * 8,       \
+                                kGemmTileRows);                           \
+                accumulator[n] =                                          \
+                    make_filled_simdgroup_matrix<half, 8, 8>(0.0h);       \
+            }                                                             \
+            simdgroup_barrier(mem_flags::mem_threadgroup);                \
+            for (uint i = 0; i < 8; ++i)                                  \
+                c_acc[i] += float(spill[tid * 8 + i]);                    \
+            threadgroup_barrier(mem_flags::mem_threadgroup);              \
+        }                                                                 \
+    }                                                                     \
+    for (uint i = 0; i < 8; ++i) {                                        \
+        uint linear = tid * 8 + i;                                        \
+        uint b = linear >> 5;                                             \
+        uint out_row = linear & 31u;                                      \
+        if (b < kBatch) {                                                 \
+            uint out_index = b * p.rows + row0 + out_row;                 \
+            float value = c_acc[i];                                       \
+            STORE;                                                        \
+        }                                                                 \
+    }
+
+kernel void qwen36_prefill_q4_gemm_f16_mma2(
+    device const half *x [[buffer(0)]],
+    device const uchar *quants [[buffer(1)]],
+    device const Q4PrefillMeta *metadata [[buffer(2)]],
+    device float *output [[buffer(3)]],
+    constant PrefillGemmParams &p [[buffer(4)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group_id [[threadgroup_position_in_grid]]) {
+#define STORE_PLAIN2 output[out_index] = value
+    QWEN36_PREFILL_GEMM_MMA2_BODY(STORE_PLAIN2)
+#undef STORE_PLAIN2
+}
+
+kernel void qwen36_prefill_q4_gemm_f32_residual_f16_mma2(
+    device const half *x [[buffer(0)]],
+    device const uchar *quants [[buffer(1)]],
+    device const Q4PrefillMeta *metadata [[buffer(2)]],
+    device const half *residual [[buffer(3)]],
+    device float *output [[buffer(4)]],
+    constant PrefillGemmParams &p [[buffer(5)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group_id [[threadgroup_position_in_grid]]) {
+#define STORE_RESIDUAL_HALF2 \
+    output[out_index] = value + float(residual[out_index])
+    QWEN36_PREFILL_GEMM_MMA2_BODY(STORE_RESIDUAL_HALF2)
+#undef STORE_RESIDUAL_HALF2
+}
+
+kernel void qwen36_prefill_q4_gemm_f32_residual_f32_mma2(
+    device const half *x [[buffer(0)]],
+    device const uchar *quants [[buffer(1)]],
+    device const Q4PrefillMeta *metadata [[buffer(2)]],
+    device const float *residual [[buffer(3)]],
+    device float *output [[buffer(4)]],
+    constant PrefillGemmParams &p [[buffer(5)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group_id [[threadgroup_position_in_grid]]) {
+#define STORE_RESIDUAL_FLOAT2 \
+    output[out_index] = value + residual[out_index]
+    QWEN36_PREFILL_GEMM_MMA2_BODY(STORE_RESIDUAL_FLOAT2)
+#undef STORE_RESIDUAL_FLOAT2
+}
+
 /* MTP input fusion: normalized token embedding concatenated with the
  * normalized main-model hidden state, producing the [batch x 10240] input
  * of the MTP fc projection. One threadgroup per batch position. The same

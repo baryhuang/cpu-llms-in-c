@@ -515,6 +515,27 @@
     },
     "future": "indirect-command-buffer pre-encoding of the static decode graph would remove roughly 2 ms of per-token CPU encoding (under 2 percent at the current decode rate); recorded as future work rather than implemented"
   },
+  "prefill_half_mma_increment": {
+    "summary": "Half-precision simdgroup-matrix GEMM for batched prefill: tiles staged/consumed in half with per-thread float accumulators spilled every K-group (64 columns). The float MMA path measured FP32-ALU-bound, so the 2x-rate half pipes are the lever.",
+    "gpu_profile_chunk32_ms": {
+      "float_mma": 889.0,
+      "half_mma": 576.0,
+      "speedup": 1.54,
+      "first_generation_exact": 2035.0,
+      "method": "QWEN36_PROFILE=1 splits the chunk into one command buffer per layer on the serial queue and sums GPUStartTime..GPUEndTime spans"
+    },
+    "warm_first_token_s": {
+      "float_mma": 1.115,
+      "half_mma": 0.806,
+      "note": "fourth prompt of a resident-chat battery, greedy seed 42"
+    },
+    "parity": {
+      "state_drift_max_abs": 0.2488,
+      "argmax": "identical on all five prefill-parity runs",
+      "end_to_end": "identical token IDs and text on 4/4 battery prompts (incl. 446-token generation), with and without MTP"
+    },
+    "gating": "QWEN36_PREFILL_MMA: 2 half tiles (default), 1 float tiles, 0 exact decode-identical kernels"
+  },
   "mtp_speculative_decoding": {
     "summary": "Greedy speculative decoding with the checkpoint's mtp.* head: draft one token via the MTP layer, verify pending+draft in one batch-2 forward; emitted tokens are identical to plain greedy.",
     "images": {

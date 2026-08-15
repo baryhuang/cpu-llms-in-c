@@ -99,13 +99,15 @@ int main(int argc, char **argv) {
         memcpy(reference_logits, logits, logit_count * sizeof(float));
 
         /* Candidates: the decode-identical exact path (QWEN36_PREFILL_MMA=0,
-         * S16-only runs must stay bitwise) and the tiled simdgroup-matrix
-         * path (argmax and tolerance gates only). */
+         * S16-only runs must stay bitwise), the float tiled simdgroup-matrix
+         * path, and the half tiled path (argmax and tolerance gates only). */
         uint32_t sequence[64];
         for (uint32_t index = 0; index < count; ++index)
             sequence[index] = kTokens[index % 36];
-        for (unsigned mode = 0; mode < 2; ++mode) {
-            setenv("QWEN36_PREFILL_MMA", mode == 0 ? "0" : "1", 1);
+        static const char *mode_names[3] = {"exact", "mma", "mma2"};
+        static const char *mode_env[3] = {"0", "1", "2"};
+        for (unsigned mode = 0; mode < 3; ++mode) {
+            setenv("QWEN36_PREFILL_MMA", mode_env[mode], 1);
             qwen36_m3_model_reset(model);
             qwen36_m3_prefill_result prefill;
             if (qwen36_m3_model_prefill(model, sequence, count, 0,
@@ -162,12 +164,12 @@ int main(int argc, char **argv) {
             int pass = nan_count == 0 && existence_mismatch == 0 &&
                        max_abs <= kStateTolerance &&
                        reference_best == candidate_best &&
-                       (mode == 1 || prefill.chunk32_count != 0 ||
+                       (mode >= 1 || prefill.chunk32_count != 0 ||
                         bitwise);
             printf("check=run%u mode=%s chunks=32x%u/16x%u/1x%u "
                    "bitwise_states=%s bitwise_logits=%s "
                    "state_max_abs=%.9g nan=%u argmax=%u/%u status=%s\n",
-                   count, mode == 0 ? "exact" : "mma",
+                   count, mode_names[mode],
                    prefill.chunk32_count, prefill.chunk16_count,
                    prefill.single_count, bitwise ? "yes" : "no",
                    logits_bitwise ? "yes" : "no", max_abs, nan_count,

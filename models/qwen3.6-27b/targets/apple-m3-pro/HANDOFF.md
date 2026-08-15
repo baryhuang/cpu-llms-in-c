@@ -223,13 +223,21 @@ per-process constant that amortizes in a server process.
 
 ## Tuning state of the batched kernels
 
-After the tiled-MMA GEMM landed, the warm S32 chunk is 864 ms for 32
-tokens (27 ms/token) versus a roughly 115 ms weight-streaming bound
-(about 13.7 GB of Q4 weights at about 120 GB/s): 7.5x headroom remains.
-The GEMM projections are no longer the dominant term; the next profile
-should look at the 32-step blocked recurrence (about 4.8 GB of state
-traffic per chunk), the batched attention softmax loops, and the
-elementwise/norm kernels. Profile per-dispatch before changing anything.
+Per-layer GPU profiling (QWEN36_PROFILE=1/2, one command buffer per
+layer on the serial queue) attributed the chunk to kernel classes and
+showed the float MMA path was FP32-ALU-bound (~13-14 ms/layer on BOTH
+layer types — so the GEMMs, not the recurrence, dominated). The
+half-MMA path (half tiles, device-direct activation fragments,
+per-thread float accumulators spilled every 64 columns) brings chunk32
+to 576 ms GPU (delta layers avg 9.3 ms, attention layers avg 8.2 ms).
+Remaining headroom sits in tile staging/barrier overhead over a ~300 ms
+half-ALU bound plus the ~115 ms streaming floor: candidates are
+double-buffered weight tiles and wider K tiles. Decode itself measures
+118-123 ms GPU (delta48 ~87, attn16 ~27, head ~5.5) against a ~101 ms
+streaming floor — near the memory bound, which is why MTP is the decode
+lever. The batch-2 MTP verify measures ~168 ms with the +50 ms over a
+single forward spread uniformly across both layer types (batch-2 GEMV
+ALU), snapshot blit only 2.5 ms.
 
 ## Landed: MTP speculative decoding (2026-08-14, fourth increment)
 

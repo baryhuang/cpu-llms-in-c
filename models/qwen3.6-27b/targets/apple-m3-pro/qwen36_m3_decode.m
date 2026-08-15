@@ -52,6 +52,10 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
     id<MTLComputePipelineState> gemm_f16_mma;
     id<MTLComputePipelineState> gemm_f32_residual_f16_mma;
     id<MTLComputePipelineState> gemm_f32_residual_f32_mma;
+    id<MTLComputePipelineState> gemm_f16_mma2;
+    id<MTLComputePipelineState> convert_x;
+    id<MTLComputePipelineState> gemm_f32_residual_f16_mma2;
+    id<MTLComputePipelineState> gemm_f32_residual_f32_mma2;
     id<MTLComputePipelineState> silu_mul;
     id<MTLComputePipelineState> delta_conv;
     id<MTLComputePipelineState> delta_prepare;
@@ -149,7 +153,7 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
     size_t mapped_bytes;
     size_t state_bytes;
     size_t kv_bytes;
-    BOOL prefill_use_mma;
+    int prefill_mma_level;
     id<MTLResidencySet> residency API_AVAILABLE(macos(15.0));
 
     id<MTLComputePipelineState> rms_half;
@@ -230,6 +234,7 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
     id<MTLBuffer> p_mlp_up;
     id<MTLBuffer> p_mlp_activated;
     id<MTLBuffer> p_layer_output;
+    id<MTLBuffer> p_x_half;
 }
 @end
 
@@ -748,6 +753,12 @@ static Q36PrefillPipelines *prefill_pipelines(
                  @"qwen36_prefill_q4_gemm_f32_residual_f16_mma");
     MAKE_PREFILL(gemm_f32_residual_f32_mma,
                  @"qwen36_prefill_q4_gemm_f32_residual_f32_mma");
+    MAKE_PREFILL(gemm_f16_mma2, @"qwen36_prefill_q4_gemm_f16_mma2");
+    MAKE_PREFILL(convert_x, @"qwen36_prefill_convert_x");
+    MAKE_PREFILL(gemm_f32_residual_f16_mma2,
+                 @"qwen36_prefill_q4_gemm_f32_residual_f16_mma2");
+    MAKE_PREFILL(gemm_f32_residual_f32_mma2,
+                 @"qwen36_prefill_q4_gemm_f32_residual_f32_mma2");
     MAKE_PREFILL(silu_mul, @"qwen36_prefill_silu_mul");
     MAKE_PREFILL(delta_conv, @"qwen36_prefill_delta_conv");
     MAKE_PREFILL(delta_prepare, @"qwen36_prefill_delta_prepare");
@@ -770,9 +781,10 @@ static void encode_prefill_gemm_f16(
     id<MTLBuffer> x, id<MTLBuffer> quants, id<MTLBuffer> metadata,
     id<MTLBuffer> output, uint32_t rows, uint32_t groups_per_row) {
     q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
-    int use_mma = r->prefill_use_mma && p->batch > 2;
+    int use_mma = r->prefill_mma_level > 0 && p->batch > 2;
     [encoder setComputePipelineState:
-        use_mma ? p->gemm_f16_mma : p->gemm_f16];
+        use_mma ? (r->prefill_mma_level >= 2 ?
+                   p->gemm_f16_mma2 : p->gemm_f16_mma) : p->gemm_f16];
     [encoder setBuffer:x offset:0 atIndex:0];
     [encoder setBuffer:quants offset:0 atIndex:1];
     [encoder setBuffer:metadata offset:0 atIndex:2];
@@ -793,14 +805,26 @@ static void encode_prefill_gemm_residual(
     id<MTLBuffer> residual, id<MTLBuffer> output, uint32_t rows,
     uint32_t groups_per_row, BOOL residual_is_half) {
     q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
-    int use_mma = r->prefill_use_mma && p->batch > 2;
+    int use_mma = r->prefill_mma_level > 0 && p->batch > 2;
     id<MTLComputePipelineState> pipeline;
     if (residual_is_half)
-        pipeline = use_mma ?
-            p->gemm_f32_residual_f16_mma : p->gemm_f32_residual_f16;
+        pipeline = !use_mma ? p->gemm_f32_residual_f16 :
+            (r->prefill_mma_level >= 2 ?
+             p->gemm_f32_residual_f16_mma2 : p->gemm_f32_residual_f16_mma);
     else
-        pipeline = use_mma ?
-            p->gemm_f32_residual_f32_mma : p->gemm_f32_residual_f32;
+        pipeline = !use_mma ? p->gemm_f32_residual_f32 :
+            (r->prefill_mma_level >= 2 ?
+             p->gemm_f32_residual_f32_mma2 : p->gemm_f32_residual_f32_mma);
+    if (use_mma && r->prefill_mma_level >= 2) {
+        uint32_t columns = groups_per_row * 64;
+        [encoder setComputePipelineState:p->convert_x];
+        [encoder setBuffer:x offset:0 atIndex:0];
+        [encoder setBuffer:r->p_x_half offset:0 atIndex:1];
+        [encoder setBytes:&columns length:sizeof(columns) atIndex:2];
+        [encoder dispatchThreads:MTLSizeMake(columns, p->batch, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        x = r->p_x_half;
+    }
     [encoder setComputePipelineState:pipeline];
     [encoder setBuffer:x offset:0 atIndex:0];
     [encoder setBuffer:quants offset:0 atIndex:1];
@@ -981,30 +1005,104 @@ static void encode_prefill_attention(Q36DecodeRuntime *r,
     encode_prefill_mlp(r, p, encoder, layer);
 }
 
+/* Kernel-class GPU profiling (QWEN36_PROFILE=1, =2 adds per-layer lines).
+ * Apple GPUs sample counters only at encoder boundaries, so the profile
+ * mode splits the one-command-buffer graph into one command buffer per
+ * region on the same serial queue — execution order and results are
+ * unchanged — and attributes each region's GPUStartTime..GPUEndTime span.
+ * Sub-millisecond dispatch gaps between buffers are excluded, so class
+ * sums slightly undercount wall time. */
+static int decode_profile_level(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *value = getenv("QWEN36_PROFILE");
+        cached = value == NULL ? 0 : atoi(value);
+    }
+    return cached;
+}
+
+typedef struct {
+    NSMutableArray *commands;
+    NSMutableArray *tags;
+} Q36Profile;
+
+enum { Q36_PROFILE_TAG_SNAPSHOT = -2, Q36_PROFILE_TAG_EMBED = -1,
+       Q36_PROFILE_TAG_HEAD = 64 };
+
+static void profile_split(Q36DecodeRuntime *r, Q36Profile *profile, int tag,
+                          id<MTLCommandBuffer> *command,
+                          id<MTLComputeCommandEncoder> *encoder) {
+    [*encoder endEncoding];
+    [*command commit];
+    [profile->commands addObject:*command];
+    [profile->tags addObject:@(tag)];
+    *command = [r->queue commandBuffer];
+    *encoder = [*command computeCommandEncoder];
+}
+
+/* The final command buffer must be complete before calling. */
+static void profile_report(Q36DecodeRuntime *r, Q36Profile *profile,
+                           const char *label) {
+    double snapshot = 0, embed = 0, delta = 0, attention = 0, head = 0;
+    double per_layer[64] = {0};
+    for (NSUInteger index = 0; index < profile->commands.count; ++index) {
+        id<MTLCommandBuffer> command = profile->commands[index];
+        int tag = [profile->tags[index] intValue];
+        double ms = (command.GPUEndTime - command.GPUStartTime) * 1000.0;
+        if (tag == Q36_PROFILE_TAG_SNAPSHOT) snapshot += ms;
+        else if (tag == Q36_PROFILE_TAG_EMBED) embed += ms;
+        else if (tag == Q36_PROFILE_TAG_HEAD) head += ms;
+        else {
+            per_layer[tag] += ms;
+            Q36DecodeLayer *layer = r->layers[(NSUInteger)tag];
+            if (layer->attention) attention += ms;
+            else delta += ms;
+        }
+    }
+    fprintf(stderr,
+            "[profile %s] gpu %.2f ms: snapshot %.2f, embed %.2f, "
+            "delta48 %.2f (avg %.3f), attn16 %.2f (avg %.3f), head %.2f\n",
+            label, snapshot + embed + delta + attention + head, snapshot,
+            embed, delta, delta / 48.0, attention, attention / 16.0, head);
+    if (decode_profile_level() >= 2)
+        for (int index = 0; index < 64; ++index) {
+            Q36DecodeLayer *layer = r->layers[(NSUInteger)index];
+            fprintf(stderr, "[profile %s] layer %02d %s %.3f ms\n", label,
+                    index, layer->attention ? "attn " : "delta",
+                    per_layer[index]);
+        }
+}
+
 static void encode_prefill_chunk(Q36DecodeRuntime *r,
                                  Q36PrefillPipelines *p,
-                                 id<MTLComputeCommandEncoder> encoder,
-                                 uint32_t start_position) {
-    [encoder setComputePipelineState:p->embedding];
-    [encoder setBuffer:r->global->embedding_quants offset:0 atIndex:0];
-    [encoder setBuffer:r->global->embedding_metadata offset:0 atIndex:1];
-    [encoder setBuffer:r->p_token_ids offset:0 atIndex:2];
-    [encoder setBuffer:r->p_hidden_half offset:0 atIndex:3];
-    [encoder dispatchThreads:MTLSizeMake(5120, p->batch, 1)
+                                 id<MTLCommandBuffer> *command,
+                                 id<MTLComputeCommandEncoder> *encoder,
+                                 uint32_t start_position,
+                                 Q36Profile *profile) {
+    [*encoder setComputePipelineState:p->embedding];
+    [*encoder setBuffer:r->global->embedding_quants offset:0 atIndex:0];
+    [*encoder setBuffer:r->global->embedding_metadata offset:0 atIndex:1];
+    [*encoder setBuffer:r->p_token_ids offset:0 atIndex:2];
+    [*encoder setBuffer:r->p_hidden_half offset:0 atIndex:3];
+    [*encoder dispatchThreads:MTLSizeMake(5120, p->batch, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    if (profile != NULL)
+        profile_split(r, profile, Q36_PROFILE_TAG_EMBED, command, encoder);
     for (unsigned index = 0; index < 64; ++index) {
         Q36DecodeLayer *layer = r->layers[index];
         if (layer->attention)
-            encode_prefill_attention(r, p, encoder, layer, start_position);
+            encode_prefill_attention(r, p, *encoder, layer, start_position);
         else
-            encode_prefill_delta(r, p, encoder, layer);
+            encode_prefill_delta(r, p, *encoder, layer);
         if (index != 63) {
-            [encoder setComputePipelineState:p->convert_hidden];
-            [encoder setBuffer:r->p_layer_output offset:0 atIndex:0];
-            [encoder setBuffer:r->p_hidden_half offset:0 atIndex:1];
-            [encoder dispatchThreads:MTLSizeMake(5120, p->batch, 1)
+            [*encoder setComputePipelineState:p->convert_hidden];
+            [*encoder setBuffer:r->p_layer_output offset:0 atIndex:0];
+            [*encoder setBuffer:r->p_hidden_half offset:0 atIndex:1];
+            [*encoder dispatchThreads:MTLSizeMake(5120, p->batch, 1)
                     threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
         }
+        if (profile != NULL)
+            profile_split(r, profile, (int)index, command, encoder);
     }
 }
 
@@ -1090,6 +1188,7 @@ static int allocate_workspace(Q36DecodeRuntime *r, NSString **message) {
     ALLOC(p_mlp_up, Q36_PREFILL_MAX_BATCH * 17408, float);
     ALLOC(p_mlp_activated, Q36_PREFILL_MAX_BATCH * 17408, float);
     ALLOC(p_layer_output, Q36_PREFILL_MAX_BATCH * 5120, float);
+    ALLOC(p_x_half, Q36_PREFILL_MAX_BATCH * 17408, uint16_t);
 #undef ALLOC
     if (r->hidden_half == nil || r->normalized == nil ||
         r->projected == nil || r->convolved == nil || r->query == nil ||
@@ -1273,6 +1372,13 @@ int qwen36_m3_model_forward_submit(
         return 1;
     }
     @autoreleasepool {
+        Q36Profile profile_storage;
+        Q36Profile *profile = NULL;
+        if (decode_profile_level() > 0) {
+            profile_storage.commands = [NSMutableArray array];
+            profile_storage.tags = [NSMutableArray array];
+            profile = &profile_storage;
+        }
         id<MTLCommandBuffer> command = [r->queue commandBuffer];
         id<MTLComputeCommandEncoder> encoder =
             [command computeCommandEncoder];
@@ -1283,6 +1389,9 @@ int qwen36_m3_model_forward_submit(
         [encoder setBuffer:r->hidden_half offset:0 atIndex:3];
         [encoder dispatchThreads:MTLSizeMake(5120, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        if (profile != NULL)
+            profile_split(r, profile, Q36_PROFILE_TAG_EMBED, &command,
+                          &encoder);
         for (unsigned index = 0; index < 64; ++index) {
             Q36DecodeLayer *layer = r->layers[index];
             if (layer->attention)
@@ -1296,6 +1405,8 @@ int qwen36_m3_model_forward_submit(
                 [encoder dispatchThreads:MTLSizeMake(5120, 1, 1)
                         threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             }
+            if (profile != NULL)
+                profile_split(r, profile, (int)index, &command, &encoder);
         }
         [encoder setComputePipelineState:r->rms_float];
         [encoder setBuffer:r->layer_output offset:0 atIndex:0];
@@ -1317,6 +1428,12 @@ int qwen36_m3_model_forward_submit(
         model->pending_start = decode_seconds();
         model->pending_command = (__bridge_retained void *)command;
         [command commit];
+        if (profile != NULL) {
+            [command waitUntilCompleted];
+            [profile->commands addObject:command];
+            [profile->tags addObject:@(Q36_PROFILE_TAG_HEAD)];
+            profile_report(r, profile, "fwd1");
+        }
         return 0;
     }
 }
@@ -1532,6 +1649,13 @@ static int model_forward2(qwen36_m3_model *model, uint32_t token0,
     MTLCommandBufferStatus status;
     NSString *failure = nil;
     @autoreleasepool {
+        Q36Profile profile_storage;
+        Q36Profile *profile = NULL;
+        if (decode_profile_level() > 0) {
+            profile_storage.commands = [NSMutableArray array];
+            profile_storage.tags = [NSMutableArray array];
+            profile = &profile_storage;
+        }
         uint32_t tokens[2] = {token0, token1};
         memcpy(r->p_token_ids.contents, tokens, sizeof(tokens));
         id<MTLCommandBuffer> command = [r->queue commandBuffer];
@@ -1555,10 +1679,17 @@ static int model_forward2(qwen36_m3_model *model, uint32_t token0,
                 convolution_offset += layer->convolution_state.length;
             }
             [blit endEncoding];
+            if (profile != NULL) {
+                [command commit];
+                [profile->commands addObject:command];
+                [profile->tags addObject:@(Q36_PROFILE_TAG_SNAPSHOT)];
+                command = [r->queue commandBuffer];
+            }
         }
         id<MTLComputeCommandEncoder> encoder =
             [command computeCommandEncoder];
-        encode_prefill_chunk(r, r->prefill2, encoder, position);
+        encode_prefill_chunk(r, r->prefill2, &command, &encoder, position,
+                             profile);
         [encoder setComputePipelineState:r->prefill2->rms_f32];
         [encoder setBuffer:r->p_layer_output offset:0 atIndex:0];
         [encoder setBuffer:r->global->constants offset:0 atIndex:1];
@@ -1576,6 +1707,11 @@ static int model_forward2(qwen36_m3_model *model, uint32_t token0,
         status = command.status;
         if (command.error != nil)
             failure = command.error.localizedDescription;
+        if (profile != NULL && status == MTLCommandBufferStatusCompleted) {
+            [profile->commands addObject:command];
+            [profile->tags addObject:@(Q36_PROFILE_TAG_HEAD)];
+            profile_report(r, profile, "verify2");
+        }
     }
     if (status != MTLCommandBufferStatusCompleted) {
         decode_error(error_message, error_message_capacity,
@@ -1851,7 +1987,7 @@ int qwen36_m3_model_prefill(
     memset(result, 0, sizeof(*result));
     result->token_count = token_count;
     const char *mma_env = getenv("QWEN36_PREFILL_MMA");
-    r->prefill_use_mma = mma_env == NULL || strcmp(mma_env, "0") != 0;
+    r->prefill_mma_level = mma_env == NULL ? 2 : atoi(mma_env);
     double begin = decode_seconds();
     const char *max_chunk_env = getenv("QWEN36_PREFILL_MAX_CHUNK");
     uint32_t max_chunk = max_chunk_env != NULL ?
@@ -1866,19 +2002,33 @@ int qwen36_m3_model_prefill(
         MTLCommandBufferStatus status;
         NSString *failure = nil;
         @autoreleasepool {
+            Q36Profile profile_storage;
+            Q36Profile *profile = NULL;
+            if (decode_profile_level() > 0) {
+                profile_storage.commands = [NSMutableArray array];
+                profile_storage.tags = [NSMutableArray array];
+                profile = &profile_storage;
+            }
             memcpy(r->p_token_ids.contents, token_ids + offset,
                    (size_t)chunk * sizeof(uint32_t));
             id<MTLCommandBuffer> command = [r->queue commandBuffer];
             id<MTLComputeCommandEncoder> encoder =
                 [command computeCommandEncoder];
-            encode_prefill_chunk(r, pipelines, encoder,
-                                 start_position + offset);
+            encode_prefill_chunk(r, pipelines, &command, &encoder,
+                                 start_position + offset, profile);
             [encoder endEncoding];
             [command commit];
             [command waitUntilCompleted];
             status = command.status;
             if (command.error != nil)
                 failure = command.error.localizedDescription;
+            if (profile != NULL &&
+                status == MTLCommandBufferStatusCompleted) {
+                [profile->commands addObject:command];
+                [profile->tags addObject:@(Q36_PROFILE_TAG_HEAD)];
+                profile_report(r, profile,
+                               chunk == 32 ? "chunk32" : "chunk16");
+            }
         }
         if (status != MTLCommandBufferStatusCompleted) {
             decode_error(error_message, error_message_capacity,

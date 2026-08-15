@@ -360,6 +360,23 @@ operations — the standard prefill kernel shape on Apple GPUs. The warm S32
 chunk drops from 2,035 ms to 864 ms for 32 tokens (2.35x).
 `QWEN36_PREFILL_MMA=0` restores the exact decode-identical kernels.
 
+**Half-precision MMA tiles.** Per-layer GPU profiling (`QWEN36_PROFILE=1`
+splits the graph into one command buffer per layer and reads the GPU
+timestamp spans) showed the float MMA chunk is FP32-ALU-bound, not
+bandwidth-bound: ~13-14 ms per layer for a 32-token chunk against a
+~1.8 ms weight-streaming floor, on both layer types. The half path
+dequantizes weight tiles to half, reads activation fragments directly
+from device memory with strided `simdgroup_load` (float activations are
+converted once into a half scratch), and multiplies with half 8x8 MMAs;
+per-thread float accumulators take a spill every 64 columns, which
+bounds the half accumulation window. Measured chunk32 GPU time drops
+from 889 ms to 576 ms (1.54x; 3.53x over the first-generation batched
+kernels), warm time-to-first-token from 1.115 s to 0.806 s. Parity:
+state drift bounded by 0.249, argmax identical on every prefill-parity
+run, end-to-end token IDs and text identical on the full battery with
+and without MTP. `QWEN36_PREFILL_MMA=1` restores the float MMA path,
+`=0` the exact decode-identical kernels.
+
 **Weight residency at model open.** A CPU prefault of the mapped pages was
 measured and rejected (see Current limits history): the first-chunk cost is
 Metal first-use residency wiring, not page faults. Adding all 644 mapped
@@ -538,7 +555,7 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 | Limit | Consequence | Next work |
 |---|---|---|
 | One-time weight wiring at open | 6.5 s of MTLResidencySet wiring per process; CPU prefault was measured and rejected before this | amortizes in a long-lived process; batch it against other startup work if a server lands |
-| Warm S32 chunk at 864 ms vs a ~115 ms weight-streaming bound | remaining time sits in the blocked recurrence, softmax loops and non-GEMM kernels | profile per-dispatch before further tuning |
+| Warm S32 chunk at 576 ms | profiling shows the half-MMA GEMMs still carry staging/barrier overhead over their ~300 ms compute bound | double-buffered weight tiles, wider K tiles |
 | Per-token CPU encoding of the static decode graph | roughly 2 ms per token, under 2 percent of decode | pre-encode with indirect command buffers if it ever dominates |
 | Prompts under 16 tokens | still run the sequential one-token path | add smaller buckets only if short-prompt TTFT matters |
 | Single user-message CLI | free text works, but system and multi-turn message APIs do not | expose a message-array C API without changing the graph |
