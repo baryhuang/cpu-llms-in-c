@@ -27,7 +27,7 @@ Status: free-text generation runs end to end. The deployment opens compiled imag
 | State | FP32 Delta recurrent state, convolution history and FP16 attention KV cache | head counts, head dimensions and cache stride |
 | Output | complete 248,320-row Q4 language-model head | padded IDs above tokenizer vocabulary are masked |
 | Sampling | greedy or temperature/top-k sampling in C | vocabulary bound and stop IDs |
-| Speculation | optional greedy MTP draft-and-verify, output-lossless | draft layer graph and batch-2 verify graph |
+| Speculation | optional greedy MTP draft-and-verify with adaptive depth 1-3, output-lossless | draft layer graph and batch 2-4 verify graphs |
 | Decode | C tokenizer decode to UTF-8 | special-token behavior |
 
 The `.m` files are thin Objective-C calls into the Apple Metal system API. Model control, tokenizer, sampling, image compilers and public runtime interfaces are C; compute kernels are Metal. `otool -L` reports only Foundation, Metal, CoreFoundation, `libicucore`, `libSystem` and `libobjc`.
@@ -484,6 +484,27 @@ an 8x8-MMA tile variant (barrier/staging bound at small batch) and a
 half-math GEMV (196 ms vs 168 ms at batch 2 — Metal scalar half is not
 faster here). The verify keeps the exact decode-identical float GEMV
 kernels, which also keeps verify logits bitwise-anchored to decode.
+
+### Overall throughput matrix
+
+Five cases, one resident process per arm, greedy seed 42, output
+token-identical on 5/5. Decode rate is tokens divided by time after the
+first token.
+
+| Case | Tokens | Decode, MTP off | Decode, adaptive MTP | Speedup | Request wall off/on |
+|---|---:|---:|---:|---:|---:|
+| C `max2` function | 30 | 8.30 tok/s | 12.06 tok/s | 1.45x | 4.7 / 4.0 s |
+| Hash-table prose | 446 | 8.24 | 9.35 | 1.13x | 54.9 / 48.7 s |
+| Python `LRUCache` class | 1,031 | 7.92 | 11.12 | 1.40x | 132.2 / 94.9 s |
+| Virtual-memory essay | 1,757 | 8.13 | 9.08 | 1.12x | 217.6 / 195.3 s |
+| Notes summary, 159-token prompt | 130 | 8.42 | 10.24 | 1.22x | 19.8 / 17.4 s |
+| **Aggregate, 3,394 tokens** | | **8.09** | **9.72** | **1.20x** | |
+
+Code-heavy generation sits at 1.40-1.45x because the adaptive
+controller keeps the draft chain deep; free prose holds 1.12-1.13x.
+The plain-decode baseline itself declines slightly with generated
+length (8.42 at position ~150 to 7.92-8.13 past 1,000) as the KV
+context grows.
 
 ## Verification
 

@@ -1047,5 +1047,91 @@
     "the artifact is text-only; vision and MTP are not compiled",
     "the five quality cases are smoke tests, not a standardized quality benchmark",
     "1K and 4K same-machine profiles have not been run"
-  ]
+  ],
+  "overall_throughput_matrix": {
+    "summary": "Five-case resident-chat matrix, one process per arm, greedy seed 42: MTP adaptive default vs QWEN36_MTP=0. Output token-identical on 5/5 cases. Decode tok/s = tokens / (total - first token).",
+    "method": "cases: short C function (30 tok), ~450-token prose, 1031-token Python class, 1757-token essay, 130-token summary of a 159-token prompt",
+    "cases": [
+      {
+        "case": "C max2 (code, short)",
+        "match": true,
+        "tokens": 30,
+        "prompt_tokens": 36,
+        "ttft_off_s": 1.066,
+        "ttft_on_s": 1.465,
+        "decode_off": 8.3,
+        "decode_on": 12.06,
+        "speedup": 1.452,
+        "wall_off_s": 4.68,
+        "wall_on_s": 3.95,
+        "accepts": "15/15"
+      },
+      {
+        "case": "hash table (prose ~450)",
+        "match": true,
+        "tokens": 446,
+        "prompt_tokens": 34,
+        "ttft_off_s": 0.804,
+        "ttft_on_s": 0.986,
+        "decode_off": 8.24,
+        "decode_on": 9.35,
+        "speedup": 1.134,
+        "wall_off_s": 54.92,
+        "wall_on_s": 48.71,
+        "accepts": "196/209"
+      },
+      {
+        "case": "LRUCache (code, long)",
+        "match": true,
+        "tokens": 1031,
+        "prompt_tokens": 44,
+        "ttft_off_s": 2.001,
+        "ttft_on_s": 2.183,
+        "decode_off": 7.92,
+        "decode_on": 11.12,
+        "speedup": 1.404,
+        "wall_off_s": 132.16,
+        "wall_on_s": 94.9,
+        "accepts": "600/387"
+      },
+      {
+        "case": "virtual memory essay (~1600)",
+        "match": true,
+        "tokens": 1757,
+        "prompt_tokens": 51,
+        "ttft_off_s": 1.449,
+        "ttft_on_s": 1.65,
+        "decode_off": 8.13,
+        "decode_on": 9.08,
+        "speedup": 1.116,
+        "wall_off_s": 217.59,
+        "wall_on_s": 195.25,
+        "accepts": "736/838"
+      },
+      {
+        "case": "notes summary (150-tok prompt)",
+        "match": true,
+        "tokens": 130,
+        "prompt_tokens": 159,
+        "ttft_off_s": 4.377,
+        "ttft_on_s": 4.719,
+        "decode_off": 8.42,
+        "decode_on": 10.24,
+        "speedup": 1.217,
+        "wall_off_s": 19.82,
+        "wall_on_s": 17.41,
+        "accepts": "67/57"
+      }
+    ],
+    "aggregate": {
+      "total_tokens": 3394,
+      "decode_tok_s_mtp_off": 8.09,
+      "decode_tok_s_mtp_on": 9.72,
+      "overall_speedup": 1.2,
+      "code_speedup": "1.40-1.45x",
+      "prose_speedup": "1.12-1.13x",
+      "longest_request_wall": "132.2 -> 94.9 s (1031-token code generation, 1.39x)"
+    },
+    "measured_at": "2026-08-14 evening battery, after the half-MMA, multi-step-MTP, FP16-KV, S64 and detokenizer increments"
+  }
 }
