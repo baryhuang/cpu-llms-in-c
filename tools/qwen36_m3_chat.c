@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     uint32_t capacity = parse_u32(argc > 4 ? argv[4] : NULL, 4096);
-    uint32_t maximum_new = parse_u32(argc > 5 ? argv[5] : NULL, 2048);
+    uint32_t maximum_new = parse_u32(argc > 5 ? argv[5] : NULL, 3072);
     float temperature = argc > 6 ? strtof(argv[6], NULL) : 0.0f;
     uint32_t top_k = parse_u32(argc > 7 ? argv[7] : NULL, 1);
     uint64_t seed = argc > 8 ? strtoull(argv[8], NULL, 10) : 42;
@@ -205,12 +205,15 @@ int main(int argc, char **argv) {
         }
         free(trimmed);
         free(chat);
-        if (prompt_count + maximum_new > capacity) {
-            fprintf(stderr, "prompt (%zu tokens) plus generation (%u) "
-                    "exceeds context %u\n", prompt_count, maximum_new,
-                    capacity);
+        if (prompt_count + 1 > capacity) {
+            fprintf(stderr, "prompt (%zu tokens) exceeds context %u\n",
+                    prompt_count, capacity);
             continue;
         }
+        /* A long prompt shrinks this reply's budget instead of failing. */
+        uint32_t budget = maximum_new;
+        if (prompt_count + budget > capacity)
+            budget = capacity - (uint32_t)prompt_count;
 
         printf("\nModel>\n");
         fflush(stdout);
@@ -247,7 +250,7 @@ int main(int argc, char **argv) {
         size_t visible_count = 0;
         size_t emitted_bytes = 0;
         double first_token_seconds = -1.0;
-        for (uint32_t index = 0; index < maximum_new; ++index) {
+        for (uint32_t index = 0; index < budget; ++index) {
             uint32_t token;
             size_t sample_count = logit_count;
             if (sample_count > QWEN36_TOKENIZER_VOCAB)
@@ -264,7 +267,7 @@ int main(int argc, char **argv) {
             visible_count = generated_count;
             if (first_token_seconds < 0.0)
                 first_token_seconds = seconds_now() - prompt_start;
-            if (index + 1 == maximum_new) {
+            if (index + 1 == budget) {
                 emit_new_text(tokenizer, generated, visible_count,
                               &emitted_bytes, error, sizeof(error));
                 break;
