@@ -23,8 +23,8 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 |---|---|---:|---|---|---|---|
 | Gemma 4 E2B | two-vCPU x86-64 dev machine | — | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
 | Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | measured on device: answer scoring and greedy generation | output matches the x86 reference token for token (19/19 generation, 12/12 classification, 20/20 tokenizer) | **3.64 prompt tok/s**, **2.60 decode tok/s**; 488 MiB RSS, zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [generation review](models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html) · [ARC-Easy 5-case HTML](models/qwen3.5-0.8b/benchmarks/arc-easy-5/REVIEW.html) · [PDF](output/pdf/qwen35-arc-easy-5-review.pdf) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
-| Qwen3.6-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | complete chat runtime: batched prompt reading, lossless speculative decoding, FP16 KV cache, multi-turn serving, OpenAI-compatible API, thinking mode | output matches oMLX token for token; speculative output identical to plain decoding on every test set; ARC-Easy 5-question check 5/5 | **9.42 tok/s end-to-end** on a 3,394-token workload set (7.91 without speculation); **1.5-1.6x faster than mlx-lm and oMLX**; ahead of llama.cpp end to end without speculation and **1.46x ahead with it**; first token in ~1 s with the model resident | [model](models/qwen3.6-27b/README.md) · [target](models/qwen3.6-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.6-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.6-27b/targets/apple-m3-pro/results.json) |
-| Qwen3.8-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | runs on the Qwen3.6 runtime unchanged (architecture verified identical tensor by tensor); adds reasoning-effort thinking mode | all runtime test suites pass; speculative output identical to plain decoding; ARC-Easy 5-question check 3/5 (each miss answers correctly but skips the required format line) | **9.66 tok/s end-to-end** on a 3,305-token workload set (7.94 without speculation); 1.56x faster than llama.cpp with the Unsloth Qwen3.8 file on the comparison request | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.8-27b/targets/apple-m3-pro/results.json) |
+| Qwen3.6-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | complete chat runtime: batched prompt reading, lossless speculative decoding, FP16 KV cache, multi-turn serving, OpenAI-compatible API, thinking mode | output matches oMLX token for token; speculative output identical to plain decoding on every test set; ARC-Easy 5-question check 5/5 | **9.42 tok/s end-to-end** (7.91 without speculation); **1.5-1.6x mlx-lm/oMLX**, **1.46x llama.cpp** with speculation; first token ~1 s | [model](models/qwen3.6-27b/README.md) · [target](models/qwen3.6-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.6-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.6-27b/targets/apple-m3-pro/results.json) |
+| Qwen3.8-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | runs on the Qwen3.6 runtime unchanged (architecture verified identical tensor by tensor); adds reasoning-effort thinking mode | all runtime test suites pass; speculative output identical to plain decoding; ARC-Easy 5-question check 3/5 (each miss answers correctly but skips the required format line) | **9.66 tok/s end-to-end** (7.94 without speculation); **1.56x llama.cpp** with speculation | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.8-27b/targets/apple-m3-pro/results.json) |
 | Whisper small.en | generic CPU | — | complete C FFT front end, encoder, cached decoder, tokenizer and full-graph image compiler | F32 boundaries pass; three real-weight decoder tokens match NumPy; quantized error recorded separately | arbitrary PCM16 WAV to English text implemented; target-neutral speed is not a release result | [model](models/whisper-small.en/README.md) · [decision record](models/whisper-small.en/DECISIONS.md) · [generic target](models/whisper-small.en/targets/generic/README.md) |
 | Whisper small.en | Amlogic A113X: 4x Cortex-A53 | 2017 | mixed Q4/Q8 full graph with NEON kernels and four-thread scheduling, measured on device | JFK reference sample transcribed with 0 word errors in 22; broader word-error-rate suite still open | 11 s WAV in **45.0 s** (3-run median), 251 MiB RSS, zero swap; **13.08x** faster than the unoptimized baseline | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [HTML review](models/whisper-small.en/targets/a113x/benchmarks/jfk-11s/REVIEW.html) · [PDF review](output/pdf/whisper-small-en-a113x-jfk-11s-review.pdf) · [raw data](models/whisper-small.en/targets/a113x/results.json) |
 
@@ -32,51 +32,34 @@ Chip year means first public MP release, official launch, or official developmen
 
 The Gemma build predates the current design and hard-codes its two output labels; every later model takes any prompt at run time and produces free text through the full output head.
 
-## Throughput vs llama.cpp, mlx-lm and oMLX, same machine, same model
+## Throughput
 
-Four stacks measured on the Apple M3 Pro above, all serving the same
-request — a 36-token prompt answered with a 30-token reply, greedy
-decoding, model already resident, four measured rounds each. The
-mlx-lm 0.31.3 and oMLX 0.5.7 runs compute on the same Q4 weight values
-as this runtime and produced identical output tokens in all 12 runs.
-llama.cpp (build 10360, Metal, flash attention) runs the Unsloth
-Q4_K_M file — a different Q4 quantization of the same model, 15.65 GiB
-of tensors vs this runtime's 14.1 GiB — and its reply text matched on
-this prompt. Speculative decoding was off in all four stacks for a
-like-for-like comparison; the row below the table shows it on. Raw
-record:
+Qwen3.6-27B on the Apple M3 Pro, one request: 36-token prompt,
+30-token greedy reply, model resident, four measured rounds per stack.
+mlx-lm 0.31.3 and oMLX 0.5.7 compute on the same Q4 weight values as
+this runtime and produced identical output; llama.cpp build 10360
+(Metal) runs the Unsloth Q4_K_M file, a different Q4 quantization of
+the same model. Raw record:
 [`results.json`](models/qwen3.6-27b/targets/apple-m3-pro/results.json).
 
-| Tokens per second, higher is better | This runtime | llama.cpp | mlx-lm | oMLX |
+| Tokens per second | This runtime | llama.cpp | mlx-lm | oMLX |
 |---|---:|---:|---:|---:|
-| **End-to-end: reply tokens / total request time** | **6.54** | 6.06 | 3.96 | 3.74 |
-| Prompt reading, long prompt | 63.6 | 73.0 | 13.9 | 11.6 |
-| Generation (decode) | 8.48 | 7.44 | 6.03 | 5.90 |
-| **End-to-end with speculative decoding on (this runtime's default)** | **8.83** | — | — | — |
+| **End-to-end** | **6.54** | 6.06 | 3.96 | 3.74 |
+| **End-to-end, speculative decoding (default)** | **8.83** | — | — | — |
+| Prompt reading | 36.4 | 39.3 | 13.9 | 11.6 |
+| Generation | 8.48 | 7.44 | 6.03 | 5.90 |
 
-| Supporting latencies in seconds, lower is better | This runtime | llama.cpp | mlx-lm | oMLX |
+| Seconds | This runtime | llama.cpp | mlx-lm | oMLX |
 |---|---:|---:|---:|---:|
-| Total request, model already loaded | 4.59 | 4.95 | 7.58 | 8.03 |
+| Full request | 4.59 | 4.95 | 7.58 | 8.03 |
 | First token | 0.99 | 0.92 | 2.60 | 3.11 |
 
-End-to-end is the primary number: reply tokens divided by the whole
-request time, prompt reading and first-token wait included — the rate a
-user actually experiences. Prompt reading and generation are its two
-components; any workload's end-to-end rate lands between them depending
-on how much of the time is spent reading versus writing. When first
-measured, this runtime and llama.cpp tied end to end from opposite
-strengths; the techniques behind llama.cpp's faster prompt reading
-(wide GEMM output tiles, vectorized quant loads, whole-prompt batching)
-were then ported into this runtime's kernels, closing the long-prompt
-gap to 13% and putting it ahead end to end without speculation. With
-speculative decoding on, output stays token-identical to plain decoding
-and the same request reaches 8.83 tok/s — 1.46x over llama.cpp, which
-has no equivalent mode for this architecture — and 9.42 tok/s on a
-3,394-token mixed workload set. Both native stacks remain 1.6-2.4x
-faster than the Python stacks end to end. mlx-lm and oMLX prompt rates
-were measured on the original 36-token request; this runtime and
-llama.cpp on ~600-token prompts, where prompt reading is
-steady-state.
+End-to-end = reply tokens / full request time, prompt reading and
+first token included. Speculative output is token-identical to plain
+decoding; the other stacks have no equivalent mode. Long prompts read
+at 63.6 tok/s (llama.cpp: 73.0). Longer mixed workloads reach
+9.42 tok/s end-to-end; per-case records in the
+[target file](models/qwen3.6-27b/targets/apple-m3-pro/README.md).
 
 ## Evaluation isolation
 
@@ -166,28 +149,21 @@ Run the compiled Qwen3.6-27B target interactively on the Apple M3 Pro machine:
 tools/qwen36_chat.sh
 ```
 
-The chat stays resident: the model loads once at startup (about 7 s), and every prompt after that reaches its first token in about 1 s, streaming under `Model>` as tokens complete, with a `[first token …, tok/s]` status line after each reply. Defaults allow long replies: 4,096-token context and up to 3,072 new tokens per reply, generation stopping at the model's end token; a long prompt shrinks that reply budget instead of erroring (override with `QWEN36_CONTEXT` / `QWEN36_MAX_TOKENS`). Enter `/quit` to exit. A prompt passed as an argument runs the one-shot generator instead. The script uses the local compiled image under `tmp/qwen36-27b-runtime` (`QWEN36_MODEL_DIR=tmp/qwen38-27b-runtime` serves Qwen3.8-27B); weights remain outside Git.
+The chat stays resident: the model loads once (about 7 s), then every prompt reaches its first token in about 1 s. Follow-up turns reprocess only the new turn. With no arguments the script also starts the OpenAI-compatible server, installs and auto-configures the Chatbox client, and opens it; `--terminal` keeps the terminal chat.
 
-Running `tools/qwen36_chat.sh` with no arguments is the one-command app experience: it starts the OpenAI-compatible server if it is not already running, installs the Chatbox client on first use (Homebrew cask), writes the provider configuration into Chatbox automatically, and opens the client. `--terminal` keeps the resident terminal chat instead.
-
-The server can also be run directly and used from any OpenAI-compatible client — Cherry Studio, Open WebUI, Raycast, Continue, Cline:
+The server also works standalone with any OpenAI-compatible client:
 
 ```sh
-tools/qwen36_serve.py            # http://127.0.0.1:8199/v1, model id qwen3.6-27b
+tools/qwen36_serve.py            # http://127.0.0.1:8199/v1
 ```
 
-The server is a single standard-library Python file that renders multi-turn history into the official template, passes each request's sampling fields (`temperature`, `top_k`, `top_p`, `min_p`, `presence_penalty`, `max_tokens`) through to the C sampler, and streams SSE deltas; a per-request `reasoning_effort` field (low/medium/xhigh, `none` to disable) switches to thinking mode with the think block streamed as `reasoning_content`. All model execution stays in the resident C/Metal runtime. The runtime remembers the conversation, so a follow-up request only processes the new turn — measured up to 6.1x faster to first token on later turns — and greedy requests keep speculative decoding with output identical to plain decoding.
-
-To watch CPU, memory, GPU utilization and memory pressure while a run is active, start the stdlib-only monitor in a second terminal (no root needed). On a terminal it draws a live sparkline dashboard; it can also record a run and render it as an HTML chart page:
+It honors each request's sampling fields, and a `reasoning_effort` field enables thinking mode with the reasoning streamed separately. Greedy requests keep lossless speculative decoding. All model execution stays in the resident C/Metal runtime.
 
 ```sh
-tools/qwen36_monitor.py                          # live sparkline dashboard
-tools/qwen36_monitor.py python3.13               # follow an mlx-lm / oMLX run
-tools/qwen36_monitor.py --record run.jsonl       # save samples while watching
-tools/qwen36_monitor.py --render run.jsonl       # write run.html with SVG charts
+tools/qwen36_monitor.py          # live CPU/GPU/memory dashboard; can record and render charts
 ```
 
-Model-specific compile and run commands live in each model record, e.g. the [Gemma 4 E2B build](models/gemma-4-e2b/README.md#build).
+Serving options, Qwen3.8 usage, and model-specific compile commands live in each model record.
 
 ## Current limits
 
