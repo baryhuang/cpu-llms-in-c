@@ -266,7 +266,8 @@ elementwise/norm kernels. Profile per-dispatch before changing anything.
 | File | Role |
 |---|---|
 | `tools/qwen36_chat.sh` | human-facing shell; interactive mode execs the resident chat binary |
-| `tools/qwen36_m3_chat.c` | resident chat: model opens and wires once, prompt loop at ready-state latency |
+| `tools/qwen36_m3_chat.c` | resident chat: model opens and wires once, prompt loop at ready-state latency; `QWEN36_MACHINE=1` switches to a JSON-line protocol (R/D/E/X lines) for serving shims |
+| `tools/qwen36_serve.py` | OpenAI-compatible `/v1/chat/completions` server over the resident chat; multi-turn template rendering, SSE streaming, stdlib-only |
 | `tools/qwen36_monitor.py` | live CPU/memory/GPU monitor with sparkline dashboard, JSONL recording and HTML chart rendering |
 | `tools/qwen36_m3_generate.c` | tokenizer, prompt loop, sampler, stream output, JSON report |
 | `qwen36_m3_decode.h` | public sync and async C runtime API |

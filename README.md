@@ -164,6 +164,14 @@ tools/qwen36_chat.sh
 
 Interactive mode is resident: the model loads and wires once at startup (about 7 s), then every prompt answers at the ready-state latency — about 1.4 s to first token, streaming under `Model>` as tokens complete, with a `[first token …, tok/s]` status line after each reply. Defaults allow long replies: 4,096-token context and up to 3,072 new tokens per reply, generation stopping at the model's end token; a long prompt shrinks that reply budget instead of erroring (override with `QWEN36_CONTEXT` / `QWEN36_MAX_TOKENS`). Enter `/quit` to exit. A prompt passed as an argument runs the one-shot generator instead. The script uses the local compiled image under `tmp/qwen36-27b-runtime`; weights remain outside Git.
 
+To use a real chat client instead of the terminal, serve the resident model behind an OpenAI-compatible API:
+
+```sh
+tools/qwen36_serve.py            # http://127.0.0.1:8199/v1, model id qwen3.6-27b
+```
+
+Then point any OpenAI-compatible client — Chatbox, Cherry Studio, Open WebUI, Raycast, Continue, Cline — at base URL `http://127.0.0.1:8199/v1` with any API key. The shim (standard library only) renders multi-turn history into the pinned no-thinking template and streams SSE deltas; all model execution stays in the resident C/Metal runtime, so after the one-time startup wiring every request answers at ready-state latency.
+
 To watch CPU, memory, GPU utilization and memory pressure while a run is active, start the stdlib-only monitor in a second terminal (no root needed). On a terminal it draws a live sparkline dashboard; it can also record a run and render it as an HTML chart page:
 
 ```sh

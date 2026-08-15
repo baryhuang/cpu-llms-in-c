@@ -102,11 +102,116 @@ static size_t complete_utf8_prefix(const unsigned char *bytes,
     return cursor;
 }
 
+/* Write one JSON string (with quotes) to stdout. */
+static void put_json_string(const char *bytes, size_t length) {
+    putchar('"');
+    for (size_t index = 0; index < length; ++index) {
+        unsigned char byte = (unsigned char)bytes[index];
+        switch (byte) {
+        case '"': fputs("\\\"", stdout); break;
+        case '\\': fputs("\\\\", stdout); break;
+        case '\n': fputs("\\n", stdout); break;
+        case '\r': fputs("\\r", stdout); break;
+        case '\t': fputs("\\t", stdout); break;
+        default:
+            if (byte < 0x20) printf("\\u%04x", byte);
+            else putchar(byte);
+        }
+    }
+    putchar('"');
+}
+
+static void append_utf8(char **cursor, uint32_t codepoint) {
+    char *out = *cursor;
+    if (codepoint < 0x80) {
+        *out++ = (char)codepoint;
+    } else if (codepoint < 0x800) {
+        *out++ = (char)(0xc0 | (codepoint >> 6));
+        *out++ = (char)(0x80 | (codepoint & 0x3f));
+    } else if (codepoint < 0x10000) {
+        *out++ = (char)(0xe0 | (codepoint >> 12));
+        *out++ = (char)(0x80 | ((codepoint >> 6) & 0x3f));
+        *out++ = (char)(0x80 | (codepoint & 0x3f));
+    } else {
+        *out++ = (char)(0xf0 | (codepoint >> 18));
+        *out++ = (char)(0x80 | ((codepoint >> 12) & 0x3f));
+        *out++ = (char)(0x80 | ((codepoint >> 6) & 0x3f));
+        *out++ = (char)(0x80 | (codepoint & 0x3f));
+    }
+    *cursor = out;
+}
+
+static int hex_value(char character) {
+    if (character >= '0' && character <= '9') return character - '0';
+    if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+    if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+    return -1;
+}
+
+/* Decode one JSON string literal (machine-mode request line) to UTF-8. */
+static char *decode_json_string(const char *line) {
+    while (*line == ' ' || *line == '\t') ++line;
+    if (*line != '"') return NULL;
+    ++line;
+    char *output = malloc(strlen(line) * 4 + 1);
+    if (output == NULL) return NULL;
+    char *cursor = output;
+    while (*line != '\0' && *line != '"') {
+        if (*line != '\\') {
+            *cursor++ = *line++;
+            continue;
+        }
+        ++line;
+        switch (*line) {
+        case '"': *cursor++ = '"'; ++line; break;
+        case '\\': *cursor++ = '\\'; ++line; break;
+        case '/': *cursor++ = '/'; ++line; break;
+        case 'b': *cursor++ = '\b'; ++line; break;
+        case 'f': *cursor++ = '\f'; ++line; break;
+        case 'n': *cursor++ = '\n'; ++line; break;
+        case 'r': *cursor++ = '\r'; ++line; break;
+        case 't': *cursor++ = '\t'; ++line; break;
+        case 'u': {
+            uint32_t codepoint = 0;
+            ++line;
+            for (int digit = 0; digit < 4; ++digit) {
+                int value = hex_value(*line);
+                if (value < 0) { free(output); return NULL; }
+                codepoint = codepoint << 4 | (uint32_t)value;
+                ++line;
+            }
+            if (codepoint >= 0xd800 && codepoint <= 0xdbff &&
+                line[0] == '\\' && line[1] == 'u') {
+                uint32_t low = 0;
+                line += 2;
+                for (int digit = 0; digit < 4; ++digit) {
+                    int value = hex_value(*line);
+                    if (value < 0) { free(output); return NULL; }
+                    low = low << 4 | (uint32_t)value;
+                    ++line;
+                }
+                codepoint = 0x10000 +
+                    ((codepoint - 0xd800) << 10) + (low - 0xdc00);
+            }
+            append_utf8(&cursor, codepoint);
+            break;
+        }
+        default:
+            free(output);
+            return NULL;
+        }
+    }
+    if (*line != '"') { free(output); return NULL; }
+    *cursor = '\0';
+    return output;
+}
+
 /* Decode the visible token prefix and print only the new complete UTF-8
- * suffix, so text appears as soon as each token completes. */
+ * suffix, so text appears as soon as each token completes. In machine
+ * mode each delta goes out as a 'D "..."' protocol line. */
 static int emit_new_text(const qwen36_tokenizer *tokenizer,
                          const uint32_t *tokens, size_t token_count,
-                         size_t *emitted_bytes, char *error,
+                         size_t *emitted_bytes, int machine, char *error,
                          size_t error_capacity) {
     size_t output_length = 0;
     (void)qwen36_tokenizer_decode(tokenizer, tokens, token_count, NULL, 0,
@@ -121,8 +226,15 @@ static int emit_new_text(const qwen36_tokenizer *tokenizer,
     size_t complete = complete_utf8_prefix(
         (const unsigned char *)output, output_length);
     if (complete > *emitted_bytes) {
-        fwrite(output + *emitted_bytes, 1, complete - *emitted_bytes,
-               stdout);
+        if (machine) {
+            fputs("D ", stdout);
+            put_json_string(output + *emitted_bytes,
+                            complete - *emitted_bytes);
+            putchar('\n');
+        } else {
+            fwrite(output + *emitted_bytes, 1, complete - *emitted_bytes,
+                   stdout);
+        }
         fflush(stdout);
         *emitted_bytes = complete;
     }
@@ -144,6 +256,9 @@ int main(int argc, char **argv) {
     uint32_t top_k = parse_u32(argc > 7 ? argv[7] : NULL, 1);
     uint64_t seed = argc > 8 ? strtoull(argv[8], NULL, 10) : 42;
 
+    const char *machine_env = getenv("QWEN36_MACHINE");
+    int machine = machine_env != NULL && strcmp(machine_env, "0") != 0;
+
     char error[512];
     qwen36_tokenizer *tokenizer =
         qwen36_tokenizer_open(argv[3], error, sizeof(error));
@@ -163,6 +278,11 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "Model resident in %.1f s. Enter /quit to exit.\n",
             seconds_now() - start);
+    if (machine) {
+        printf("R {\"ready\": true, \"context\": %u, "
+               "\"max_new\": %u}\n", capacity, maximum_new);
+        fflush(stdout);
+    }
 
     uint32_t *prompt_ids = malloc((size_t)capacity * sizeof(*prompt_ids));
     uint32_t *generated = malloc((size_t)maximum_new * sizeof(*generated));
@@ -174,40 +294,68 @@ int main(int argc, char **argv) {
     }
 
     for (;;) {
-        printf("\nYou> ");
-        fflush(stdout);
+        if (!machine) {
+            printf("\nYou> ");
+            fflush(stdout);
+        }
         ssize_t read_length = getline(&line, &line_capacity, stdin);
         if (read_length < 0) {
-            printf("\n");
+            if (!machine) printf("\n");
             break;
         }
-        char *trimmed = trim_prompt(line);
-        if (trimmed == NULL) continue;
-        if (trimmed[0] == '\0') {
+        char *chat = NULL;
+        if (machine) {
+            /* One request per line: a JSON string holding the complete
+             * rendered chat template, produced by the serving shim. */
+            chat = decode_json_string(line);
+            if (chat == NULL) {
+                if (line[0] != '\n') {
+                    printf("X \"request line is not a JSON string\"\n");
+                    fflush(stdout);
+                }
+                continue;
+            }
+        } else {
+            char *trimmed = trim_prompt(line);
+            if (trimmed == NULL) continue;
+            if (trimmed[0] == '\0') {
+                free(trimmed);
+                continue;
+            }
+            if (strcmp(trimmed, "/quit") == 0 ||
+                strcmp(trimmed, "/exit") == 0) {
+                free(trimmed);
+                break;
+            }
+            chat = render_chat(trimmed);
             free(trimmed);
-            continue;
         }
-        if (strcmp(trimmed, "/quit") == 0 ||
-            strcmp(trimmed, "/exit") == 0) {
-            free(trimmed);
-            break;
-        }
-        char *chat = render_chat(trimmed);
         size_t prompt_count = 0;
         if (chat == NULL || qwen36_tokenizer_encode(
                 tokenizer, chat, prompt_ids, capacity, &prompt_count,
                 error, sizeof(error)) != 0) {
-            fprintf(stderr, "prompt encode failed: %s\n",
-                    chat == NULL ? "allocation" : error);
-            free(trimmed);
+            const char *reason = chat == NULL ? "allocation" : error;
+            if (machine) {
+                fputs("X ", stdout);
+                put_json_string(reason, strlen(reason));
+                putchar('\n');
+                fflush(stdout);
+            } else {
+                fprintf(stderr, "prompt encode failed: %s\n", reason);
+            }
             free(chat);
             continue;
         }
-        free(trimmed);
         free(chat);
         if (prompt_count + 1 > capacity) {
-            fprintf(stderr, "prompt (%zu tokens) exceeds context %u\n",
-                    prompt_count, capacity);
+            if (machine) {
+                printf("X \"prompt (%zu tokens) exceeds context %u\"\n",
+                       prompt_count, capacity);
+                fflush(stdout);
+            } else {
+                fprintf(stderr, "prompt (%zu tokens) exceeds context "
+                        "%u\n", prompt_count, capacity);
+            }
             continue;
         }
         /* A long prompt shrinks this reply's budget instead of failing. */
@@ -215,8 +363,10 @@ int main(int argc, char **argv) {
         if (prompt_count + budget > capacity)
             budget = capacity - (uint32_t)prompt_count;
 
-        printf("\nModel>\n");
-        fflush(stdout);
+        if (!machine) {
+            printf("\nModel>\n");
+            fflush(stdout);
+        }
         double prompt_start = seconds_now();
         const float *logits = NULL;
         size_t logit_count = 0;
@@ -269,7 +419,8 @@ int main(int argc, char **argv) {
                 first_token_seconds = seconds_now() - prompt_start;
             if (index + 1 == budget) {
                 emit_new_text(tokenizer, generated, visible_count,
-                              &emitted_bytes, error, sizeof(error));
+                              &emitted_bytes, machine, error,
+                              sizeof(error));
                 break;
             }
             uint32_t position = (uint32_t)prompt_count + index;
@@ -280,7 +431,7 @@ int main(int argc, char **argv) {
                 break;
             }
             emit_new_text(tokenizer, generated, visible_count,
-                          &emitted_bytes, error, sizeof(error));
+                          &emitted_bytes, machine, error, sizeof(error));
             if (qwen36_m3_model_forward_wait(
                     model, &result, &logits, &logit_count,
                     error, sizeof(error)) != 0) {
@@ -290,17 +441,40 @@ int main(int argc, char **argv) {
             }
         }
         double total_seconds = seconds_now() - prompt_start;
-        printf("\n");
-        fflush(stdout);
-        if (!failed && visible_count > 1 &&
-            total_seconds > first_token_seconds) {
-            fprintf(stderr, "[first token %.2f s, %zu tokens, "
-                    "%.1f tok/s]\n", first_token_seconds, visible_count,
-                    (double)(visible_count - 1) /
-                    (total_seconds - first_token_seconds));
-        } else if (!failed && first_token_seconds >= 0.0) {
-            fprintf(stderr, "[first token %.2f s]\n",
-                    first_token_seconds);
+        if (machine) {
+            if (failed) {
+                fputs("X ", stdout);
+                put_json_string(error, strlen(error));
+                putchar('\n');
+            } else {
+                int stopped = generated_count != 0 &&
+                    (generated[generated_count - 1] ==
+                         QWEN36_END_OF_TEXT ||
+                     generated[generated_count - 1] == QWEN36_IM_END);
+                printf("E {\"tokens\": %zu, \"prompt_tokens\": %zu, "
+                       "\"first_token_s\": %.3f, \"total_s\": %.3f, "
+                       "\"stop\": \"%s\"}\n",
+                       visible_count, prompt_count,
+                       first_token_seconds >= 0.0 ?
+                           first_token_seconds : 0.0,
+                       total_seconds,
+                       stopped ? "stop" : "length");
+            }
+            fflush(stdout);
+        } else {
+            printf("\n");
+            fflush(stdout);
+            if (!failed && visible_count > 1 &&
+                total_seconds > first_token_seconds) {
+                fprintf(stderr, "[first token %.2f s, %zu tokens, "
+                        "%.1f tok/s]\n", first_token_seconds,
+                        visible_count,
+                        (double)(visible_count - 1) /
+                        (total_seconds - first_token_seconds));
+            } else if (!failed && first_token_seconds >= 0.0) {
+                fprintf(stderr, "[first token %.2f s]\n",
+                        first_token_seconds);
+            }
         }
         qwen36_m3_model_reset(model);
     }
