@@ -204,7 +204,7 @@ The generator samples on CPU, submits the next forward, flushes the newest
 complete UTF-8 suffix to the file descriptor named by `QWEN36_STREAM_FD`, then
 waits. Machine-readable JSON keeps standard output to itself; descriptor 1 is
 rejected for streaming so the two contracts never share a byte stream.
-`./qwen36-chat.sh` passes descriptor 3 and no longer requires `jq`. The
+`tools/qwen36_chat.sh` passes descriptor 3 and no longer requires `jq`. The
 synchronous `qwen36_m3_model_forward` remains as a wrapper.
 
 ### Measured effect
@@ -363,10 +363,18 @@ No Python command is used to compile or run the deployment.
 For an interactive prompt loop after the image exists:
 
 ```sh
-./qwen36-chat.sh
+tools/qwen36_chat.sh
 ```
 
 Enter a prompt at `You>`; the script prints only decoded model text under `Model>`. Enter `/quit` to exit.
+
+`tools/qwen36_monitor.py` (stdlib-only, no root) prints one line per second
+with the run's CPU, RSS, physical footprint, GPU utilization and the
+system's free/wired/file-backed/compressed memory and pressure level —
+start it in a second terminal to watch the weight-wiring phase and the
+GPU-bound generation phase live. Remember the accounting note above: this
+runtime's mapped weights appear in the wired/file-backed columns, not in
+its RSS.
 
 ```sh
 make qwen36-tools qwen36-m3-generate

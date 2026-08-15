@@ -159,10 +159,17 @@ make test
 Run the compiled Qwen3.6-27B target interactively on the pinned Apple machine:
 
 ```sh
-./qwen36-chat.sh
+tools/qwen36_chat.sh
 ```
 
 Enter one prompt at `You>`; decoded text streams under `Model>` as tokens complete. Enter `/quit` to exit. The script uses the local compiled image under `tmp/qwen36-27b-runtime`; weights remain outside Git.
+
+To watch CPU, memory, GPU utilization and memory pressure while a run is active, start the stdlib-only monitor in a second terminal (no root needed):
+
+```sh
+tools/qwen36_monitor.py              # follows the next qwen36* process
+tools/qwen36_monitor.py python3.13   # follows an mlx-lm or oMLX run
+```
 
 Model-specific compile and run commands live in each model record, e.g. the [Gemma 4 E2B build](models/gemma-4-e2b/README.md#build).
 

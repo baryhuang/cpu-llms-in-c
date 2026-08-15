@@ -55,7 +55,8 @@ The first streaming increment is implemented, verified and committed:
   `QWEN36_STREAM_FD`, then waits. JSON schema 2 adds per-token
   `stream_emitted_after_prompt_start_ms` and a `streaming` object.
   Descriptor 1 is rejected for streaming to protect the JSON contract.
-- `qwen36-chat.sh`: streams descriptor 3; `jq` no longer required;
+- `tools/qwen36_chat.sh` (formerly root `qwen36-chat.sh`): streams
+  descriptor 3; `jq` no longer required;
   `QWEN36_RAW=1` preserves raw JSON.
 - `tests/qwen36_m3_api_state_test.c` + `make qwen36-m3-api-state-test`:
   16-check live API-state test (needs the model images; not part of the
@@ -264,7 +265,8 @@ elementwise/norm kernels. Profile per-dispatch before changing anything.
 
 | File | Role |
 |---|---|
-| `qwen36-chat.sh` | human-facing prompt shell; streams descriptor 3 |
+| `tools/qwen36_chat.sh` | human-facing prompt shell; streams descriptor 3 |
+| `tools/qwen36_monitor.py` | live CPU/memory/GPU monitor for local runs; stdlib-only, no root |
 | `tools/qwen36_m3_generate.c` | tokenizer, prompt loop, sampler, stream output, JSON report |
 | `qwen36_m3_decode.h` | public sync and async C runtime API |
 | `qwen36_m3_decode.m` | Objective-C Metal runtime implementation |

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-repository=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 runner="$repository/build/qwen36-m3-generate"
 model_directory=${QWEN36_MODEL_DIR:-"$repository/tmp/qwen36-27b-runtime"}
 metallib=${QWEN36_METALLIB:-"$repository/build/qwen36-m3-q4.metallib"}
