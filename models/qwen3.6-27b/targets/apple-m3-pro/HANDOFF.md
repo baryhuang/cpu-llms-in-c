@@ -195,6 +195,19 @@ future attempt should target GPU-side residency (for example
 `MTLResidencySet` on macOS 15) or accept the cost as a one-time
 per-process constant that amortizes in a server process.
 
+## Tuning baseline for the batched kernels
+
+Warm same-process measurement (weights already wired, 6 repeats stable,
+thermally loaded machine): one S32 chunk takes 2,035 ms for 32 tokens
+(63.6 ms/token) versus 4,889 ms for 32 warm sequential forwards
+(152.8 ms/token in the same thermal state) - a 2.40x per-token speedup.
+The weight-streaming bound for one chunk is roughly 115 ms (about
+13.7 GB of Q4 weights at about 120 GB/s), so the warm chunk sits about
+18x above that bound: the batched kernels are correctness-first and have
+large tuning headroom. Suspects: the 32-accumulator GEMM pattern's
+occupancy and scattered activation loads, the 32-step blocked recurrence
+(about 4.8 GB of state traffic per chunk), and the batched softmax loops.
+
 ## Work not yet implemented
 
 - Cold-start weight wiring: about 7.4-8.9 s of the ~9.9 s cold TTFT is
