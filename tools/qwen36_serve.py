@@ -161,7 +161,10 @@ class Handler(BaseHTTPRequestHandler):
         identifier = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         created = int(time.time())
         if request.get("stream"):
-            self.stream_completion(rendered, identifier, created)
+            include_usage = bool(
+                (request.get("stream_options") or {}).get("include_usage"))
+            self.stream_completion(rendered, identifier, created,
+                                   include_usage)
         else:
             self.plain_completion(rendered, identifier, created)
 
@@ -186,17 +189,26 @@ class Handler(BaseHTTPRequestHandler):
                                 stats.get("tokens", 0)},
         })
 
-    def stream_completion(self, rendered, identifier, created):
+    def stream_completion(self, rendered, identifier, created,
+                          include_usage):
+        # The SSE body carries no Content-Length, so it must use chunked
+        # transfer encoding: without the 0-length terminator a keep-alive
+        # client never sees the body end and its UI stays in the waiting
+        # state after the reply.
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("Transfer-Encoding", "chunked")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
-        def event(payload):
-            self.wfile.write(
-                f"data: {json.dumps(payload)}\n\n".encode())
+        def write_chunk(data):
+            self.wfile.write(f"{len(data):x}\r\n".encode() + data +
+                             b"\r\n")
             self.wfile.flush()
+
+        def event(payload):
+            write_chunk(f"data: {json.dumps(payload)}\n\n".encode())
 
         def chunk(delta, finish=None):
             return {"id": identifier, "object": "chat.completion.chunk",
@@ -210,11 +222,25 @@ class Handler(BaseHTTPRequestHandler):
                 rendered,
                 lambda text: event(chunk({"content": text})))
             event(chunk({}, stats.get("stop", "stop")))
-            self.wfile.write(b"data: [DONE]\n\n")
+            if include_usage:
+                prompt_tokens = stats.get("prompt_tokens", 0)
+                completion_tokens = stats.get("tokens", 0)
+                event({"id": identifier,
+                       "object": "chat.completion.chunk",
+                       "created": created, "model": MODEL_ID,
+                       "choices": [],
+                       "usage": {
+                           "prompt_tokens": prompt_tokens,
+                           "completion_tokens": completion_tokens,
+                           "total_tokens": prompt_tokens +
+                                           completion_tokens}})
+            write_chunk(b"data: [DONE]\n\n")
+            self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (RuntimeError, BrokenPipeError,
                 ConnectionResetError) as failure:
             print(f"stream aborted: {failure}", flush=True)
+            self.close_connection = True
 
 
 def main():
