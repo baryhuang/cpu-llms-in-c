@@ -138,6 +138,20 @@ int max2(int a, int b) {
   </table>
   <p class="note">No ratio is valid here: hardware, precision, prompt length, generated length and memory accounting differ. Sources: <a href="https://huggingface.co/Qwen/Qwen3.6-27B">Qwen official model card</a> and <a href="https://github.com/huggingface/transformers/blob/main/docs/source/en/model_doc/qwen3_5.md#usage-tips-and-notes">official Transformers implementation notes</a>.</p>
 
+  <h3>Bare mlx-lm reference</h3>
+  <p>The baseline above is the complete oMLX server stack. This measurement runs the bare <code>mlx-lm</code> library (mlx-lm 0.31.3, mlx 0.32.0, Python 3.13, comparison-only environment) on the same value-equivalent exported checkpoint: one discarded warmup, then four rounds of mlx-lm and the C runtime interleaved with alternating order, fresh process each run, greedy. All eight runs produced the published prompt and output token IDs.</p>
+  <table>
+    <thead><tr><th>Metric</th><th class="num">C/Metal, same rounds</th><th class="num">Bare mlx-lm 0.31.3</th><th>Same-window ratio</th></tr></thead>
+    <tbody>
+      <tr><td>Model load</td><td class="num">0.101 s</td><td class="num">4.588 s</td><td>different loading models</td></tr>
+      <tr><td>First token after load</td><td class="num">9.716 s</td><td class="num">3.030 s</td><td>—</td></tr>
+      <tr><td>Cold start to first token</td><td class="num">9.816 s</td><td class="num">7.618 s</td><td>C 1.289x slower</td></tr>
+      <tr><td>Visible decode intervals</td><td class="num"><strong>7.735 tok/s</strong></td><td class="num">5.660 tok/s</td><td><strong>C 1.367x faster</strong></td></tr>
+      <tr><td>Peak process memory</td><td class="num">0.27 GB + mapped pages</td><td class="num">15.89 GB</td><td>accounting differs</td></tr>
+    </tbody>
+  </table>
+  <p class="note">These rounds ran thermally loaded: C decode measured 7.735 tok/s versus its published 8.4227, and mlx-lm 5.660 versus the oMLX server's 5.8507 — read the same-window ratios, not the absolutes. mlx-lm reported 27.3 prompt tok/s with a warm page cache versus 13.56 through oMLX in the baseline session; its first token after load includes lazy weight materialization and kernel compilation.</p>
+
   <h3>Memory</h3>
   <table>
     <thead><tr><th>Metric</th><th class="num">C/Metal</th><th class="num">oMLX 0.5.7</th></tr></thead>

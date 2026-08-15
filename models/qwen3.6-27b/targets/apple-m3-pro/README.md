@@ -110,6 +110,37 @@ The Qwen model card does not publish a token-throughput number for Qwen3.6-27B. 
 
 No speedup ratio is calculated: the hardware, precision, prompt length, generated length and memory accounting differ. Sources: [Qwen official model card](https://huggingface.co/Qwen/Qwen3.6-27B) and [official Transformers Qwen3.5/3.6 implementation notes](https://github.com/huggingface/transformers/blob/main/docs/source/en/model_doc/qwen3_5.md#usage-tips-and-notes).
 
+### Bare mlx-lm reference
+
+The published same-machine baseline above is the complete oMLX server
+stack. This section measures the bare `mlx-lm` library (mlx-lm 0.31.3,
+mlx 0.32.0, Python 3.13, comparison-only environment) on the same
+value-equivalent exported checkpoint: one discarded warmup, then four
+rounds of bare mlx-lm and the C runtime interleaved with alternating
+order, fresh process each run, the same 36-token prompt, greedy. All
+eight runs produced the published 36 prompt IDs and 30 visible output IDs
+plus the stop token.
+
+| Metric | C/Metal, same rounds | Bare mlx-lm 0.31.3 | Same-window ratio |
+|---|---:|---:|---|
+| Model load | 0.101 s mmap open | 4.588 s | different loading models |
+| First token after load | 9.716 s | 3.030 s | — |
+| Cold start to first token | 9.816 s | 7.618 s | C 1.289x slower |
+| Visible decode intervals | **7.735 tok/s** | 5.660 tok/s | **C 1.367x faster** |
+| Reported prompt throughput | 3.71 tok/s cold-inclusive | 27.33 tok/s | see note |
+| Peak process memory | 0.27 GB plus mapped pages | 15.89 GB | accounting differs |
+
+These rounds ran on a thermally loaded machine: the C decode measured
+7.735 tok/s here versus its published 8.4227 tok/s from the cooler
+baseline session, and mlx-lm measured 5.660 tok/s versus the oMLX
+server's 5.8507 tok/s; the same-window ratios are the comparable facts.
+mlx-lm reported 27.3 prompt tok/s with a warm page cache versus 13.16 in
+its own cold warmup and 13.56 through the oMLX server; the C
+cold-inclusive figure carries the roughly 7.4 s first-use weight wiring
+described above, while the warm C S32 chunk sustains about 15.7 tok/s
+(32 tokens in 2.035 s). Raw data: `bare_mlx_lm_baseline` in
+[`results.json`](results.json).
+
 ### Memory
 
 | Metric | C/Metal runtime | oMLX 0.5.7 |

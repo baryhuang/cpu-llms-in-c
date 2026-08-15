@@ -1,5 +1,5 @@
 {
-  "schema": 5,
+  "schema": 6,
   "status": "free-text-end-to-end",
   "measured_at": "2026-08-14T13:20:00+08:00",
   "machine": {
@@ -338,6 +338,115 @@
       "per-process cold page touch of the mapped model dominates the remaining time to first token",
       "batched kernels are correctness-first; the S32 chunk takes about 1.4 s of warm compute for 32 tokens and has not been tuned",
       "prompts shorter than 16 tokens still run the sequential path"
+    ]
+  },
+  "bare_mlx_lm_baseline": {
+    "measured_at": "2026-08-14T19:40:00+08:00",
+    "scope": "bare mlx-lm library baseline, separate from the published oMLX server baseline; comparison-only Python environment, not in the deployment path",
+    "stack": {
+      "mlx_lm": "0.31.3",
+      "mlx": "0.32.0",
+      "python": "3.13.5",
+      "model": "tmp/qwen36-27b-omlx, the value-equivalent checkpoint exported from the deployed C images"
+    },
+    "method": "1 discarded warmup, then 4 rounds of bare mlx-lm and the C/Metal runtime interleaved with alternating order, fresh process each run, same 36-token published prompt, greedy; mlx-lm driven via stream_generate with make_sampler(temp=0)",
+    "token_parity": "4/4 mlx-lm runs and 4/4 C runs produced the published 36 prompt IDs and 30 visible output IDs plus stop 248046",
+    "bare_mlx_lm": {
+      "load_seconds": {
+        "per_round": [
+          4.649216,
+          4.697404,
+          4.531922,
+          4.47219
+        ],
+        "mean": 4.587683
+      },
+      "ttft_after_load_seconds": {
+        "per_round": [
+          2.922839,
+          3.063137,
+          2.97271,
+          3.162107
+        ],
+        "mean": 3.030198
+      },
+      "cold_start_to_first_token_seconds": {
+        "per_round": [
+          7.572055,
+          7.760541,
+          7.504632,
+          7.634297
+        ],
+        "mean": 7.617881
+      },
+      "reported_prompt_tokens_per_second": [
+        26.539674,
+        27.347047,
+        27.879155,
+        27.568263
+      ],
+      "reported_generation_tokens_per_second": [
+        5.995443,
+        5.68436,
+        5.896577,
+        5.781007
+      ],
+      "visible_decode_intervals_per_second": {
+        "per_round": [
+          5.817467,
+          5.509693,
+          5.705175,
+          5.60805
+        ],
+        "mean": 5.660096
+      },
+      "peak_memory_gb": [
+        15.888122,
+        15.888122,
+        15.888122,
+        15.888138
+      ]
+    },
+    "c_runtime_same_rounds": {
+      "model_open_seconds": [
+        0.127262,
+        0.081591,
+        0.1113,
+        0.083067
+      ],
+      "ttft_after_open_seconds": [
+        9.751415,
+        9.725492,
+        9.592165,
+        9.796668
+      ],
+      "cold_start_to_first_token_seconds": {
+        "per_round": [
+          9.876088,
+          9.806747,
+          9.700692,
+          9.879615
+        ],
+        "mean": 9.815786
+      },
+      "visible_decode_intervals_per_second": {
+        "per_round": [
+          7.479702,
+          7.813727,
+          7.712887,
+          7.933521
+        ],
+        "mean": 7.734959
+      }
+    },
+    "same_window_ratios": {
+      "decode_c_over_mlx_lm": 1.366577,
+      "cold_start_c_over_mlx_lm": 1.288519
+    },
+    "notes": [
+      "This session ran thermally loaded: the C visible-interval decode measured 7.735/s here versus the published 8.4227/s from the cooler baseline session; mlx-lm measured 5.660/s versus the oMLX server's 5.8507/s. Same-window ratios are the comparable facts.",
+      "mlx-lm reported 27.3 prompt tokens/s in these warm-page-cache rounds versus 13.16 in its own cold warmup run and 13.56 through the oMLX server in the baseline session.",
+      "mlx-lm TTFT after load includes first-use lazy weight materialization and kernel compilation, not only prompt compute."
     ]
   },
   "same_machine_omlx_baseline": {
