@@ -1,0 +1,87 @@
+{
+ "schema_version": 1,
+ "date": "2026-08-15",
+ "profile": "../../../qwen3.5-0.8b/benchmarks/arc-easy-5/profile.json",
+ "profile_sha256": "28d250832265c69c6dd81b0beec94c8eafefed2ea2e5c1bd7776ab6ebc95e05f",
+ "host": "MacBook Pro Mac15,6, Apple M3 Pro, 36 GB, macOS 15.7.3",
+ "runtime": "C/Metal target runtime (build/qwen36-m3-chat, machine mode), greedy, adaptive MTP active, no-think template",
+ "note": "Five-case generative smoke adaptation of ARC-Easy shared with the Qwen3.5-0.8B targets; not an official ARC-Easy score.",
+ "scores": {
+  "strict_32_token_budget": 5,
+  "strict_96_token_budget": 5
+ },
+ "cases_32": [
+  {
+   "id": "MCAS_2000_4_6",
+   "expected": "A",
+   "parsed": "A",
+   "correct": true,
+   "text": "Answer: A"
+  },
+  {
+   "id": "Mercury_7057260",
+   "expected": "C",
+   "parsed": "C",
+   "correct": true,
+   "text": "Answer: C"
+  },
+  {
+   "id": "ACTAAP_2014_7_6",
+   "expected": "A",
+   "parsed": "A",
+   "correct": true,
+   "text": "Answer: A"
+  },
+  {
+   "id": "Mercury_7122448",
+   "expected": "B",
+   "parsed": "B",
+   "correct": true,
+   "text": "Answer: B"
+  },
+  {
+   "id": "Mercury_SC_416516",
+   "expected": "B",
+   "parsed": "B",
+   "correct": true,
+   "text": "Answer: B"
+  }
+ ],
+ "cases_96": [
+  {
+   "id": "MCAS_2000_4_6",
+   "expected": "A",
+   "parsed": "A",
+   "correct": true,
+   "text": "Answer: A"
+  },
+  {
+   "id": "Mercury_7057260",
+   "expected": "C",
+   "parsed": "C",
+   "correct": true,
+   "text": "Answer: C"
+  },
+  {
+   "id": "ACTAAP_2014_7_6",
+   "expected": "A",
+   "parsed": "A",
+   "correct": true,
+   "text": "Answer: A"
+  },
+  {
+   "id": "Mercury_7122448",
+   "expected": "B",
+   "parsed": "B",
+   "correct": true,
+   "text": "Answer: B"
+  },
+  {
+   "id": "Mercury_SC_416516",
+   "expected": "B",
+   "parsed": "B",
+   "correct": true,
+   "text": "Answer: B"
+  }
+ ]
+}

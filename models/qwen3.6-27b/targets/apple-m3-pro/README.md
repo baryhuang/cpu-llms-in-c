@@ -649,7 +649,7 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 | Text-only image | vision inputs are unsupported | separate artifact if vision is required |
 | MTP verify pass at ~168 ms vs ~118 ms single forward | speedup is 1.45x on code, 1.14x on prose instead of the accept-rate bound | tune batch-2 attention and GDN kernels; the GEMM path already uses the exact decode kernels |
 | MTP is greedy-only | temperature or top-k sampling disables speculation | lossless sampled speculation needs rejection sampling against full distributions |
-| Five smoke prompts only | not a general quality score | run a pinned standardized text benchmark |
-| No 1K or 4K profile | short-prompt results do not establish long-context behavior | measure after batched prefill lands |
+| Quality suite is a five-case ARC-Easy smoke (5/5 strict, [record](../../benchmarks/arc-easy-5/results-macos-m3-pro.json)) | not a general quality score | scale the pinned suite if a general claim is ever needed |
+| Long-context profile measured at 0.9K/1.8K/3.5K prompts | prefill holds ~52 tok/s; decode 10.2 -> 8.45 tok/s as the KV context grows; capacity 8192 verified | Q8 KV if longer contexts are needed |
 
 Machine-readable measurements are in [`results.json`](results.json).

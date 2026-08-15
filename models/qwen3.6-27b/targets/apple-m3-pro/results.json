@@ -642,7 +642,8 @@
       "design": "drafts chain through a GPU argmax into the token buffer, then snapshot blit, batch verify, and the full-accept draft-cache refresh, all in one command buffer; one CPU round trip per accepted step",
       "measured_gain": "13.49 -> 13.54 code / 9.49 -> 9.52 prose tok/s (~0.3-0.5%): command-buffer round trips on a warm queue cost far less than estimated; kept for the structure, recorded as a near-null result"
     },
-    "parity_gate": "state tolerance now scales with run length in 32-token units (the exact path itself drifts 0.084 -> 0.27 from 48 to 96 tokens through delta-rule amplification, argmax identical throughout); relative escape 1.5%; 24/24 checks pass"
+    "parity_gate": "state tolerance now scales with run length in 32-token units (the exact path itself drifts 0.084 -> 0.27 from 48 to 96 tokens through delta-rule amplification, argmax identical throughout); relative escape 1.5%; 24/24 checks pass",
+    "bk128_negative_result": "doubling the half-tile K depth to 128 (paired-group staging, half the barrier rounds) measured 584.6 ms vs 576 ms chunk32 GPU - slightly worse; the barrier cadence is not the binding constraint. Reverted."
   },
   "bare_mlx_lm_baseline": {
     "measured_at": "2026-08-14T19:40:00+08:00",
@@ -1167,5 +1168,38 @@
       },
       "gating": "QWEN36_CONTINUE=0 disables; serve.py replays the think block the model actually saw so follow-ups extend the live sequence (the Qwen3.8 preserve_thinking semantics)"
     }
+  },
+  "long_context_profile": {
+    "summary": "Resident chat, greedy with adaptive MTP, one document-question prompt per run; answers correct at every length.",
+    "runs": [
+      {
+        "prompt_tokens": 920,
+        "capacity": 4096,
+        "ttft_s": 17.225,
+        "prefill_tok_s": 53.4,
+        "decode_tok_s": 10.17
+      },
+      {
+        "prompt_tokens": 1808,
+        "capacity": 8192,
+        "ttft_s": 34.786,
+        "prefill_tok_s": 52.0,
+        "decode_tok_s": 9.9
+      },
+      {
+        "prompt_tokens": 3473,
+        "capacity": 4096,
+        "ttft_s": 69.275,
+        "prefill_tok_s": 50.1,
+        "decode_tok_s": 8.45
+      }
+    ],
+    "notes": "prefill holds ~52 tok/s at length (S64 chunks + MTP draft-cache fill); decode declines with position as attention KV reads grow; capacity 8192 verified working with the FP16 cache (0.54 GB KV)"
+  },
+  "quality_arc_easy_5": {
+    "record": "../../benchmarks/arc-easy-5/results-macos-m3-pro.json",
+    "strict_32_token_budget": "5/5",
+    "strict_96_token_budget": "5/5",
+    "note": "five-case generative smoke adaptation shared with the Qwen3.5-0.8B targets; not an official ARC-Easy score"
   }
 }
