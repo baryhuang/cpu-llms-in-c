@@ -47,7 +47,7 @@
     <div class="metric"><b>15.139 GB</b><span>mapped compiled model image</span></div>
   </div>
 
-  <p class="note"><strong>Result:</strong> free-text generation is end to end and the C path matches oMLX on the compared prompt and output token IDs. Decode is faster than oMLX. Batched prefill cut measured TTFT to 9,725.9 ms; the remaining gap to oMLX's 2,655.8 ms is dominated by per-process cold page faults on the 15.1 GB mapped model.</p>
+  <p class="note"><strong>Result:</strong> free-text generation is end to end and the C path matches oMLX on the compared prompt and output token IDs. Decode is faster than oMLX (1.44x). With batched prefill, tiled simdgroup-matrix GEMM kernels and MTLResidencySet weight wiring at open, time to first token after the model is ready is 1,389.0 ms — 1.91x faster than oMLX's 2,655.8 ms — and cold start to first token totals 7.9 s, at parity with the mlx-lm and oMLX stacks.</p>
 
   <h2>1. Execution contract</h2>
   <table>
@@ -209,7 +209,21 @@ int max2(int a, int b) {
       <tr><td>Decode decisions/s</td><td class="num">8.3588</td><td class="num">8.2408; gap 0.118 vs 0.39 round spread</td></tr>
     </tbody>
   </table>
-  <p>Numeric parity: S16 chunks are bitwise identical to the one-token path in all 256 layer-state buffers and probe logits. S32 chunks decide the identical next token in every tested run; their states carry fast-math FMA-contraction drift bounded by 0.0841 absolute on state magnitudes near 20 with zero NaN. End-to-end token parity — the published comparison standard — held on 5/5 smoke prompts and 8/8 A/B runs. Building the batched graph exposed a latent threadgroup race in the decode attention softmax reduction, present but never manifested in the one-token dispatch; both kernels now carry the missing barrier, an ordering-only change.</p>
+  <p>Numeric parity: S16 chunks on the exact kernel path are bitwise identical to the one-token path in all 256 layer-state buffers and probe logits. S32 chunks decide the identical next token in every tested run; their states carry fast-math FMA-contraction drift bounded by 0.0841 absolute on state magnitudes near 20 with zero NaN. End-to-end token parity — the published comparison standard — held on 5/5 smoke prompts and 8/8 A/B runs. Building the batched graph exposed a latent threadgroup race in the decode attention softmax reduction, present but never manifested in the one-token dispatch; both kernels now carry the missing barrier, an ordering-only change.</p>
+
+  <h3>Optimized kernels and weight residency</h3>
+  <p>Two further measured increments. A tiled simdgroup-matrix GEMM stages a [batch &times; 64] activation tile and a dequantized [64 &times; 32] weight tile in threadgroup memory per threadgroup and consumes them with 8&times;8 <code>simdgroup_multiply_accumulate</code>; the warm S32 chunk drops from 2,035 ms to 864 ms for 32 tokens (2.35x). An <code>MTLResidencySet</code> holding all 644 mapped weight buffers, committed and attached to the command queue at model open, moves Metal first-use wiring out of the first chunk (a parallel CPU prefault had been measured and rejected — the cost is wiring, not page faults). Interleaved four-round A/B, identical tokens in all eight runs:</p>
+  <table>
+    <thead><tr><th>Metric</th><th class="num">Residency off</th><th class="num">Residency on</th></tr></thead>
+    <tbody>
+      <tr><td>Model open</td><td class="num">67.4 ms</td><td class="num">6,493.5 ms, absorbs wiring</td></tr>
+      <tr><td>TTFT after open, mean of 4</td><td class="num">8,116.0 ms</td><td class="num"><strong>1,389.0 ms</strong></td></tr>
+      <tr><td>First S32 chunk</td><td class="num">7,249.1 ms</td><td class="num">905.3 ms</td></tr>
+      <tr><td>Cold start to first token</td><td class="num">8,183.2 ms</td><td class="num">7,882.4 ms</td></tr>
+      <tr><td>Decode decisions/s</td><td class="num">8.4521</td><td class="num">8.3910</td></tr>
+    </tbody>
+  </table>
+  <p>Ready-state prompt throughput is 25.9 tok/s (36 tokens in 1,389 ms) versus 13.56 tok/s through the oMLX server and 27.3 tok/s for bare mlx-lm on this machine. The dual-mode parity test passes: the exact path keeps S16 bitwise identity, the tiled path is argmax-identical with drift bounded by 0.108 and zero NaN; <code>QWEN36_PREFILL_MMA=0</code> and <code>QWEN36_RESIDENCY=0</code> restore the previous behavior.</p>
 
   <h2>4. Verification</h2>
   <p>This section is not included in any benchmark duration above.</p>
@@ -249,8 +263,8 @@ build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib \
   <h2>6. Open work</h2>
   <table>
     <tr><th>Open item</th><th>Measured reason</th></tr>
-    <tr><td>Cold weight wiring</td><td>Roughly 7.4 s of the 9.73 s TTFT is Metal first-use residency wiring of the mapped buffers; parallel CPU prefault was measured and rejected (7 s worse).</td></tr>
-    <tr><td>Batched kernel tuning</td><td>The warm S32 chunk spends about 1.4 s of compute on 32 tokens; correctness-first, untuned.</td></tr>
+    <tr><td>One-time weight wiring at open</td><td>6.5 s of MTLResidencySet wiring per process; amortizes in a long-lived process.</td></tr>
+    <tr><td>Remaining chunk tuning</td><td>The warm S32 chunk at 864 ms sits above the ~115 ms weight-streaming bound; remaining time is in the blocked recurrence and non-GEMM kernels.</td></tr>
     <tr><td>Message-array C API</td><td>Current CLI accepts arbitrary text but only as one user message.</td></tr>
     <tr><td>FP16/Q8 KV cache</td><td>Current cache costs 128 KiB per context token.</td></tr>
     <tr><td>Standardized quality suite</td><td>Five smoke cases are insufficient for a general quality claim.</td></tr>

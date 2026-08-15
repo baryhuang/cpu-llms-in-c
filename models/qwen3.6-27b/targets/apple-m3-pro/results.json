@@ -1,5 +1,5 @@
 {
-  "schema": 6,
+  "schema": 7,
   "status": "free-text-end-to-end",
   "measured_at": "2026-08-14T13:20:00+08:00",
   "machine": {
@@ -339,6 +339,101 @@
       "batched kernels are correctness-first; the S32 chunk takes about 1.4 s of warm compute for 32 tokens and has not been tuned",
       "prompts shorter than 16 tokens still run the sequential path"
     ]
+  },
+  "prefill_optimization_increment": {
+    "measured_at": "2026-08-14T21:10:00+08:00",
+    "scope": "prefill kernel optimization: tiled simdgroup-matrix GEMM with threadgroup-staged operand tiles and inline Q4 dequantization, plus MTLResidencySet weight wiring at model open",
+    "techniques": {
+      "mma_gemm": "32x32 output tile per 128-thread threadgroup, 64-wide K blocks (one Q4 group) staged in threadgroup memory, 8x8 simdgroup_multiply_accumulate with float accumulators; replaces the first-generation batched GEMM whose per-simdgroup activation re-reads multiplied activation traffic by the batch size; QWEN36_PREFILL_MMA=0 restores the decode-identical exact path",
+      "residency_set": "all 644 mapped weight buffers added to an MTLResidencySet, committed, requested and attached to the command queue at model open; moves Metal first-use wiring out of the first prefill chunk; QWEN36_RESIDENCY=0 disables"
+    },
+    "warm_s32_chunk_ms": {
+      "before_mma": 2035.474,
+      "after_mma": 864.432,
+      "speedup": 2.354695,
+      "method": "same-process probe, weights wired, 5 stable repeats each; thermally loaded machine"
+    },
+    "residency_ab": {
+      "method": "9 fresh-process runs: 1 discarded warmup, then 4 rounds of residency-on and residency-off with order alternating per round; MMA prefill active in both; same 36-token published prompt, greedy seed 42; identical token IDs and text in all 8 runs",
+      "residency_off": {
+        "model_open_ms": [
+          57.944,
+          80.417,
+          52.145,
+          78.922
+        ],
+        "ttft_after_open_ms": {
+          "per_round": [
+            7966.003,
+            8490.703,
+            7676.11,
+            8331.083
+          ],
+          "mean": 8115.975
+        },
+        "first_chunk_ms": [
+          7030.364,
+          7616.579,
+          6854.385,
+          7495.027
+        ],
+        "cold_total_ms": 8183.185,
+        "decode_decisions_per_second": [
+          8.423,
+          8.357,
+          8.499,
+          8.529
+        ]
+      },
+      "residency_on": {
+        "model_open_ms": [
+          6711.975,
+          6478.249,
+          6455.076,
+          6328.85
+        ],
+        "ttft_after_open_ms": {
+          "per_round": [
+            1366.323,
+            1392.51,
+            1375.27,
+            1421.737
+          ],
+          "mean": 1388.96
+        },
+        "first_chunk_ms": [
+          885.761,
+          913.682,
+          905.947,
+          915.74
+        ],
+        "cold_total_ms": 7882.357,
+        "decode_decisions_per_second": [
+          8.486,
+          8.449,
+          8.404,
+          8.225
+        ]
+      }
+    },
+    "verification": {
+      "state_parity": "dual-mode parity test: exact path keeps S16 bitwise identity; MMA path argmax-identical on all five token runs with drift bounded by 0.108 absolute and zero NaN",
+      "end_to_end": "5/5 smoke prompts and 8/8 residency A/B runs produced identical token IDs and text vs the sequential path"
+    },
+    "headline_vs_baselines": {
+      "ttft_after_ready_ms": {
+        "c_metal": 1388.96,
+        "omlx_published": 2655.758,
+        "c_speedup": 1.912048
+      },
+      "prompt_tokens_per_second_after_ready": 25.918673,
+      "cold_start_total_seconds": {
+        "c_metal": 7.882,
+        "bare_mlx_lm": 7.618,
+        "omlx_published": 7.627
+      }
+    },
+    "future": "indirect-command-buffer pre-encoding of the static decode graph would remove roughly 2 ms of per-token CPU encoding (under 2 percent at the current decode rate); recorded as future work rather than implemented"
   },
   "bare_mlx_lm_baseline": {
     "measured_at": "2026-08-14T19:40:00+08:00",

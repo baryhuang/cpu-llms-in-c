@@ -87,10 +87,11 @@ The same-machine comparison uses the prompt above, the same 36 prompt IDs, greed
 | Peak process physical footprint | 0.277 GB plus file-backed mapped pages | 16.376 GB | accounting models differ; see Memory |
 
 The table above is the published baseline record from before batched prefill
-landed; it ran the one-token graph 36 times. The batched prefill section
-below reduces measured TTFT to 9,725.9 ms mean. The dominant remaining cost
-is the per-process fault-in of the mapped model pages, roughly 7.4 s inside
-whichever unit touches the weights first.
+landed; it ran the one-token graph 36 times. With the batched prefill,
+tiled-GEMM kernels and weight residency described below, time to first token
+after the model is ready measures 1,389.0 ms mean — 1.91x faster than the
+oMLX server's 2,655.8 ms on the same prompt — and the cold-start total is
+7,882 ms, at parity with the mlx-lm and oMLX stacks.
 
 oMLX 0.5.7 was built with its native `qwen35_prefill` extension available. Its default Q4 and FA256 routes start at 2,048 prompt tokens, so those native long-prefill kernels did not engage for this 36-token case.
 
@@ -269,6 +270,44 @@ overwriting slot 0. The 24-threadgroup decode dispatch never manifested it;
 the 24-by-batch prefill dispatch did. Both kernels now carry the barrier,
 which changes ordering only, not arithmetic.
 
+### Optimized kernels and weight residency
+
+Two further increments, both measured with rotated-round A/B and gated by
+the same parity standard:
+
+**Tiled simdgroup-matrix GEMM.** The first-generation batched GEMM kept
+decode-identical arithmetic but re-read every batch activation row from
+device memory once per weight group per simdgroup, multiplying activation
+traffic by the batch size. The tiled path stages a [batch x 64] activation
+tile and a dequantized [64 x 32] weight tile in threadgroup memory once per
+threadgroup and consumes them with 8x8 `simdgroup_multiply_accumulate`
+operations — the standard prefill kernel shape on Apple GPUs. The warm S32
+chunk drops from 2,035 ms to 864 ms for 32 tokens (2.35x).
+`QWEN36_PREFILL_MMA=0` restores the exact decode-identical kernels.
+
+**Weight residency at model open.** A CPU prefault of the mapped pages was
+measured and rejected (see Current limits history): the first-chunk cost is
+Metal first-use residency wiring, not page faults. Adding all 644 mapped
+weight buffers to an `MTLResidencySet` committed, requested and attached to
+the command queue at model open moves that wiring out of the first chunk.
+`QWEN36_RESIDENCY=0` disables it.
+
+Interleaved four-round A/B, MMA prefill active in both arms, identical
+token IDs and text in all eight runs:
+
+| Metric | Residency off | Residency on |
+|---|---:|---:|
+| Model open | 67.4 ms | 6,493.5 ms, absorbs wiring |
+| Time to first token after open, mean of 4 | 8,116.0 ms | **1,389.0 ms** |
+| First S32 chunk | 7,249.1 ms | 905.3 ms |
+| Cold start to first token, total | 8,183.2 ms | 7,882.4 ms |
+| Decode decisions/s | 8.4521 | 8.3910 |
+
+Prompt throughput once the model is ready: 36 tokens in 1,389 ms is
+25.9 tok/s versus 13.56 tok/s for the oMLX server and 27.3 tok/s for bare
+mlx-lm on this machine. In a long-lived process the one-time 6.5 s wiring
+at open amortizes across requests.
+
 ## Verification
 
 Verification is outside the timed benchmark above.
@@ -287,8 +326,9 @@ Verification is outside the timed benchmark above.
 | Five free-text smoke cases | semantic 5/5; strict requested format 4/5 |
 | Async decode API state machine | 16/16 checks: double submit, wait without submit, invalid token, position bound, reset and close with a pending command (`make qwen36-m3-api-state-test`, needs the model images) |
 | Streaming A/B token parity | 12/12 runs identical IDs and text across parent, async and streaming variants |
-| Prefill state parity | S16 bitwise identical in all 256 layer-state buffers and logits; S32 argmax-identical with drift bounded by 0.0841 and zero NaN (`make qwen36-m3-prefill-parity-test`) |
-| Prefill end-to-end token parity | identical IDs and text on 5/5 smoke prompts and 8/8 A/B runs |
+| Prefill state parity, exact path | S16 bitwise identical in all 256 layer-state buffers and logits; S32 argmax-identical with drift bounded by 0.0841 and zero NaN (`make qwen36-m3-prefill-parity-test`) |
+| Prefill state parity, tiled-GEMM path | argmax-identical on all five token runs, drift bounded by 0.108, zero NaN |
+| Prefill end-to-end token parity | identical IDs and text on 5/5 smoke prompts and 8/8 A/B runs, repeated after each kernel change |
 
 The norm oracle uses the deployed checkpoint convention: standard RMSNorm and q/k norm tensors are direct multiplicative weights, not Hugging Face-style delta weights. Delta q/k normalization uses the exact 128-dimensional epsilon algebra.
 
@@ -332,8 +372,9 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 
 | Limit | Consequence | Next work |
 |---|---|---|
-| Per-process cold weight wiring | roughly 7.4 s of the 9.73 s TTFT is Metal first-use residency wiring of the mapped buffers; parallel CPU prefault was measured and made TTFT 7 s worse | investigate GPU-side residency; the cost amortizes in a long-lived process |
-| Untuned batched kernels | the warm S32 chunk spends about 1.4 s on 32 tokens | tune GEMM tiling and the blocked recurrence after profiling |
+| One-time weight wiring at open | 6.5 s of MTLResidencySet wiring per process; CPU prefault was measured and rejected before this | amortizes in a long-lived process; batch it against other startup work if a server lands |
+| Warm S32 chunk at 864 ms vs a ~115 ms weight-streaming bound | remaining time sits in the blocked recurrence, softmax loops and non-GEMM kernels | profile per-dispatch before further tuning |
+| Per-token CPU encoding of the static decode graph | roughly 2 ms per token, under 2 percent of decode | pre-encode with indirect command buffers if it ever dominates |
 | Prompts under 16 tokens | still run the sequential one-token path | add smaller buckets only if short-prompt TTFT matters |
 | Single user-message CLI | free text works, but system and multi-turn message APIs do not | expose a message-array C API without changing the graph |
 | FP32 KV cache | 128 KiB per context token | verify FP16, then Q8 cache paths |

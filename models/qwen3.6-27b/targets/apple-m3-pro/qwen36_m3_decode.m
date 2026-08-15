@@ -48,6 +48,9 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
     id<MTLComputePipelineState> gemm_f16;
     id<MTLComputePipelineState> gemm_f32_residual_f16;
     id<MTLComputePipelineState> gemm_f32_residual_f32;
+    id<MTLComputePipelineState> gemm_f16_mma;
+    id<MTLComputePipelineState> gemm_f32_residual_f16_mma;
+    id<MTLComputePipelineState> gemm_f32_residual_f32_mma;
     id<MTLComputePipelineState> silu_mul;
     id<MTLComputePipelineState> delta_conv;
     id<MTLComputePipelineState> delta_prepare;
@@ -144,6 +147,8 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
     size_t mapped_bytes;
     size_t state_bytes;
     size_t kv_bytes;
+    BOOL prefill_use_mma;
+    id<MTLResidencySet> residency API_AVAILABLE(macos(15.0));
 
     id<MTLComputePipelineState> rms_half;
     id<MTLComputePipelineState> rms_float;
@@ -715,6 +720,11 @@ static Q36PrefillPipelines *prefill_pipelines(
                  @"qwen36_prefill_q4_gemm_f32_residual_f16");
     MAKE_PREFILL(gemm_f32_residual_f32,
                  @"qwen36_prefill_q4_gemm_f32_residual_f32");
+    MAKE_PREFILL(gemm_f16_mma, @"qwen36_prefill_q4_gemm_f16_mma");
+    MAKE_PREFILL(gemm_f32_residual_f16_mma,
+                 @"qwen36_prefill_q4_gemm_f32_residual_f16_mma");
+    MAKE_PREFILL(gemm_f32_residual_f32_mma,
+                 @"qwen36_prefill_q4_gemm_f32_residual_f32_mma");
     MAKE_PREFILL(silu_mul, @"qwen36_prefill_silu_mul");
     MAKE_PREFILL(delta_conv, @"qwen36_prefill_delta_conv");
     MAKE_PREFILL(delta_prepare, @"qwen36_prefill_delta_prepare");
@@ -730,41 +740,75 @@ static Q36PrefillPipelines *prefill_pipelines(
     return p;
 }
 
+static void encode_prefill_gemm_f16(
+    Q36DecodeRuntime *r, Q36PrefillPipelines *p,
+    id<MTLComputeCommandEncoder> encoder,
+    id<MTLBuffer> x, id<MTLBuffer> quants, id<MTLBuffer> metadata,
+    id<MTLBuffer> output, uint32_t rows, uint32_t groups_per_row) {
+    q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
+    [encoder setComputePipelineState:
+        r->prefill_use_mma ? p->gemm_f16_mma : p->gemm_f16];
+    [encoder setBuffer:x offset:0 atIndex:0];
+    [encoder setBuffer:quants offset:0 atIndex:1];
+    [encoder setBuffer:metadata offset:0 atIndex:2];
+    [encoder setBuffer:output offset:0 atIndex:3];
+    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4];
+    if (r->prefill_use_mma)
+        [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+    else
+        [encoder dispatchThreadgroups:MTLSizeMake((rows + 7) / 8, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+}
+
+static void encode_prefill_gemm_residual(
+    Q36DecodeRuntime *r, Q36PrefillPipelines *p,
+    id<MTLComputeCommandEncoder> encoder,
+    id<MTLBuffer> x, id<MTLBuffer> quants, id<MTLBuffer> metadata,
+    id<MTLBuffer> residual, id<MTLBuffer> output, uint32_t rows,
+    uint32_t groups_per_row, BOOL residual_is_half) {
+    q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
+    id<MTLComputePipelineState> pipeline;
+    if (residual_is_half)
+        pipeline = r->prefill_use_mma ?
+            p->gemm_f32_residual_f16_mma : p->gemm_f32_residual_f16;
+    else
+        pipeline = r->prefill_use_mma ?
+            p->gemm_f32_residual_f32_mma : p->gemm_f32_residual_f32;
+    [encoder setComputePipelineState:pipeline];
+    [encoder setBuffer:x offset:0 atIndex:0];
+    [encoder setBuffer:quants offset:0 atIndex:1];
+    [encoder setBuffer:metadata offset:0 atIndex:2];
+    [encoder setBuffer:residual offset:0 atIndex:3];
+    [encoder setBuffer:output offset:0 atIndex:4];
+    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:5];
+    if (r->prefill_use_mma)
+        [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+    else
+        [encoder dispatchThreadgroups:MTLSizeMake((rows + 7) / 8, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+}
+
 static void encode_prefill_mlp(Q36DecodeRuntime *r, Q36PrefillPipelines *p,
                                id<MTLComputeCommandEncoder> encoder,
                                Q36DecodeLayer *layer) {
-    q36_prefill_gemm_parameters gate_up_parameters = {17408, 80};
-    [encoder setComputePipelineState:p->gemm_f16];
-    [encoder setBuffer:r->p_post_normalized offset:0 atIndex:0];
-    [encoder setBuffer:layer->gate_quants offset:0 atIndex:1];
-    [encoder setBuffer:layer->gate_metadata offset:0 atIndex:2];
-    [encoder setBuffer:r->p_mlp_gate offset:0 atIndex:3];
-    [encoder setBytes:&gate_up_parameters length:sizeof(gate_up_parameters)
-              atIndex:4];
-    [encoder dispatchThreadgroups:MTLSizeMake((17408 + 7) / 8, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    [encoder setBuffer:layer->up_quants offset:0 atIndex:1];
-    [encoder setBuffer:layer->up_metadata offset:0 atIndex:2];
-    [encoder setBuffer:r->p_mlp_up offset:0 atIndex:3];
-    [encoder dispatchThreadgroups:MTLSizeMake((17408 + 7) / 8, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    encode_prefill_gemm_f16(r, p, encoder, r->p_post_normalized,
+                            layer->gate_quants, layer->gate_metadata,
+                            r->p_mlp_gate, 17408, 80);
+    encode_prefill_gemm_f16(r, p, encoder, r->p_post_normalized,
+                            layer->up_quants, layer->up_metadata,
+                            r->p_mlp_up, 17408, 80);
     [encoder setComputePipelineState:p->silu_mul];
     [encoder setBuffer:r->p_mlp_gate offset:0 atIndex:0];
     [encoder setBuffer:r->p_mlp_up offset:0 atIndex:1];
     [encoder setBuffer:r->p_mlp_activated offset:0 atIndex:2];
     [encoder dispatchThreads:MTLSizeMake(17408, p->batch, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    q36_prefill_gemm_parameters down_parameters = {5120, 272};
-    [encoder setComputePipelineState:p->gemm_f32_residual_f32];
-    [encoder setBuffer:r->p_mlp_activated offset:0 atIndex:0];
-    [encoder setBuffer:layer->down_quants offset:0 atIndex:1];
-    [encoder setBuffer:layer->down_metadata offset:0 atIndex:2];
-    [encoder setBuffer:r->p_mixer_output offset:0 atIndex:3];
-    [encoder setBuffer:r->p_layer_output offset:0 atIndex:4];
-    [encoder setBytes:&down_parameters length:sizeof(down_parameters)
-              atIndex:5];
-    [encoder dispatchThreadgroups:MTLSizeMake((5120 + 7) / 8, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    encode_prefill_gemm_residual(r, p, encoder, r->p_mlp_activated,
+                                 layer->down_quants, layer->down_metadata,
+                                 r->p_mixer_output, r->p_layer_output,
+                                 5120, 272, NO);
 }
 
 static void encode_prefill_delta(Q36DecodeRuntime *r,
@@ -780,16 +824,9 @@ static void encode_prefill_delta(Q36DecodeRuntime *r,
     [encoder setBuffer:r->p_normalized offset:0 atIndex:2];
     [encoder dispatchThreadgroups:MTLSizeMake(p->batch, 1, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    q36_prefill_gemm_parameters input_parameters = {16480, 80};
-    [encoder setComputePipelineState:p->gemm_f16];
-    [encoder setBuffer:r->p_normalized offset:0 atIndex:0];
-    [encoder setBuffer:layer->input_quants offset:0 atIndex:1];
-    [encoder setBuffer:layer->input_metadata offset:0 atIndex:2];
-    [encoder setBuffer:r->p_projected offset:0 atIndex:3];
-    [encoder setBytes:&input_parameters length:sizeof(input_parameters)
-              atIndex:4];
-    [encoder dispatchThreadgroups:MTLSizeMake((16480 + 7) / 8, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    encode_prefill_gemm_f16(r, p, encoder, r->p_normalized,
+                            layer->input_quants, layer->input_metadata,
+                            r->p_projected, 16480, 80);
     [encoder setComputePipelineState:p->delta_conv];
     [encoder setBuffer:r->p_projected offset:0 atIndex:0];
     [encoder setBuffer:layer->constants
@@ -831,17 +868,11 @@ static void encode_prefill_delta(Q36DecodeRuntime *r,
     [encoder setBuffer:r->p_gated offset:0 atIndex:3];
     [encoder dispatchThreadgroups:MTLSizeMake(48, p->batch, 1)
             threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-    q36_prefill_gemm_parameters output_parameters = {5120, 96};
-    [encoder setComputePipelineState:p->gemm_f32_residual_f16];
-    [encoder setBuffer:r->p_gated offset:0 atIndex:0];
-    [encoder setBuffer:layer->output_quants offset:0 atIndex:1];
-    [encoder setBuffer:layer->output_metadata offset:0 atIndex:2];
-    [encoder setBuffer:r->p_hidden_half offset:0 atIndex:3];
-    [encoder setBuffer:r->p_mixer_output offset:0 atIndex:4];
-    [encoder setBytes:&output_parameters length:sizeof(output_parameters)
-              atIndex:5];
-    [encoder dispatchThreadgroups:MTLSizeMake((5120 + 7) / 8, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    encode_prefill_gemm_residual(r, p, encoder, r->p_gated,
+                                 layer->output_quants,
+                                 layer->output_metadata,
+                                 r->p_hidden_half, r->p_mixer_output,
+                                 5120, 96, YES);
     [encoder setComputePipelineState:p->rms_f32];
     [encoder setBuffer:r->p_mixer_output offset:0 atIndex:0];
     [encoder setBuffer:layer->constants
@@ -870,16 +901,9 @@ static void encode_prefill_attention(Q36DecodeRuntime *r,
     [encoder setBuffer:r->p_normalized offset:0 atIndex:2];
     [encoder dispatchThreadgroups:MTLSizeMake(p->batch, 1, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    q36_prefill_gemm_parameters input_parameters = {14336, 80};
-    [encoder setComputePipelineState:p->gemm_f16];
-    [encoder setBuffer:r->p_normalized offset:0 atIndex:0];
-    [encoder setBuffer:layer->input_quants offset:0 atIndex:1];
-    [encoder setBuffer:layer->input_metadata offset:0 atIndex:2];
-    [encoder setBuffer:r->p_projected offset:0 atIndex:3];
-    [encoder setBytes:&input_parameters length:sizeof(input_parameters)
-              atIndex:4];
-    [encoder dispatchThreadgroups:MTLSizeMake((14336 + 7) / 8, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    encode_prefill_gemm_f16(r, p, encoder, r->p_normalized,
+                            layer->input_quants, layer->input_metadata,
+                            r->p_projected, 14336, 80);
     [encoder setComputePipelineState:p->attention_query];
     [encoder setBuffer:r->p_projected offset:0 atIndex:0];
     [encoder setBuffer:layer->constants
@@ -915,17 +939,11 @@ static void encode_prefill_attention(Q36DecodeRuntime *r,
     [encoder setBuffer:r->p_gated offset:0 atIndex:4];
     [encoder dispatchThreadgroups:MTLSizeMake(24, p->batch, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    q36_prefill_gemm_parameters output_parameters = {5120, 96};
-    [encoder setComputePipelineState:p->gemm_f32_residual_f16];
-    [encoder setBuffer:r->p_gated offset:0 atIndex:0];
-    [encoder setBuffer:layer->output_quants offset:0 atIndex:1];
-    [encoder setBuffer:layer->output_metadata offset:0 atIndex:2];
-    [encoder setBuffer:r->p_hidden_half offset:0 atIndex:3];
-    [encoder setBuffer:r->p_mixer_output offset:0 atIndex:4];
-    [encoder setBytes:&output_parameters length:sizeof(output_parameters)
-              atIndex:5];
-    [encoder dispatchThreadgroups:MTLSizeMake((5120 + 7) / 8, 1, 1)
-            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    encode_prefill_gemm_residual(r, p, encoder, r->p_gated,
+                                 layer->output_quants,
+                                 layer->output_metadata,
+                                 r->p_hidden_half, r->p_mixer_output,
+                                 5120, 96, YES);
     [encoder setComputePipelineState:p->rms_f32];
     [encoder setBuffer:r->p_mixer_output offset:0 atIndex:0];
     [encoder setBuffer:layer->constants
@@ -1070,6 +1088,44 @@ static int allocate_workspace(Q36DecodeRuntime *r, NSString **message) {
     return 0;
 }
 
+/* Ask Metal to wire the mapped weight buffers up front instead of paying
+ * first-use residency cost inside the first prefill chunk. Gated by
+ * QWEN36_RESIDENCY=0 for controlled comparison. */
+static void request_weight_residency(Q36DecodeRuntime *r) {
+    const char *env = getenv("QWEN36_RESIDENCY");
+    if (env != NULL && strcmp(env, "0") == 0) return;
+    if (@available(macOS 15.0, *)) {
+        MTLResidencySetDescriptor *descriptor =
+            [MTLResidencySetDescriptor new];
+        descriptor.initialCapacity = 644;
+        NSError *error = nil;
+        id<MTLResidencySet> set =
+            [r->device newResidencySetWithDescriptor:descriptor
+                                               error:&error];
+        if (set == nil) return;
+        [set addAllocation:r->global->embedding_quants];
+        [set addAllocation:r->global->embedding_metadata];
+        [set addAllocation:r->global->lm_head_quants];
+        [set addAllocation:r->global->lm_head_metadata];
+        for (Q36DecodeLayer *layer in r->layers) {
+            [set addAllocation:layer->gate_quants];
+            [set addAllocation:layer->gate_metadata];
+            [set addAllocation:layer->up_quants];
+            [set addAllocation:layer->up_metadata];
+            [set addAllocation:layer->down_quants];
+            [set addAllocation:layer->down_metadata];
+            [set addAllocation:layer->input_quants];
+            [set addAllocation:layer->input_metadata];
+            [set addAllocation:layer->output_quants];
+            [set addAllocation:layer->output_metadata];
+        }
+        [set commit];
+        [set requestResidency];
+        [r->queue addResidencySet:set];
+        r->residency = set;
+    }
+}
+
 qwen36_m3_model *qwen36_m3_model_open(
     const char *model_directory, const char *metallib_path,
     uint32_t context_capacity, char *error_message,
@@ -1127,6 +1183,7 @@ qwen36_m3_model *qwen36_m3_model_open(
             [r->layers addObject:layer];
             r->mapped_bytes += layer->length;
         }
+        request_weight_residency(r);
         qwen36_m3_model *model = calloc(1, sizeof(*model));
         if (model == NULL) {
             decode_error(error_message, error_message_capacity,
@@ -1315,6 +1372,8 @@ int qwen36_m3_model_prefill(
     }
     memset(result, 0, sizeof(*result));
     result->token_count = token_count;
+    const char *mma_env = getenv("QWEN36_PREFILL_MMA");
+    r->prefill_use_mma = mma_env == NULL || strcmp(mma_env, "0") != 0;
     double begin = decode_seconds();
     const char *max_chunk_env = getenv("QWEN36_PREFILL_MAX_CHUNK");
     uint32_t max_chunk = max_chunk_env != NULL ?

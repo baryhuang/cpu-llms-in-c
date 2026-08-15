@@ -182,6 +182,30 @@ Attention: packed Q/K/V -> QK norm + RoPE -> causal attention -> output
 MLP: packed gate/up -> activation -> down
 ```
 
+## Landed: prefill kernel optimization + weight residency (2026-08-14, third increment)
+
+- Tiled simdgroup-matrix GEMM for the prefill projections: 32x32 output
+  tile per 128-thread threadgroup, 64-wide K blocks (one Q4 group) staged
+  in threadgroup memory, inline dequantization, 8x8
+  `simdgroup_multiply_accumulate` with float accumulators. Warm S32 chunk
+  2,035 -> 864 ms (2.35x). `QWEN36_PREFILL_MMA=0` keeps the exact
+  decode-identical kernels; the parity test verifies both modes.
+- `MTLResidencySet` with all 644 mapped weight buffers, committed and
+  attached to the queue at model open: TTFT after open 8,116 -> 1,389 ms;
+  wiring moves into model open (6.5 s one-time); cold total slightly
+  better (7,882 vs 8,183 ms). `QWEN36_RESIDENCY=0` disables.
+- Headline: TTFT after ready 1,389 ms = 1.91x faster than the oMLX
+  server's published 2,655.8 ms; ready-state prompt throughput 25.9 tok/s
+  (oMLX 13.56, bare mlx-lm 27.3); cold-start total at parity with both.
+- Technique sources: the tiled-MMA prefill shape matches the 2026 BaseRT
+  paper (arxiv 2607.00501) and MLX's own quantized kernels; the root
+  cause insight (activation re-reads scaling with batch in the naive
+  batched GEMM) came from our own traffic arithmetic.
+- Considered and deferred: indirect-command-buffer pre-encoding of the
+  static decode graph (compile-time graph precompute). Measured CPU
+  encode is roughly 2 ms/token, under 2 percent of decode; not worth the
+  kernel-signature churn until it dominates.
+
 ## Measured negative result: CPU prefault does not help cold TTFT
 
 Touching all mapped image pages from 8 parallel CPU threads at model open
@@ -195,24 +219,22 @@ future attempt should target GPU-side residency (for example
 `MTLResidencySet` on macOS 15) or accept the cost as a one-time
 per-process constant that amortizes in a server process.
 
-## Tuning baseline for the batched kernels
+## Tuning state of the batched kernels
 
-Warm same-process measurement (weights already wired, 6 repeats stable,
-thermally loaded machine): one S32 chunk takes 2,035 ms for 32 tokens
-(63.6 ms/token) versus 4,889 ms for 32 warm sequential forwards
-(152.8 ms/token in the same thermal state) - a 2.40x per-token speedup.
-The weight-streaming bound for one chunk is roughly 115 ms (about
-13.7 GB of Q4 weights at about 120 GB/s), so the warm chunk sits about
-18x above that bound: the batched kernels are correctness-first and have
-large tuning headroom. Suspects: the 32-accumulator GEMM pattern's
-occupancy and scattered activation loads, the 32-step blocked recurrence
-(about 4.8 GB of state traffic per chunk), and the batched softmax loops.
+After the tiled-MMA GEMM landed, the warm S32 chunk is 864 ms for 32
+tokens (27 ms/token) versus a roughly 115 ms weight-streaming bound
+(about 13.7 GB of Q4 weights at about 120 GB/s): 7.5x headroom remains.
+The GEMM projections are no longer the dominant term; the next profile
+should look at the 32-step blocked recurrence (about 4.8 GB of state
+traffic per chunk), the batched attention softmax loops, and the
+elementwise/norm kernels. Profile per-dispatch before changing anything.
 
 ## Work not yet implemented
 
-- Cold-start weight wiring: about 7.4-8.9 s of the ~9.9 s cold TTFT is
-  Metal first-use residency wiring of the mapped weight buffers, now the
-  controlling limit. See the negative result above before retrying.
+- Per-dispatch profiling of the remaining 864 ms warm chunk (recurrence,
+  softmax, elementwise kernels).
+- Indirect-command-buffer pre-encoding of the static decode graph
+  (about 2 ms/token CPU encode today; deferred until it matters).
 - Batched kernel tuning: the warm S32 chunk spends about 1.4 s of compute
   on 32 tokens; profile GEMM tiling and the blocked recurrence.
 - S64/S128 prompt buckets for long prompts, after tuning.
