@@ -368,11 +368,15 @@ tools/qwen36_chat.sh
 
 Enter a prompt at `You>`; the script prints only decoded model text under `Model>`. Enter `/quit` to exit.
 
-`tools/qwen36_monitor.py` (stdlib-only, no root) prints one line per second
-with the run's CPU, RSS, physical footprint, GPU utilization and the
-system's free/wired/file-backed/compressed memory and pressure level —
-start it in a second terminal to watch the weight-wiring phase and the
-GPU-bound generation phase live. Remember the accounting note above: this
+`tools/qwen36_monitor.py` (stdlib-only, no root) samples the run's CPU,
+RSS, physical footprint, GPU utilization and the system's
+free/wired/file-backed/compressed memory and pressure level. On a
+terminal it draws a live sparkline dashboard; `--log` prints plain lines;
+`--record run.jsonl` saves samples and `--render run.jsonl` turns a
+recording into a standalone HTML page with SVG line charts (utilization,
+process memory, system memory, with pressure intervals shaded). The
+weight-wiring phase and the GPU-bound generation phase are clearly
+separable in the charts. Remember the accounting note above: this
 runtime's mapped weights appear in the wired/file-backed columns, not in
 its RSS.
 

@@ -164,11 +164,13 @@ tools/qwen36_chat.sh
 
 Enter one prompt at `You>`; decoded text streams under `Model>` as tokens complete. Enter `/quit` to exit. The script uses the local compiled image under `tmp/qwen36-27b-runtime`; weights remain outside Git.
 
-To watch CPU, memory, GPU utilization and memory pressure while a run is active, start the stdlib-only monitor in a second terminal (no root needed):
+To watch CPU, memory, GPU utilization and memory pressure while a run is active, start the stdlib-only monitor in a second terminal (no root needed). On a terminal it draws a live sparkline dashboard; it can also record a run and render it as an HTML chart page:
 
 ```sh
-tools/qwen36_monitor.py              # follows the next qwen36* process
-tools/qwen36_monitor.py python3.13   # follows an mlx-lm or oMLX run
+tools/qwen36_monitor.py                          # live sparkline dashboard
+tools/qwen36_monitor.py python3.13               # follow an mlx-lm / oMLX run
+tools/qwen36_monitor.py --record run.jsonl       # save samples while watching
+tools/qwen36_monitor.py --render run.jsonl       # write run.html with SVG charts
 ```
 
 Model-specific compile and run commands live in each model record, e.g. the [Gemma 4 E2B build](models/gemma-4-e2b/README.md#build).
