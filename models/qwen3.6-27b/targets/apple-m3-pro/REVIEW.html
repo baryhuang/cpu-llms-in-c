@@ -239,6 +239,17 @@ int max2(int a, int b) {
   </table>
   <p>Ready-state prompt throughput is 25.9 tok/s (36 tokens in 1,389 ms) versus 13.56 tok/s through the oMLX server and 27.3 tok/s for bare mlx-lm on this machine. The dual-mode parity test passes: the exact path keeps S16 bitwise identity, the tiled path is argmax-identical with drift bounded by 0.108 and zero NaN; <code>QWEN36_PREFILL_MMA=0</code> and <code>QWEN36_RESIDENCY=0</code> restore the previous behavior.</p>
 
+  <h3>MTP speculative decoding A/B</h3>
+  <p>Greedy, output-lossless speculation using the checkpoint's <code>mtp.*</code> head (Transformers ignores these tensors; vLLM and SGLang use them). Each step drafts one token through the MTP layer (~8 ms), then verifies pending+draft in one batch-2 forward (~168 ms, GDN state snapshot included) against ~118 ms for a plain one-token forward; a reject restores the snapshot and re-verifies, so emitted tokens are always identical to plain greedy decoding. Fresh-process A/B over the parity battery, identical output on 4/4 prompts:</p>
+  <table>
+    <thead><tr><th>Prompt</th><th class="num">Accepted drafts</th><th class="num">Decode, MTP off</th><th class="num">Decode, MTP on</th><th class="num">Speedup</th></tr></thead>
+    <tbody>
+      <tr><td>C <code>max2</code> function, 30 tokens</td><td class="num">15/15 (100%)</td><td class="num">8.26 tok/s</td><td class="num"><strong>11.98 tok/s</strong></td><td class="num">1.45x</td></tr>
+      <tr><td>Hash-table explanation, 446 tokens</td><td class="num">186/223 (83%)</td><td class="num">8.39 tok/s</td><td class="num">9.55 tok/s</td><td class="num">1.14x</td></tr>
+    </tbody>
+  </table>
+  <p>The draft images add 239 MB (+1.6%) and are packed by <code>tools/qwen36_mtp_pack.c</code> from SHA-pinned BF16 tensors. One convention fact is encoded there: the seven <code>mtp.*</code> norm vectors are Hugging Face delta weights (GemmaRMSNorm, effective multiplier 1&nbsp;+&nbsp;w) although every main-model norm in the deployed conversion is a direct multiplier; packed direct, drafts accept 0/40 — the bug was isolated with an independent MLX reference before touching the C path. <code>QWEN36_MTP=0</code> disables speculation; sampling other than greedy disables it automatically.</p>
+
   <h2>4. Verification</h2>
   <p>This section is not included in any benchmark duration above.</p>
   <table>
@@ -279,6 +290,7 @@ build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib \
     <tr><th>Open item</th><th>Measured reason</th></tr>
     <tr><td>One-time weight wiring at open</td><td>6.5 s of MTLResidencySet wiring per process; amortizes in a long-lived process.</td></tr>
     <tr><td>Remaining chunk tuning</td><td>The warm S32 chunk at 864 ms sits above the ~115 ms weight-streaming bound; remaining time is in the blocked recurrence and non-GEMM kernels.</td></tr>
+    <tr><td>MTP verify tuning</td><td>The batch-2 verify costs ~168 ms vs ~118 ms for a single forward; closing the gap raises the speculative speedup toward its accept-rate bound (1.83x at 83% accept).</td></tr>
     <tr><td>Message-array C API</td><td>Current CLI accepts arbitrary text but only as one user message.</td></tr>
     <tr><td>FP16/Q8 KV cache</td><td>Current cache costs 128 KiB per context token.</td></tr>
     <tr><td>Standardized quality suite</td><td>Five smoke cases are insufficient for a general quality claim.</td></tr>

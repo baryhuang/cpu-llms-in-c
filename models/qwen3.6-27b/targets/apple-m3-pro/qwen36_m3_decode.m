@@ -5,6 +5,7 @@
 #include "qwen36_m3.h"
 #include "qwen36_m3_attention_image.h"
 #include "qwen36_m3_global_image.h"
+#include "qwen36_m3_mtp_image.h"
 #include "qwen36_m3_image.h"
 
 #include <fcntl.h>
@@ -60,6 +61,7 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
     id<MTLComputePipelineState> attention_key_value;
     id<MTLComputePipelineState> attention_scores;
     id<MTLComputePipelineState> attention_softmax_value;
+    id<MTLComputePipelineState> mtp_fuse;
 }
 @end
 
@@ -190,8 +192,24 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
     id<MTLBuffer> final_normalized;
     id<MTLBuffer> logits;
 
+    Q36PrefillPipelines *prefill1;
+    Q36PrefillPipelines *prefill2;
     Q36PrefillPipelines *prefill16;
     Q36PrefillPipelines *prefill32;
+
+    Q36DecodeLayer *mtp_layer;
+    int mtp_file;
+    void *mtp_mapping;
+    size_t mtp_mapping_length;
+    const qwen36_m3_mtp_image_header *mtp_header;
+    id<MTLBuffer> mtp_fc_quants;
+    id<MTLBuffer> mtp_fc_metadata;
+    id<MTLBuffer> mtp_constants;
+    id<MTLBuffer> mtp_fused;
+    id<MTLBuffer> mtp_logits;
+    id<MTLBuffer> p_logits2;
+    id<MTLBuffer> snapshot_recurrent;
+    id<MTLBuffer> snapshot_convolution;
     id<MTLBuffer> p_token_ids;
     id<MTLBuffer> p_hidden_half;
     id<MTLBuffer> p_normalized;
@@ -224,6 +242,9 @@ struct qwen36_m3_model {
     uint32_t pending_token;
     uint32_t pending_position;
     double pending_start;
+    /* Source of the hidden state feeding the next MTP draft:
+     * 0 = decode workspace, 1 = verify batch row 0, 2 = row 1. */
+    int mtp_hidden_source;
 };
 
 static void decode_error(char *message, size_t capacity_value,
@@ -251,7 +272,8 @@ static double decode_seconds(void) {
 static int pinned_sha(const char *sha) {
     return memcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256, 64) == 0 ||
            memcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_2, 64) == 0 ||
-           memcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_3, 64) == 0;
+           memcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_3, 64) == 0 ||
+           memcmp(sha, QWEN36_M3_EXPECTED_MTP_SHA256, 64) == 0;
 }
 
 static id<MTLComputePipelineState>
@@ -322,7 +344,8 @@ static int validate_attention_header(
     size_t length, unsigned layer) {
     if (memcmp(h->magic, QWEN36_M3_ATTENTION_IMAGE_MAGIC, 8) != 0 ||
         h->version != 1 || h->header_bytes != 4096 ||
-        h->layer_index != layer || layer % 4 != 3 ||
+        h->layer_index != layer ||
+        (layer % 4 != 3 && layer != QWEN36_M3_MTP_LAYER_INDEX) ||
         h->hidden_size != 5120 || h->intermediate_size != 17408 ||
         h->group_size != 64 || h->q_heads != 24 || h->kv_heads != 4 ||
         h->head_size != 256 || h->rotary_size != 64 ||
@@ -736,6 +759,7 @@ static Q36PrefillPipelines *prefill_pipelines(
     MAKE_PREFILL(attention_scores, @"qwen36_prefill_attention_scores");
     MAKE_PREFILL(attention_softmax_value,
                  @"qwen36_prefill_attention_softmax_value");
+    MAKE_PREFILL(mtp_fuse, @"qwen36_prefill_mtp_fuse");
 #undef MAKE_PREFILL
     return p;
 }
@@ -746,14 +770,15 @@ static void encode_prefill_gemm_f16(
     id<MTLBuffer> x, id<MTLBuffer> quants, id<MTLBuffer> metadata,
     id<MTLBuffer> output, uint32_t rows, uint32_t groups_per_row) {
     q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
+    int use_mma = r->prefill_use_mma && p->batch > 2;
     [encoder setComputePipelineState:
-        r->prefill_use_mma ? p->gemm_f16_mma : p->gemm_f16];
+        use_mma ? p->gemm_f16_mma : p->gemm_f16];
     [encoder setBuffer:x offset:0 atIndex:0];
     [encoder setBuffer:quants offset:0 atIndex:1];
     [encoder setBuffer:metadata offset:0 atIndex:2];
     [encoder setBuffer:output offset:0 atIndex:3];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4];
-    if (r->prefill_use_mma)
+    if (use_mma)
         [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
     else
@@ -768,12 +793,13 @@ static void encode_prefill_gemm_residual(
     id<MTLBuffer> residual, id<MTLBuffer> output, uint32_t rows,
     uint32_t groups_per_row, BOOL residual_is_half) {
     q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
+    int use_mma = r->prefill_use_mma && p->batch > 2;
     id<MTLComputePipelineState> pipeline;
     if (residual_is_half)
-        pipeline = r->prefill_use_mma ?
+        pipeline = use_mma ?
             p->gemm_f32_residual_f16_mma : p->gemm_f32_residual_f16;
     else
-        pipeline = r->prefill_use_mma ?
+        pipeline = use_mma ?
             p->gemm_f32_residual_f32_mma : p->gemm_f32_residual_f32;
     [encoder setComputePipelineState:pipeline];
     [encoder setBuffer:x offset:0 atIndex:0];
@@ -782,7 +808,7 @@ static void encode_prefill_gemm_residual(
     [encoder setBuffer:residual offset:0 atIndex:3];
     [encoder setBuffer:output offset:0 atIndex:4];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:5];
-    if (r->prefill_use_mma)
+    if (use_mma)
         [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
     else
@@ -1217,6 +1243,13 @@ void qwen36_m3_model_reset(qwen36_m3_model *model) {
                    layer->convolution_state.length);
         }
     }
+    if (r->mtp_layer != nil) {
+        memset(r->mtp_layer->key_cache.contents, 0,
+               r->mtp_layer->key_cache.length);
+        memset(r->mtp_layer->value_cache.contents, 0,
+               r->mtp_layer->value_cache.length);
+    }
+    model->mtp_hidden_source = 0;
 }
 
 int qwen36_m3_model_forward_submit(
@@ -1325,6 +1358,7 @@ int qwen36_m3_model_forward_wait(
         result->physical_footprint_bytes = decode_footprint();
         *logits = r->logits.contents;
         *logit_count = QWEN36_VOCAB_SIZE;
+        model->mtp_hidden_source = 0;
         return 0;
     }
 }
@@ -1339,6 +1373,450 @@ int qwen36_m3_model_forward(
     return qwen36_m3_model_forward_wait(
         model, result, logits, logit_count, error_message,
         error_message_capacity);
+}
+
+static Q36PrefillPipelines *prefill_set_for_batch(
+    Q36DecodeRuntime *r, uint32_t batch) {
+    switch (batch) {
+    case 1: return r->prefill1;
+    case 2: return r->prefill2;
+    case 16: return r->prefill16;
+    default: return r->prefill32;
+    }
+}
+
+/* Encode one MTP pass: fuse(embed(token), hidden) -> fc -> the MTP
+ * transformer layer at rope position start_j (batched: start_j + s). The
+ * hidden input is the target model's POST-final-norm hidden state (the
+ * value its lm_head consumes), matching the reference implementation.
+ * The pass writes the MTP layer's KV cache as its side effect. with_head
+ * adds the final MTP norm and the shared language-model head into
+ * mtp_logits (single-token drafting only); normalize_hidden first applies
+ * the global final norm over p_layer_output rows (chunk-fill path). */
+static void encode_mtp_pass(Q36DecodeRuntime *r,
+                            id<MTLComputeCommandEncoder> encoder,
+                            uint32_t batch, uint32_t start_j,
+                            id<MTLBuffer> hidden, NSUInteger hidden_offset,
+                            int with_head, int normalize_hidden) {
+    Q36PrefillPipelines *p = prefill_set_for_batch(r, batch);
+    if (normalize_hidden) {
+        [encoder setComputePipelineState:p->rms_f32];
+        [encoder setBuffer:r->p_layer_output offset:0 atIndex:0];
+        [encoder setBuffer:r->global->constants offset:0 atIndex:1];
+        [encoder setBuffer:r->p_post_normalized offset:0 atIndex:2];
+        [encoder dispatchThreadgroups:MTLSizeMake(batch, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        hidden = r->p_post_normalized;
+        hidden_offset = 0;
+    }
+    [encoder setComputePipelineState:p->mtp_fuse];
+    [encoder setBuffer:r->global->embedding_quants offset:0 atIndex:0];
+    [encoder setBuffer:r->global->embedding_metadata offset:0 atIndex:1];
+    [encoder setBuffer:r->p_token_ids offset:0 atIndex:2];
+    [encoder setBuffer:hidden offset:hidden_offset atIndex:3];
+    [encoder setBuffer:r->mtp_constants
+                 offset:r->mtp_header->embedding_norm_constants_index *
+                        sizeof(float)
+                atIndex:4];
+    [encoder setBuffer:r->mtp_constants
+                 offset:r->mtp_header->hidden_norm_constants_index *
+                        sizeof(float)
+                atIndex:5];
+    [encoder setBuffer:r->mtp_fused offset:0 atIndex:6];
+    [encoder dispatchThreadgroups:MTLSizeMake(batch, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    if (batch == 1) {
+        encode_prefill_gemm_f16(r, p, encoder, r->mtp_fused,
+                                r->mtp_fc_quants, r->mtp_fc_metadata,
+                                r->mixer_output, 5120,
+                                r->mtp_header->fc_groups_per_row);
+        [encoder setComputePipelineState:r->convert_hidden];
+        [encoder setBuffer:r->mixer_output offset:0 atIndex:0];
+        [encoder setBuffer:r->hidden_half offset:0 atIndex:1];
+        [encoder dispatchThreads:MTLSizeMake(5120, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        encode_attention(r, encoder, r->mtp_layer, start_j);
+        if (with_head) {
+            [encoder setComputePipelineState:r->rms_float];
+            [encoder setBuffer:r->layer_output offset:0 atIndex:0];
+            [encoder setBuffer:r->mtp_constants
+                         offset:r->mtp_header->final_norm_constants_index *
+                                sizeof(float)
+                        atIndex:1];
+            [encoder setBuffer:r->final_normalized offset:0 atIndex:2];
+            [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1)
+                    threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            [encoder setComputePipelineState:r->lm_head];
+            [encoder setBuffer:r->final_normalized offset:0 atIndex:0];
+            [encoder setBuffer:r->global->lm_head_quants offset:0
+                    atIndex:1];
+            [encoder setBuffer:r->global->lm_head_metadata offset:0
+                    atIndex:2];
+            [encoder setBuffer:r->mtp_logits offset:0 atIndex:3];
+            [encoder dispatchThreadgroups:
+                MTLSizeMake((QWEN36_VOCAB_SIZE + 7) / 8, 1, 1)
+                    threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        }
+    } else {
+        encode_prefill_gemm_f16(r, p, encoder, r->mtp_fused,
+                                r->mtp_fc_quants, r->mtp_fc_metadata,
+                                r->p_mixer_output, 5120,
+                                r->mtp_header->fc_groups_per_row);
+        [encoder setComputePipelineState:p->convert_hidden];
+        [encoder setBuffer:r->p_mixer_output offset:0 atIndex:0];
+        [encoder setBuffer:r->p_hidden_half offset:0 atIndex:1];
+        [encoder dispatchThreads:MTLSizeMake(5120, batch, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        encode_prefill_attention(r, p, encoder, r->mtp_layer, start_j);
+    }
+}
+
+/* Run one synchronous MTP pass; batch 1 with with_head produces the draft
+ * token in *draft via a CPU argmax over the full masked head. */
+static int run_mtp_pass(qwen36_m3_model *model, uint32_t batch,
+                        const uint32_t *tokens, uint32_t start_j,
+                        id<MTLBuffer> hidden, NSUInteger hidden_offset,
+                        int with_head, int normalize_hidden,
+                        uint32_t *draft, char *error_message,
+                        size_t error_message_capacity) {
+    Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
+    MTLCommandBufferStatus status;
+    NSString *failure = nil;
+    @autoreleasepool {
+        memcpy(r->p_token_ids.contents, tokens,
+               (size_t)batch * sizeof(uint32_t));
+        id<MTLCommandBuffer> command = [r->queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder =
+            [command computeCommandEncoder];
+        encode_mtp_pass(r, encoder, batch, start_j, hidden, hidden_offset,
+                        with_head, normalize_hidden);
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        status = command.status;
+        if (command.error != nil)
+            failure = command.error.localizedDescription;
+    }
+    if (status != MTLCommandBufferStatusCompleted) {
+        decode_error(error_message, error_message_capacity,
+            failure != nil ? failure : @"Metal MTP pass failed");
+        return 2;
+    }
+    if (with_head && draft != NULL) {
+        const float *logits = r->mtp_logits.contents;
+        uint32_t best = 0;
+        float best_value = logits[0];
+        for (uint32_t index = 1; index < QWEN36_VOCAB_SIZE; ++index) {
+            if (logits[index] > best_value) {
+                best_value = logits[index];
+                best = index;
+            }
+        }
+        *draft = best;
+    }
+    return 0;
+}
+
+/* Batch-2 forward with logits at both positions: the verification step of
+ * speculative decoding. Layer states advance by two positions. */
+static int model_forward2(qwen36_m3_model *model, uint32_t token0,
+                          uint32_t token1, uint32_t position,
+                          int snapshot_first, char *error_message,
+                          size_t error_message_capacity) {
+    Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
+    if ((uint64_t)position + 2 > r->capacity) {
+        decode_error(error_message, error_message_capacity,
+                     @"verification exceeds context capacity");
+        return 1;
+    }
+    MTLCommandBufferStatus status;
+    NSString *failure = nil;
+    @autoreleasepool {
+        uint32_t tokens[2] = {token0, token1};
+        memcpy(r->p_token_ids.contents, tokens, sizeof(tokens));
+        id<MTLCommandBuffer> command = [r->queue commandBuffer];
+        if (snapshot_first) {
+            id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+            NSUInteger recurrent_offset = 0;
+            NSUInteger convolution_offset = 0;
+            for (Q36DecodeLayer *layer in r->layers) {
+                if (layer->attention) continue;
+                [blit copyFromBuffer:layer->recurrent_state
+                        sourceOffset:0
+                            toBuffer:r->snapshot_recurrent
+                   destinationOffset:recurrent_offset
+                                size:layer->recurrent_state.length];
+                [blit copyFromBuffer:layer->convolution_state
+                        sourceOffset:0
+                            toBuffer:r->snapshot_convolution
+                   destinationOffset:convolution_offset
+                                size:layer->convolution_state.length];
+                recurrent_offset += layer->recurrent_state.length;
+                convolution_offset += layer->convolution_state.length;
+            }
+            [blit endEncoding];
+        }
+        id<MTLComputeCommandEncoder> encoder =
+            [command computeCommandEncoder];
+        encode_prefill_chunk(r, r->prefill2, encoder, position);
+        [encoder setComputePipelineState:r->prefill2->rms_f32];
+        [encoder setBuffer:r->p_layer_output offset:0 atIndex:0];
+        [encoder setBuffer:r->global->constants offset:0 atIndex:1];
+        [encoder setBuffer:r->p_post_normalized offset:0 atIndex:2];
+        [encoder dispatchThreadgroups:MTLSizeMake(2, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        encode_prefill_gemm_f16(r, r->prefill2, encoder,
+                                r->p_post_normalized,
+                                r->global->lm_head_quants,
+                                r->global->lm_head_metadata,
+                                r->p_logits2, QWEN36_VOCAB_SIZE, 80);
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        status = command.status;
+        if (command.error != nil)
+            failure = command.error.localizedDescription;
+    }
+    if (status != MTLCommandBufferStatusCompleted) {
+        decode_error(error_message, error_message_capacity,
+            failure != nil ? failure : @"Metal verification failed");
+        return 2;
+    }
+    return 0;
+}
+
+static void gdn_state_copy(Q36DecodeRuntime *r, int restore) {
+    @autoreleasepool {
+        id<MTLCommandBuffer> command = [r->queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+        NSUInteger recurrent_offset = 0;
+        NSUInteger convolution_offset = 0;
+        for (Q36DecodeLayer *layer in r->layers) {
+            if (layer->attention) continue;
+            if (restore) {
+                [blit copyFromBuffer:r->snapshot_recurrent
+                        sourceOffset:recurrent_offset
+                            toBuffer:layer->recurrent_state
+                   destinationOffset:0
+                                size:layer->recurrent_state.length];
+                [blit copyFromBuffer:r->snapshot_convolution
+                        sourceOffset:convolution_offset
+                            toBuffer:layer->convolution_state
+                   destinationOffset:0
+                                size:layer->convolution_state.length];
+            } else {
+                [blit copyFromBuffer:layer->recurrent_state
+                        sourceOffset:0
+                            toBuffer:r->snapshot_recurrent
+                   destinationOffset:recurrent_offset
+                                size:layer->recurrent_state.length];
+                [blit copyFromBuffer:layer->convolution_state
+                        sourceOffset:0
+                            toBuffer:r->snapshot_convolution
+                   destinationOffset:convolution_offset
+                                size:layer->convolution_state.length];
+            }
+            recurrent_offset += layer->recurrent_state.length;
+            convolution_offset += layer->convolution_state.length;
+        }
+        [blit endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+    }
+}
+
+static uint32_t argmax_f32(const float *values, uint32_t count) {
+    uint32_t best = 0;
+    for (uint32_t index = 1; index < count; ++index)
+        if (values[index] > values[best]) best = index;
+    return best;
+}
+
+int qwen36_m3_model_mtp_open(
+    qwen36_m3_model *model, const char *layer_image_path,
+    const char *extras_image_path, char *error_message,
+    size_t error_message_capacity) {
+    if (model == NULL || model->runtime == NULL ||
+        layer_image_path == NULL || extras_image_path == NULL) {
+        decode_error(error_message, error_message_capacity,
+                     @"invalid MTP open arguments");
+        return 1;
+    }
+    Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
+    if (r->mtp_layer != nil) return 0;
+    @autoreleasepool {
+        NSString *message = nil;
+        Q36DecodeLayer *layer = load_attention_layer(
+            r, [NSString stringWithUTF8String:layer_image_path],
+            QWEN36_M3_MTP_LAYER_INDEX, &message);
+        if (layer == nil) {
+            decode_error(error_message, error_message_capacity, message);
+            return 3;
+        }
+        int file = -1;
+        void *mapping = MAP_FAILED;
+        size_t length = 0;
+        if (map_file(extras_image_path, &file, &mapping, &length,
+                     &message) != 0) {
+            decode_error(error_message, error_message_capacity, message);
+            return 3;
+        }
+        const qwen36_m3_mtp_image_header *h = mapping;
+        if (memcmp(h->magic, QWEN36_M3_MTP_IMAGE_MAGIC, 8) != 0 ||
+            h->version != QWEN36_M3_MTP_IMAGE_VERSION ||
+            h->header_bytes != QWEN36_M3_MTP_HEADER_BYTES ||
+            h->hidden_size != 5120 || h->fc_rows != 5120 ||
+            h->fc_groups_per_row != 160 || h->group_size != 64 ||
+            h->constants_f32_count != 3 * 5120 ||
+            memcmp(h->source_sha256, QWEN36_M3_EXPECTED_MTP_SHA256,
+                   64) != 0 ||
+            h->constants_offset + h->constants_bytes != length) {
+            munmap(mapping, length);
+            close(file);
+            decode_error(error_message, error_message_capacity,
+                         @"invalid MTP extras image");
+            return 3;
+        }
+        r->mtp_fc_quants = mapped_buffer(r->device, mapping,
+                                         h->fc_quants_offset,
+                                         h->fc_quants_bytes);
+        r->mtp_fc_metadata = mapped_buffer(r->device, mapping,
+                                           h->fc_metadata_offset,
+                                           h->fc_metadata_bytes);
+        r->mtp_constants = [r->device
+            newBufferWithLength:h->constants_f32_count * sizeof(float)
+                        options:MTLResourceStorageModeShared];
+        r->mtp_fused = [r->device
+            newBufferWithLength:(size_t)32 * 10240 * 2
+                        options:MTLResourceStorageModeShared];
+        r->mtp_logits = [r->device
+            newBufferWithLength:(size_t)QWEN36_VOCAB_SIZE * sizeof(float)
+                        options:MTLResourceStorageModeShared];
+        r->p_logits2 = [r->device
+            newBufferWithLength:(size_t)2 * QWEN36_VOCAB_SIZE *
+                                sizeof(float)
+                        options:MTLResourceStorageModeShared];
+        size_t recurrent_total = 0;
+        size_t convolution_total = 0;
+        for (Q36DecodeLayer *existing in r->layers) {
+            if (existing->attention) continue;
+            recurrent_total += existing->recurrent_state.length;
+            convolution_total += existing->convolution_state.length;
+        }
+        r->snapshot_recurrent = [r->device
+            newBufferWithLength:recurrent_total
+                        options:MTLResourceStorageModeShared];
+        r->snapshot_convolution = [r->device
+            newBufferWithLength:convolution_total
+                        options:MTLResourceStorageModeShared];
+        NSString *pipeline_message = nil;
+        if (r->prefill1 == nil)
+            r->prefill1 = prefill_pipelines(r, 1, &pipeline_message);
+        if (r->prefill2 == nil)
+            r->prefill2 = prefill_pipelines(r, 2, &pipeline_message);
+        if (r->mtp_fc_quants == nil || r->mtp_fc_metadata == nil ||
+            r->mtp_constants == nil || r->mtp_fused == nil ||
+            r->mtp_logits == nil || r->p_logits2 == nil ||
+            r->snapshot_recurrent == nil ||
+            r->snapshot_convolution == nil || r->prefill1 == nil ||
+            r->prefill2 == nil) {
+            munmap(mapping, length);
+            close(file);
+            decode_error(error_message, error_message_capacity,
+                pipeline_message != nil ? pipeline_message :
+                @"cannot allocate MTP runtime state");
+            return 3;
+        }
+        memcpy(r->mtp_constants.contents,
+               (unsigned char *)mapping + h->constants_offset,
+               h->constants_f32_count * sizeof(float));
+        r->mtp_file = file;
+        r->mtp_mapping = mapping;
+        r->mtp_mapping_length = length;
+        r->mtp_header = h;
+        r->mtp_layer = layer;
+        r->mapped_bytes += layer->length + length;
+        return 0;
+    }
+}
+
+int qwen36_m3_model_mtp_step(
+    qwen36_m3_model *model, uint32_t *current_token, uint32_t *position,
+    uint32_t emitted[2], uint32_t *emitted_count, int *accepted,
+    char *error_message, size_t error_message_capacity) {
+    if (model == NULL || model->runtime == NULL ||
+        current_token == NULL || position == NULL || emitted == NULL ||
+        emitted_count == NULL || accepted == NULL) {
+        decode_error(error_message, error_message_capacity,
+                     @"invalid MTP step arguments");
+        return 1;
+    }
+    Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
+    if (r->mtp_layer == nil) {
+        decode_error(error_message, error_message_capacity,
+                     @"MTP images are not loaded");
+        return 1;
+    }
+    id<MTLBuffer> hidden = model->mtp_hidden_source == 0 ?
+        r->final_normalized : r->p_post_normalized;
+    NSUInteger hidden_offset = model->mtp_hidden_source == 2 ?
+        (NSUInteger)5120 * sizeof(uint16_t) : 0;
+
+    uint32_t pending = *current_token;
+    uint32_t j = *position;
+    uint32_t draft = 0;
+    double phase0 = decode_seconds();
+    int status = run_mtp_pass(model, 1, &pending, j, hidden,
+                              hidden_offset, 1, 0, &draft, error_message,
+                              error_message_capacity);
+    if (status != 0) return status;
+
+    double phase1 = decode_seconds();
+    status = model_forward2(model, pending, draft, j, 1, error_message,
+                            error_message_capacity);
+    if (status != 0) return status;
+    double phase3 = decode_seconds();
+    if (getenv("QWEN36_MTP_DEBUG") != NULL)
+        fprintf(stderr, "[mtp-time] draft %.1f ms, snapshot+verify "
+                "%.1f ms\n", (phase1 - phase0) * 1000.0,
+                (phase3 - phase1) * 1000.0);
+    const float *logits2 = r->p_logits2.contents;
+    uint32_t true_next = argmax_f32(logits2, QWEN36_VOCAB_SIZE);
+    if (getenv("QWEN36_MTP_DEBUG") != NULL) {
+        const float *draft_logits = r->mtp_logits.contents;
+        fprintf(stderr, "[mtp] j=%u pending=%u draft=%u (logit %.2f) "
+                "true=%u (main logit %.2f, draft's logit for it %.2f)\n",
+                j, pending, draft, draft_logits[draft], true_next,
+                logits2[true_next], draft_logits[true_next]);
+    }
+
+    if (true_next != draft) {
+        gdn_state_copy(r, 1);
+        status = model_forward2(model, pending, true_next, j, 0,
+                                error_message,
+                                error_message_capacity);
+        if (status != 0) return status;
+        logits2 = r->p_logits2.contents;
+    }
+    *accepted = true_next == draft;
+
+    /* Advance the draft cache past the verified successor so the next
+     * step's draft can attend to it; its own prediction is discarded
+     * because the batched verification already produced the true token
+     * at that position. */
+    status = run_mtp_pass(model, 1, &true_next, j + 1,
+                          r->p_post_normalized, 0, 0, 0, NULL,
+                          error_message, error_message_capacity);
+    if (status != 0) return status;
+
+    emitted[0] = pending;
+    emitted[1] = true_next;
+    *emitted_count = 2;
+    *current_token = argmax_f32(logits2 + QWEN36_VOCAB_SIZE,
+                                QWEN36_VOCAB_SIZE);
+    *position = j + 2;
+    model->mtp_hidden_source = 2;
+    return 0;
 }
 
 int qwen36_m3_model_prefill(
@@ -1410,6 +1888,16 @@ int qwen36_m3_model_prefill(
         if (result->first_chunk_ms == 0.0)
             result->first_chunk_ms =
                 (decode_seconds() - chunk_start) * 1000.0;
+        if (r->mtp_layer != nil) {
+            /* Fill the draft layer's cache for this chunk: input token
+             * j pairs with the main hidden at j - 1, so the shifted ids
+             * rely on the documented token_count + 1 contract. */
+            int mtp_status = run_mtp_pass(
+                model, chunk, token_ids + offset + 1,
+                start_position + offset + 1, nil, 0, 0, 1,
+                NULL, error_message, error_message_capacity);
+            if (mtp_status != 0) return mtp_status;
+        }
         if (chunk == 32) ++result->chunk32_count;
         else ++result->chunk16_count;
         offset += chunk;
@@ -1424,6 +1912,13 @@ int qwen36_m3_model_prefill(
             &single_logits, &single_count, error_message,
             error_message_capacity);
         if (status != 0) return status;
+        if (r->mtp_layer != nil) {
+            status = run_mtp_pass(
+                model, 1, token_ids + offset + 1,
+                start_position + offset + 1, r->final_normalized, 0, 0,
+                0, NULL, error_message, error_message_capacity);
+            if (status != 0) return status;
+        }
         if (result->first_chunk_ms == 0.0)
             result->first_chunk_ms =
                 (decode_seconds() - single_start) * 1000.0;
@@ -1495,6 +1990,10 @@ void qwen36_m3_model_close(qwen36_m3_model *model) {
         model->pending_command = NULL;
     }
     if (model->runtime != NULL) {
+        Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
+        if (r->mtp_mapping != NULL && r->mtp_mapping != MAP_FAILED)
+            munmap(r->mtp_mapping, r->mtp_mapping_length);
+        if (r->mtp_file > 0) close(r->mtp_file);
         CFBridgingRelease(model->runtime);
         model->runtime = NULL;
     }

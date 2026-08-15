@@ -90,6 +90,35 @@ int qwen36_m3_model_forward_wait(
     char *error_message,
     size_t error_message_capacity);
 
+/* Multi-token prediction (greedy speculative decoding).
+ *
+ * qwen36_m3_model_mtp_open loads the MTP draft images; afterwards
+ * qwen36_m3_model_prefill also fills the draft layer's cache, and its
+ * token_ids argument must carry token_count + 1 entries (the token after
+ * the prefilled run). qwen36_m3_model_mtp_step then advances generation
+ * by exactly two positions per call: it drafts one token, verifies the
+ * pending token and the draft in one batched forward, and re-verifies on
+ * a miss, so emitted tokens are always identical to plain greedy
+ * decoding. current_token carries the sampled-but-unprocessed token in
+ * and the next one out; emitted receives the one or two tokens confirmed
+ * by this step (the caller appends them and checks for stop tokens). */
+int qwen36_m3_model_mtp_open(
+    qwen36_m3_model *model,
+    const char *layer_image_path,
+    const char *extras_image_path,
+    char *error_message,
+    size_t error_message_capacity);
+
+int qwen36_m3_model_mtp_step(
+    qwen36_m3_model *model,
+    uint32_t *current_token,
+    uint32_t *position,
+    uint32_t emitted[2],
+    uint32_t *emitted_count,
+    int *accepted,
+    char *error_message,
+    size_t error_message_capacity);
+
 enum {
     QWEN36_M3_STATE_RECURRENT = 0,
     QWEN36_M3_STATE_CONVOLUTION = 1,

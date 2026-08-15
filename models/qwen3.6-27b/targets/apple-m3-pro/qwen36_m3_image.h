@@ -10,6 +10,11 @@
 #define QWEN36_M3_EXPECTED_SOURCE_SHA256_3 \
     "ac23bf70b1f239a040921d6f93770d74176fd435dbf44e42317053d06c68d702"
 
+/* Assembled BF16 mtp.* tensor file, built from ranged reads of the official
+ * Qwen/Qwen3.6-27B shards (model-00013 and model-00015 of 15). */
+#define QWEN36_M3_EXPECTED_MTP_SHA256 \
+    "713b0fafacc94c9e541925872de3bcc3507cf5af73abbce525298467b8b4b10f"
+
 enum {
     QWEN36_M3_IMAGE_VERSION = 3,
     QWEN36_M3_MLP_ONLY_IMAGE_VERSION = 2,

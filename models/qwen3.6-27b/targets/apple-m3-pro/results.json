@@ -1,5 +1,5 @@
 {
-  "schema": 8,
+  "schema": 9,
   "status": "free-text-end-to-end",
   "measured_at": "2026-08-14T13:20:00+08:00",
   "machine": {
@@ -54,29 +54,109 @@
     "delta_layer_0": {
       "scope": "complete one-token GatedDeltaNet layer, including Q4 projections, convolution, recurrent update, gated norm, MLP and residuals",
       "median_duration_ms": 1.840846,
-      "median_effective_weight_gbps": 117.211300,
-      "max_abs_error_output_vs_independent_c": 0.00000149011612,
-      "max_abs_error_recurrent_state_vs_independent_c": 0.00000169873238,
-      "max_abs_error_convolution_state_vs_independent_c": 0.0000109672546,
-      "runs_ms": [1.981433, 1.829994, 1.840846, 1.829581, 1.856967]
+      "median_effective_weight_gbps": 117.2113,
+      "max_abs_error_output_vs_independent_c": 1.49011612e-06,
+      "max_abs_error_recurrent_state_vs_independent_c": 1.69873238e-06,
+      "max_abs_error_convolution_state_vs_independent_c": 1.09672546e-05,
+      "runs_ms": [
+        1.981433,
+        1.829994,
+        1.840846,
+        1.829581,
+        1.856967
+      ]
     },
     "attention_layer_3": {
       "scope": "complete one-token full-attention layer at context length 1, including Q4 projections, RoPE, KV update, attention, MLP and residuals",
       "median_duration_ms": 1.770885,
       "median_effective_weight_gbps": 118.263171,
-      "max_abs_error_output_vs_independent_c": 0.00000965595245,
-      "max_abs_error_query_vs_independent_c": 0.0000107288361,
-      "max_abs_error_key_cache_vs_independent_c": 0.0000104904175,
-      "max_abs_error_value_cache_vs_independent_c": 0.00000691413879,
-      "runs_ms": [1.899646, 1.768506, 1.770885, 1.794715, 1.718742]
+      "max_abs_error_output_vs_independent_c": 9.65595245e-06,
+      "max_abs_error_query_vs_independent_c": 1.07288361e-05,
+      "max_abs_error_key_cache_vs_independent_c": 1.04904175e-05,
+      "max_abs_error_value_cache_vs_independent_c": 6.91413879e-06,
+      "runs_ms": [
+        1.899646,
+        1.768506,
+        1.770885,
+        1.794715,
+        1.718742
+      ]
     }
   },
   "c_end_to_end": {
     "command": "build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib MODEL_DIR/tokenizer.q36tok 128 64 0 1 42 'Write a C function int max2(int a, int b) that returns the larger value. Output only the function.'",
     "prompt": "Write a C function int max2(int a, int b) that returns the larger value. Output only the function.",
     "rendered_chat": "<|im_start|>user\nWrite a C function int max2(int a, int b) that returns the larger value. Output only the function.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
-    "prompt_token_ids": [248045, 846, 198, 7734, 264, 351, 709, 514, 1866, 17, 1494, 264, 11, 514, 292, 8, 421, 4523, 279, 7875, 869, 13, 8984, 1132, 279, 709, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271],
-    "output_token_ids": [71093, 66, 198, 390, 1866, 17, 1494, 264, 11, 514, 292, 8, 313, 198, 262, 460, 318, 64, 835, 292, 8, 907, 264, 535, 292, 26, 198, 92, 198, 71093],
+    "prompt_token_ids": [
+      248045,
+      846,
+      198,
+      7734,
+      264,
+      351,
+      709,
+      514,
+      1866,
+      17,
+      1494,
+      264,
+      11,
+      514,
+      292,
+      8,
+      421,
+      4523,
+      279,
+      7875,
+      869,
+      13,
+      8984,
+      1132,
+      279,
+      709,
+      13,
+      248046,
+      198,
+      248045,
+      74455,
+      198,
+      248068,
+      271,
+      248069,
+      271
+    ],
+    "output_token_ids": [
+      71093,
+      66,
+      198,
+      390,
+      1866,
+      17,
+      1494,
+      264,
+      11,
+      514,
+      292,
+      8,
+      313,
+      198,
+      262,
+      460,
+      318,
+      64,
+      835,
+      292,
+      8,
+      907,
+      264,
+      535,
+      292,
+      26,
+      198,
+      92,
+      198,
+      71093
+    ],
     "stop_token_id": 248046,
     "output": "```c\nint max2(int a, int b) {\n    return (a > b) ? a : b;\n}\n```",
     "sampler": {
@@ -89,7 +169,7 @@
       "tokenizer_encode": 2.589,
       "model_open": 97.968,
       "prompt_processing": 11301.202,
-      "prompt_first_forward_cold_page_touch": 7129.150,
+      "prompt_first_forward_cold_page_touch": 7129.15,
       "prompt_after_first": 4172.052,
       "time_to_first_token_after_model_open": 11303.791,
       "continuation_including_eos_decision": 3568.987,
@@ -435,6 +515,58 @@
     },
     "future": "indirect-command-buffer pre-encoding of the static decode graph would remove roughly 2 ms of per-token CPU encoding (under 2 percent at the current decode rate); recorded as future work rather than implemented"
   },
+  "mtp_speculative_decoding": {
+    "summary": "Greedy speculative decoding with the checkpoint's mtp.* head: draft one token via the MTP layer, verify pending+draft in one batch-2 forward; emitted tokens are identical to plain greedy.",
+    "images": {
+      "mtp_layer_q36att_bytes": 209436672,
+      "mtp_q36mtp_bytes": 29556736,
+      "source_bf16_sha256": "713b0fafacc94c9e541925872de3bcc3507cf5af73abbce525298467b8b4b10f",
+      "norm_convention": "mtp.* norm vectors are HF delta weights (GemmaRMSNorm, multiplier 1+w); the packer folds 1+w at pack time. The main model images use direct multipliers."
+    },
+    "fresh_process_ab": {
+      "method": "Two fresh chat processes over the same 4-prompt battery, greedy seed 42, QWEN36_MTP=0 vs default. Decode rate = tokens / (total_s - first_token_s).",
+      "output_parity": "identical token IDs and text on 4/4 prompts",
+      "prompts": [
+        {
+          "prompt": "2+2, single-token answer",
+          "tokens": 1,
+          "mtp_accepted": 1,
+          "mtp_steps": 1
+        },
+        {
+          "prompt": "C max2 function",
+          "tokens": 30,
+          "mtp_accepted": 15,
+          "mtp_steps": 15,
+          "decode_tok_s_off": 8.26,
+          "decode_tok_s_on": 11.98,
+          "speedup": 1.45
+        },
+        {
+          "prompt": "capital of France, Chinese, single-token answer",
+          "tokens": 1,
+          "mtp_accepted": 1,
+          "mtp_steps": 1
+        },
+        {
+          "prompt": "hash-table explanation, ~300 words",
+          "tokens": 446,
+          "mtp_accepted": 186,
+          "mtp_steps": 223,
+          "decode_tok_s_off": 8.39,
+          "decode_tok_s_on": 9.55,
+          "speedup": 1.14
+        }
+      ]
+    },
+    "step_timing_ms": {
+      "draft_pass": 8.0,
+      "snapshot_plus_batch2_verify": 168.0,
+      "single_token_forward_reference": 118.0,
+      "note": "verify uses the exact decode GEMM kernels at batch<=2; the gap over a single forward sits in batch-2 attention/GDN kernels and is the next tuning target"
+    },
+    "gating": "chat enables MTP only when both images exist and sampling is greedy (temperature<=0, top_k<=1); QWEN36_MTP=0 disables"
+  },
   "bare_mlx_lm_baseline": {
     "measured_at": "2026-08-14T19:40:00+08:00",
     "scope": "bare mlx-lm library baseline, separate from the published oMLX server baseline; comparison-only Python environment, not in the deployment path",
@@ -651,11 +783,42 @@
     },
     "end_to_end_request_wall_seconds": {
       "definition": "model ready to last output token for the full request: 36-token prompt plus 30-token greedy completion; C from prompt_processing+continuation walls, mlx-lm from the last stream arrival, oMLX from its request wall",
-      "c_metal": { "per_round": [4.953, 4.949, 4.937, 4.902], "mean": 4.935 },
-      "bare_mlx_lm": { "per_round": [7.55, 7.5, 7.606, 7.642], "mean": 7.575 },
-      "omlx": { "per_round": [8.428, 7.995, 7.798, 7.905], "mean": 8.031 },
-      "c_speedup": { "vs_mlx_lm": 1.535, "vs_omlx": 1.627 },
-      "completion_tokens_per_second_end_to_end": { "c_metal": 6.08, "bare_mlx_lm": 3.96, "omlx": 3.74 }
+      "c_metal": {
+        "per_round": [
+          4.953,
+          4.949,
+          4.937,
+          4.902
+        ],
+        "mean": 4.935
+      },
+      "bare_mlx_lm": {
+        "per_round": [
+          7.55,
+          7.5,
+          7.606,
+          7.642
+        ],
+        "mean": 7.575
+      },
+      "omlx": {
+        "per_round": [
+          8.428,
+          7.995,
+          7.798,
+          7.905
+        ],
+        "mean": 8.031
+      },
+      "c_speedup": {
+        "vs_mlx_lm": 1.535,
+        "vs_omlx": 1.627
+      },
+      "completion_tokens_per_second_end_to_end": {
+        "c_metal": 6.08,
+        "bare_mlx_lm": 3.96,
+        "omlx": 3.74
+      }
     },
     "ratios_vs_c": {
       "ttft_after_ready": {
@@ -692,7 +855,7 @@
       "engine_start": 4971.697375,
       "time_to_first_token_after_request": 2655.758292,
       "request_wall": 7810.367667,
-      "visible_token_intervals": 4956.634250
+      "visible_token_intervals": 4956.63425
     },
     "throughput": {
       "prompt_tokens_per_second": 13.555450475,
@@ -760,7 +923,7 @@
       "output": "water",
       "prompt_tokens": 31,
       "prompt_processing_ms": 11247.067,
-      "continuation_tokens_per_second": 8.263780,
+      "continuation_tokens_per_second": 8.26378,
       "semantic_result": "pass",
       "format_result": "pass"
     },
@@ -783,8 +946,8 @@
       "format_result": "fail: markdown fences were emitted despite the output-only instruction"
     },
     {
-      "prompt": "法国的首都是哪里？只回答城市名。",
-      "output": "巴黎",
+      "prompt": "\u6cd5\u56fd\u7684\u9996\u90fd\u662f\u54ea\u91cc\uff1f\u53ea\u56de\u7b54\u57ce\u5e02\u540d\u3002",
+      "output": "\u5df4\u9ece",
       "prompt_tokens": 23,
       "prompt_processing_ms": 9865.872,
       "continuation_tokens_per_second": 8.500582,

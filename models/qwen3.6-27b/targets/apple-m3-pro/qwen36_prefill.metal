@@ -709,3 +709,72 @@ kernel void qwen36_prefill_q4_gemm_f32_residual_f32_mma(
 #undef X_LOAD_FLOAT
 #undef STORE_RESIDUAL_FLOAT
 }
+
+/* MTP input fusion: normalized token embedding concatenated with the
+ * normalized main-model hidden state, producing the [batch x 10240] input
+ * of the MTP fc projection. One threadgroup per batch position. The same
+ * threadgroup array carries two reductions, so a barrier separates the
+ * read of one result from the next reduction's writes. */
+kernel void qwen36_prefill_mtp_fuse(
+    device const uchar *embedding_quants [[buffer(0)]],
+    device const Q4PrefillMeta *embedding_metadata [[buffer(1)]],
+    device const uint *token_ids [[buffer(2)]],
+    device const half *hidden [[buffer(3)]],
+    device const float *embedding_norm [[buffer(4)]],
+    device const float *hidden_norm [[buffer(5)]],
+    device half *output [[buffer(6)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint3 group_id [[threadgroup_position_in_grid]]) {
+    threadgroup float partials[256];
+    uint s = group_id.x;
+    uint token_id = token_ids[s];
+    float sum = 0.0f;
+    for (uint index = tid; index < kPrefillHidden; index += 256) {
+        uint group = index / 64;
+        uint within = index - group * 64;
+        uint block = token_id * kPrefillEmbeddingGroups + group;
+        uchar bits = embedding_quants[block * 32 + (within >> 1)];
+        uint quant = (within & 1u) == 0 ? bits & 0x0f : bits >> 4;
+        Q4PrefillMeta meta = embedding_metadata[block];
+        float value = float(meta.scale) * float(quant) + float(meta.bias);
+        sum += value * value;
+    }
+    partials[tid] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 128; stride != 0; stride >>= 1) {
+        if (tid < stride) partials[tid] += partials[tid + stride];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float inv_rms_embedding = rsqrt(partials[0] / float(kPrefillHidden) +
+                                    kPrefillRmsEpsilon);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint index = tid; index < kPrefillHidden; index += 256) {
+        uint group = index / 64;
+        uint within = index - group * 64;
+        uint block = token_id * kPrefillEmbeddingGroups + group;
+        uchar bits = embedding_quants[block * 32 + (within >> 1)];
+        uint quant = (within & 1u) == 0 ? bits & 0x0f : bits >> 4;
+        Q4PrefillMeta meta = embedding_metadata[block];
+        float value = float(meta.scale) * float(quant) + float(meta.bias);
+        output[s * 2 * kPrefillHidden + index] =
+            half(value * inv_rms_embedding * embedding_norm[index]);
+    }
+    float hidden_sum = 0.0f;
+    for (uint index = tid; index < kPrefillHidden; index += 256) {
+        float value = float(hidden[s * kPrefillHidden + index]);
+        hidden_sum += value * value;
+    }
+    partials[tid] = hidden_sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 128; stride != 0; stride >>= 1) {
+        if (tid < stride) partials[tid] += partials[tid + stride];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    float inv_rms_hidden = rsqrt(partials[0] / float(kPrefillHidden) +
+                                 kPrefillRmsEpsilon);
+    for (uint index = tid; index < kPrefillHidden; index += 256) {
+        output[s * 2 * kPrefillHidden + kPrefillHidden + index] =
+            half(float(hidden[s * kPrefillHidden + index]) *
+                 inv_rms_hidden * hidden_norm[index]);
+    }
+}

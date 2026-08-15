@@ -27,6 +27,7 @@ Status: free-text generation runs end to end. The deployment opens compiled imag
 | State | FP32 Delta recurrent state, convolution history and FP32 attention KV cache | head counts, head dimensions and cache stride |
 | Output | complete 248,320-row Q4 language-model head | padded IDs above tokenizer vocabulary are masked |
 | Sampling | greedy or temperature/top-k sampling in C | vocabulary bound and stop IDs |
+| Speculation | optional greedy MTP draft-and-verify, output-lossless | draft layer graph and batch-2 verify graph |
 | Decode | C tokenizer decode to UTF-8 | special-token behavior |
 
 The `.m` files are thin Objective-C calls into the Apple Metal system API. Model control, tokenizer, sampling, image compilers and public runtime interfaces are C; compute kernels are Metal. `otool -L` reports only Foundation, Metal, CoreFoundation, `libicucore`, `libSystem` and `libobjc`.
@@ -60,6 +61,7 @@ llama.cpp or ONNX Runtime; it links only the macOS system frameworks
 | `qwen36-m3-chat` + `qwen36-m3-generate` binaries | 237,760 |
 | Serving, monitor and setup scripts | 56,127 |
 | **Total** | **15,148,949,423 (15.15 GB)** |
+| Optional MTP draft images (`mtp-layer.q36att` + `mtp.q36mtp`) | +238,993,408 (+1.6 %) |
 
 Everything except the model images totals 10.3 MB.
 
@@ -381,6 +383,62 @@ Prompt throughput once the model is ready: 36 tokens in 1,389 ms is
 mlx-lm on this machine. In a long-lived process the one-time 6.5 s wiring
 at open amortizes across requests.
 
+## MTP speculative decoding
+
+Qwen3.6-27B ships a multi-token-prediction head (`mtp.*` tensors: an fc
+projection, one standard full-attention decoder layer and three extra RMS
+norms, sharing the main embedding table and language-model head).
+Transformers ignores these tensors; vLLM and SGLang use them for
+speculative decoding. This runtime uses them the same way, greedy-only
+and lossless: each step drafts one token with the cheap MTP pass, then
+verifies the pending token and the draft in one batch-2 forward through
+the main model. An accepted draft yields two tokens for roughly one
+main-model pass plus overhead; a rejected draft is replaced through a
+one-token re-verify, so emitted tokens are always bitwise identical to
+plain greedy decoding. That identity is the gate, checked per release.
+
+| Piece | Implementation |
+|---|---:|
+| Draft input | `fc([rms(embed(token)); rms(hidden_post_final_norm)])`, fused embed+norm kernel |
+| Draft body | one standard attention layer (layer index 64) with its own KV cache, then MTP final norm and the shared Q4 head |
+| Verify | batch-2 prefill graph through all 64 layers plus a batched two-row head |
+| State rollback | GDN recurrent and convolution states snapshot into a shadow buffer inside the verify command buffer; a reject blits them back. Attention KV needs no rollback: the re-verify overwrites the same cache rows |
+| Draft KV during prompt | filled by the same S32/S16 prefill chunks, shifted one position |
+
+### Packing the draft weights
+
+`make qwen36-mtp-pack` builds the packer; it reads the `mtp.*` tensors
+(assembled from ranged reads of official shards 13 and 15, pinned SHA-256
+`713b0faf…`) and emits `mtp-layer.q36att` (a standard attention image,
+209,436,672 bytes) plus `mtp.q36mtp` (fc and norms, 29,556,736 bytes) —
+238,993,408 bytes total, +1.6 % on the model. One convention trap cost a
+day and is now encoded in the packer: the seven `mtp.*` norm vectors are
+Hugging Face delta weights (GemmaRMSNorm, effective multiplier `1 + w`),
+while every norm in the main checkpoint conversion is a direct
+multiplier. Packed as direct weights the drafts are garbage (0/40
+accepts); with `1 + w` folded at pack time the same battery accepts
+31/40. The finding was isolated with an independent MLX reference
+implementation before touching the C path.
+
+### Measured effect
+
+Fresh-process A/B, same battery as the parity gate, greedy seed 42.
+`qwen36-m3-chat` enables MTP automatically when both images sit next to
+the model and sampling is greedy; `QWEN36_MTP=0` disables it. The decode
+rate is tokens divided by time after the first token.
+
+| Prompt | Accepted drafts | Decode, MTP off | Decode, MTP on | Speedup |
+|---|---:|---:|---:|---:|
+| C `max2` function, 30 tokens | 15/15 (100 %) | 8.26 tok/s | 11.98 tok/s | 1.45x |
+| Hash-table explanation, 446 tokens | 186/223 (83 %) | 8.39 tok/s | 9.55 tok/s | 1.14x |
+
+Structured output (code) accepts nearly everything; free prose accepts
+about 83 %. Per step the draft pass costs ~8 ms and the batch-2
+verify (snapshot included) ~168 ms against ~118 ms for a plain one-token
+forward; the verify gap is the current cost ceiling and the next tuning
+target. Resident cost of MTP: 239 MB more mapped weights and one more
+attention layer's KV cache (34 MB at context 4096).
+
 ## Verification
 
 Verification is outside the timed benchmark above.
@@ -402,6 +460,8 @@ Verification is outside the timed benchmark above.
 | Prefill state parity, exact path | S16 bitwise identical in all 256 layer-state buffers and logits; S32 argmax-identical with drift bounded by 0.0841 and zero NaN (`make qwen36-m3-prefill-parity-test`) |
 | Prefill state parity, tiled-GEMM path | argmax-identical on all five token runs, drift bounded by 0.108, zero NaN |
 | Prefill end-to-end token parity | identical IDs and text on 5/5 smoke prompts and 8/8 A/B runs, repeated after each kernel change |
+| MTP end-to-end token parity | MTP on vs off produced identical IDs and text on 4/4 battery prompts including a 446-token generation |
+| MTP draft correctness vs independent reference | fused embed+norm kernel bitwise vs CPU oracle; fc within Q4 quantization error; accept behavior matches an MLX reference implementation |
 
 The norm oracle uses the deployed checkpoint convention: standard RMSNorm and q/k norm tensors are direct multiplicative weights, not Hugging Face-style delta weights. Delta q/k normalization uses the exact 128-dimensional epsilon algebra.
 
@@ -450,6 +510,21 @@ build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib \
 
 The compile script is restartable: an existing image is validated by the runtime and is not overwritten. Every source shard is checked against the pinned SHA-256 before tensor import.
 
+For MTP speculative decoding, assemble the `mtp.*` tensors into one
+BF16 safetensors file (they live in official shards 13 and 15; ranged
+HTTP reads suffice) and pack:
+
+```sh
+make qwen36-mtp-pack
+build/qwen36-mtp-pack qwen36-mtp-bf16.safetensors \
+  MODEL_DIR/mtp-layer.q36att MODEL_DIR/mtp.q36mtp \
+  713b0fafacc94c9e541925872de3bcc3507cf5af73abbce525298467b8b4b10f
+```
+
+The packer refuses any source file whose SHA-256 differs from the pinned
+value and folds the Hugging Face delta-norm convention (`1 + w`) into
+the stored vectors. The chat binary picks the images up automatically.
+
 The value-equivalent checkpoint used for the same-machine baseline can be reconstructed in C:
 
 ```sh
@@ -469,7 +544,8 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 | Single user-message CLI | free text works, but system and multi-turn message APIs do not | expose a message-array C API without changing the graph |
 | FP32 KV cache | 128 KiB per context token | verify FP16, then Q8 cache paths |
 | Text-only image | vision inputs are unsupported | separate artifact if vision is required |
-| MTP omitted | one target token decision per model forward | add only after independent acceptance and quality gates |
+| MTP verify pass at ~168 ms vs ~118 ms single forward | speedup is 1.45x on code, 1.14x on prose instead of the accept-rate bound | tune batch-2 attention and GDN kernels; the GEMM path already uses the exact decode kernels |
+| MTP is greedy-only | temperature or top-k sampling disables speculation | lossless sampled speculation needs rejection sampling against full distributions |
 | Five smoke prompts only | not a general quality score | run a pinned standardized text benchmark |
 | No 1K or 4K profile | short-prompt results do not establish long-context behavior | measure after batched prefill lands |
 

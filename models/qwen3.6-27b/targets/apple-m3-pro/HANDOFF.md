@@ -157,8 +157,9 @@ still be learned from the open `mlx-lm` implementation.
 - A large generic allocator cache is contrary to the static-arena goal.
 - Continuous batching is useful later for multiple concurrent streams, but it
   must not increase single-stream inter-token latency.
-- Speculative decoding/MTP should wait until a batched verification path and an
-  acceptance/quality gate exist.
+- Speculative decoding/MTP waited until a batched verification path and an
+  acceptance/quality gate existed; both landed and MTP is now implemented
+  (fourth increment below).
 
 ## Streaming dependency model
 
@@ -230,6 +231,37 @@ should look at the 32-step blocked recurrence (about 4.8 GB of state
 traffic per chunk), the batched attention softmax loops, and the
 elementwise/norm kernels. Profile per-dispatch before changing anything.
 
+## Landed: MTP speculative decoding (2026-08-14, fourth increment)
+
+Greedy, output-lossless speculation using the checkpoint's `mtp.*` head.
+Each step drafts one token (fused embed+norm kernel, fc, one attention
+layer at index 64, shared Q4 head; ~8 ms) and verifies pending+draft in
+one batch-2 forward (~168 ms including a GDN state snapshot blitted
+inside the same command buffer; a reject restores the snapshot and
+re-verifies). Batch<=2 GEMM uses the exact decode kernels
+(`use_mma && batch > 2`), so verify arithmetic matches plain decode.
+Prefill fills the draft layer's KV cache per chunk with tokens shifted
+one position; with MTP open, `qwen36_m3_model_prefill` requires
+token_count + 1 entries in token_ids.
+
+Measured (fresh-process A/B, parity battery): identical output 4/4;
+accepts 15/15 on code (8.26 -> 11.98 tok/s, 1.45x), 186/223 = 83 % on
+446-token prose (8.39 -> 9.55 tok/s, 1.14x). Chat auto-enables when
+`MODEL_DIR/mtp-layer.q36att` + `mtp.q36mtp` exist and sampling is
+greedy; `QWEN36_MTP=0` disables. serve.py defaults are greedy, so the
+Chatbox path uses it.
+
+Hard-won fact, encoded in `tools/qwen36_mtp_pack.c`: the seven `mtp.*`
+norm vectors are HF delta weights (GemmaRMSNorm, effective multiplier
+1 + w) even though every main-model norm in the deployed conversion is a
+direct multiplier. Packed direct, drafts are garbage (0/40 accepts);
+with 1 + w folded, 31/40 on the Python reference and 15/15 on the code
+prompt in C. Isolated with an independent MLX reference
+(vLLM/SGLang sources confirm; Transformers ignores mtp.*). Source
+tensors: BF16 assembly of shards 13+15, SHA-256 pinned in
+`qwen36_m3_image.h` (`713b0faf...`); images are generated artifacts, not
+committed.
+
 ## Work not yet implemented
 
 - Per-dispatch profiling of the remaining 864 ms warm chunk (recurrence,
@@ -253,7 +285,9 @@ elementwise/norm kernels. Profile per-dispatch before changing anything.
 1. Profile the S32 chunk (GPU counters or per-dispatch timing) and tune the
    dominant batched kernels; re-run the prefill parity test after every
    kernel change. CPU prefaulting was tried and rejected; see the negative
-   result above.
+   result above. The same profiling applies to the batch-2 MTP verify
+   (~168 ms vs ~118 ms single forward): closing that gap raises the MTP
+   speedup toward its accept-rate bound (1.83x at 83 % accept).
 2. Add S64/S128 buckets once tuned kernels justify them; verify with the
    same parity gates.
 3. Continue the streaming pipeline: input-byte tokenizer API, token ring
@@ -275,7 +309,9 @@ elementwise/norm kernels. Profile per-dispatch before changing anything.
 | `qwen36_q4.metal` | Q4 matrix kernels |
 | `qwen36_layer.metal` | GDN/MLP layer kernels |
 | `qwen36_attention.metal` | full-attention kernels |
-| `qwen36_prefill.metal` | batched S32/S16 prefill kernels |
+| `qwen36_prefill.metal` | batched S32/S16 prefill kernels and the MTP fuse kernel |
+| `qwen36_m3_mtp_image.h` | MTP extras image format (fc + three norms) |
+| `tools/qwen36_mtp_pack.c` | BF16 -> Q4 packer for the two MTP images; folds the HF delta-norm convention |
 | `tests/qwen36_m3_api_state_test.c` | live async API state-machine test |
 | `tests/qwen36_m3_prefill_parity_test.c` | live prefill-vs-decode state and logits parity test |
 | `results.json` | published machine-readable record, includes `streaming_increment` |

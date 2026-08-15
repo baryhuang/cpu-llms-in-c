@@ -278,6 +278,25 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "Model resident in %.1f s. Enter /quit to exit.\n",
             seconds_now() - start);
+    int mtp = 0;
+    const char *mtp_env = getenv("QWEN36_MTP");
+    if ((mtp_env == NULL || strcmp(mtp_env, "0") != 0) &&
+        temperature <= 0.0f && top_k <= 1) {
+        char layer_path[1024];
+        char extras_path[1024];
+        snprintf(layer_path, sizeof(layer_path), "%s/mtp-layer.q36att",
+                 argv[1]);
+        snprintf(extras_path, sizeof(extras_path), "%s/mtp.q36mtp",
+                 argv[1]);
+        if (qwen36_m3_model_mtp_open(model, layer_path, extras_path,
+                                     error, sizeof(error)) == 0) {
+            mtp = 1;
+            fprintf(stderr, "MTP speculative decoding active "
+                            "(greedy, output-lossless).\n");
+        } else if (mtp_env != NULL) {
+            fprintf(stderr, "MTP requested but unavailable: %s\n", error);
+        }
+    }
     if (machine) {
         printf("R {\"ready\": true, \"context\": %u, "
                "\"max_new\": %u}\n", capacity, maximum_new);
@@ -400,6 +419,70 @@ int main(int argc, char **argv) {
         size_t visible_count = 0;
         size_t emitted_bytes = 0;
         double first_token_seconds = -1.0;
+        size_t mtp_steps = 0;
+        size_t mtp_accepts = 0;
+        if (mtp) {
+            uint32_t pending;
+            size_t sample_count = logit_count;
+            if (sample_count > QWEN36_TOKENIZER_VOCAB)
+                sample_count = QWEN36_TOKENIZER_VOCAB;
+            if (qwen36_sample_logits(&sampler, logits, sample_count,
+                                     &pending) != 0) {
+                fprintf(stderr, "sampling failed\n");
+                failed = 1;
+            }
+            uint32_t mtp_position = (uint32_t)prompt_count;
+            int done = failed;
+            while (!done) {
+                if (pending == QWEN36_END_OF_TEXT ||
+                    pending == QWEN36_IM_END ||
+                    generated_count + 2 > budget ||
+                    (uint64_t)mtp_position + 2 > capacity) {
+                    generated[generated_count++] = pending;
+                    break;
+                }
+                uint32_t step_emitted[2];
+                uint32_t step_count = 0;
+                int step_accepted = 0;
+                if (qwen36_m3_model_mtp_step(
+                        model, &pending, &mtp_position, step_emitted,
+                        &step_count, &step_accepted, error,
+                        sizeof(error)) != 0) {
+                    fprintf(stderr, "MTP step failed: %s\n", error);
+                    failed = 1;
+                    break;
+                }
+                ++mtp_steps;
+                mtp_accepts += step_accepted != 0;
+                for (uint32_t i = 0; i < step_count && !done; ++i) {
+                    generated[generated_count++] = step_emitted[i];
+                    if (step_emitted[i] == QWEN36_END_OF_TEXT ||
+                        step_emitted[i] == QWEN36_IM_END ||
+                        generated_count >= budget)
+                        done = 1;
+                }
+                visible_count = generated_count;
+                if (generated_count != 0 &&
+                    (generated[generated_count - 1] ==
+                         QWEN36_END_OF_TEXT ||
+                     generated[generated_count - 1] == QWEN36_IM_END))
+                    visible_count = generated_count - 1;
+                if (first_token_seconds < 0.0 && visible_count != 0)
+                    first_token_seconds = seconds_now() - prompt_start;
+                emit_new_text(tokenizer, generated, visible_count,
+                              &emitted_bytes, machine, error,
+                              sizeof(error));
+            }
+            visible_count = generated_count;
+            if (generated_count != 0 &&
+                (generated[generated_count - 1] == QWEN36_END_OF_TEXT ||
+                 generated[generated_count - 1] == QWEN36_IM_END))
+                visible_count = generated_count - 1;
+            if (first_token_seconds < 0.0 && visible_count != 0)
+                first_token_seconds = seconds_now() - prompt_start;
+            emit_new_text(tokenizer, generated, visible_count,
+                          &emitted_bytes, machine, error, sizeof(error));
+        } else
         for (uint32_t index = 0; index < budget; ++index) {
             uint32_t token;
             size_t sample_count = logit_count;
@@ -453,12 +536,14 @@ int main(int argc, char **argv) {
                      generated[generated_count - 1] == QWEN36_IM_END);
                 printf("E {\"tokens\": %zu, \"prompt_tokens\": %zu, "
                        "\"first_token_s\": %.3f, \"total_s\": %.3f, "
-                       "\"stop\": \"%s\"}\n",
+                       "\"stop\": \"%s\", \"mtp_steps\": %zu, "
+                       "\"mtp_accepted\": %zu}\n",
                        visible_count, prompt_count,
                        first_token_seconds >= 0.0 ?
                            first_token_seconds : 0.0,
                        total_seconds,
-                       stopped ? "stop" : "length");
+                       stopped ? "stop" : "length",
+                       mtp_steps, mtp_accepts);
             }
             fflush(stdout);
         } else {
@@ -466,11 +551,19 @@ int main(int argc, char **argv) {
             fflush(stdout);
             if (!failed && visible_count > 1 &&
                 total_seconds > first_token_seconds) {
-                fprintf(stderr, "[first token %.2f s, %zu tokens, "
-                        "%.1f tok/s]\n", first_token_seconds,
-                        visible_count,
-                        (double)(visible_count - 1) /
-                        (total_seconds - first_token_seconds));
+                if (mtp_steps != 0)
+                    fprintf(stderr, "[first token %.2f s, %zu tokens, "
+                            "%.1f tok/s, draft accepted %zu/%zu]\n",
+                            first_token_seconds, visible_count,
+                            (double)(visible_count - 1) /
+                            (total_seconds - first_token_seconds),
+                            mtp_accepts, mtp_steps);
+                else
+                    fprintf(stderr, "[first token %.2f s, %zu tokens, "
+                            "%.1f tok/s]\n", first_token_seconds,
+                            visible_count,
+                            (double)(visible_count - 1) /
+                            (total_seconds - first_token_seconds));
             } else if (!failed && first_token_seconds >= 0.0) {
                 fprintf(stderr, "[first token %.2f s]\n",
                         first_token_seconds);
