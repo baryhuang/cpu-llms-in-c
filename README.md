@@ -162,7 +162,7 @@ Run the compiled Qwen3.6-27B target interactively on the pinned Apple machine:
 tools/qwen36_chat.sh
 ```
 
-Interactive mode is resident: the model loads and wires once at startup (about 7 s), then every prompt answers at the ready-state latency — about 1.4 s to first token, streaming under `Model>` as tokens complete, with a `[first token …, tok/s]` status line after each reply. Enter `/quit` to exit. A prompt passed as an argument runs the one-shot generator instead. The script uses the local compiled image under `tmp/qwen36-27b-runtime`; weights remain outside Git.
+Interactive mode is resident: the model loads and wires once at startup (about 7 s), then every prompt answers at the ready-state latency — about 1.4 s to first token, streaming under `Model>` as tokens complete, with a `[first token …, tok/s]` status line after each reply. Defaults allow long replies: 4,096-token context and up to 2,048 new tokens per reply, generation stopping at the model's end token (override with `QWEN36_CONTEXT` / `QWEN36_MAX_TOKENS`). Enter `/quit` to exit. A prompt passed as an argument runs the one-shot generator instead. The script uses the local compiled image under `tmp/qwen36-27b-runtime`; weights remain outside Git.
 
 To watch CPU, memory, GPU utilization and memory pressure while a run is active, start the stdlib-only monitor in a second terminal (no root needed). On a terminal it draws a live sparkline dashboard; it can also record a run and render it as an HTML chart page:
 

@@ -138,8 +138,8 @@ int main(int argc, char **argv) {
             argv[0]);
         return 2;
     }
-    uint32_t capacity = parse_u32(argc > 4 ? argv[4] : NULL, 512);
-    uint32_t maximum_new = parse_u32(argc > 5 ? argv[5] : NULL, 128);
+    uint32_t capacity = parse_u32(argc > 4 ? argv[4] : NULL, 4096);
+    uint32_t maximum_new = parse_u32(argc > 5 ? argv[5] : NULL, 2048);
     float temperature = argc > 6 ? strtof(argv[6], NULL) : 0.0f;
     uint32_t top_k = parse_u32(argc > 7 ? argv[7] : NULL, 1);
     uint64_t seed = argc > 8 ? strtoull(argv[8], NULL, 10) : 42;
