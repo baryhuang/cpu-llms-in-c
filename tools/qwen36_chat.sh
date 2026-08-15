@@ -89,16 +89,22 @@ if [ ! -d "/Applications/Chatbox.app" ]; then
     brew install --cask chatbox >&2
 fi
 
-printf '%s' "$base_url" | pbcopy 2>/dev/null || true
-cat >&2 <<SETTINGS
-
-Chatbox is opening. First time only, add a provider in its settings:
+if python3 "$repository/tools/qwen36_chatbox_config.py" "$base_url" >&2
+then
+    echo "Chatbox is opening, already connected to the local model." >&2
+else
+    printf '%s' "$base_url" | pbcopy 2>/dev/null || true
+    cat >&2 <<SETTINGS
+Automatic configuration failed; add a provider in Chatbox settings:
   Provider:  OpenAI API Compatible
   API Host:  $base_url   (already copied to your clipboard)
   API Key:   anything, e.g. local
   Model:     qwen3.6-27b
-
-The server keeps running in the background (log: $log).
-Stop it with: pkill -f qwen36_serve.py
 SETTINGS
+fi
+echo "Server log: $log. Stop it with: pkill -f qwen36_serve.py" >&2
+open "/Applications/Chatbox.app"
+# A second open after startup reliably surfaces the window when the app
+# relaunched without one (Electron reopen behavior).
+sleep 2
 exec open "/Applications/Chatbox.app"
