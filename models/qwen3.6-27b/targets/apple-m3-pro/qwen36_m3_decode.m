@@ -36,7 +36,7 @@ typedef struct {
     uint32_t cache_capacity;
 } q36_prefill_attention_parameters;
 
-enum { Q36_PREFILL_MAX_BATCH = 64 };
+enum { Q36_PREFILL_MAX_BATCH = 128 };
 
 /* One specialized pipeline set per compiled prefill shape bucket. */
 @interface Q36PrefillPipelines : NSObject {
@@ -53,6 +53,9 @@ enum { Q36_PREFILL_MAX_BATCH = 64 };
     id<MTLComputePipelineState> gemm_f32_residual_f16_mma;
     id<MTLComputePipelineState> gemm_f32_residual_f32_mma;
     id<MTLComputePipelineState> gemm_f16_mma2;
+    id<MTLComputePipelineState> gemm_f16_mma3;
+    id<MTLComputePipelineState> gemm_f32_residual_f16_mma3;
+    id<MTLComputePipelineState> gemm_f32_residual_f32_mma3;
     id<MTLComputePipelineState> convert_x;
     id<MTLComputePipelineState> gemm_f32_residual_f16_mma2;
     id<MTLComputePipelineState> gemm_f32_residual_f32_mma2;
@@ -206,6 +209,7 @@ enum { Q36_PREFILL_MAX_BATCH = 64 };
     Q36PrefillPipelines *prefill16;
     Q36PrefillPipelines *prefill32;
     Q36PrefillPipelines *prefill64;
+    Q36PrefillPipelines *prefill128;
 
     Q36DecodeLayer *mtp_layer;
     int mtp_file;
@@ -776,6 +780,11 @@ static Q36PrefillPipelines *prefill_pipelines(
                  @"qwen36_prefill_q4_gemm_f32_residual_f32_mma");
     MAKE_PREFILL(gemm_f16_mma2, @"qwen36_prefill_q4_gemm_f16_mma2");
     MAKE_PREFILL(convert_x, @"qwen36_prefill_convert_x");
+    MAKE_PREFILL(gemm_f16_mma3, @"qwen36_prefill_q4_gemm_f16_mma3");
+    MAKE_PREFILL(gemm_f32_residual_f16_mma3,
+                 @"qwen36_prefill_q4_gemm_f32_residual_f16_mma3");
+    MAKE_PREFILL(gemm_f32_residual_f32_mma3,
+                 @"qwen36_prefill_q4_gemm_f32_residual_f32_mma3");
     MAKE_PREFILL(gemm_f32_residual_f16_mma2,
                  @"qwen36_prefill_q4_gemm_f32_residual_f16_mma2");
     MAKE_PREFILL(gemm_f32_residual_f32_mma2,
@@ -803,15 +812,21 @@ static void encode_prefill_gemm_f16(
     id<MTLBuffer> output, uint32_t rows, uint32_t groups_per_row) {
     q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
     int use_mma = r->prefill_mma_level > 0 && p->batch > 8;
+    int wide = use_mma && r->prefill_mma_level >= 3;
     [encoder setComputePipelineState:
-        use_mma ? (r->prefill_mma_level >= 2 ?
-                   p->gemm_f16_mma2 : p->gemm_f16_mma) : p->gemm_f16];
+        wide ? p->gemm_f16_mma3 :
+        (use_mma ? (r->prefill_mma_level >= 2 ?
+                    p->gemm_f16_mma2 : p->gemm_f16_mma) : p->gemm_f16)];
     [encoder setBuffer:x offset:0 atIndex:0];
     [encoder setBuffer:quants offset:0 atIndex:1];
     [encoder setBuffer:metadata offset:0 atIndex:2];
     [encoder setBuffer:output offset:0 atIndex:3];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4];
-    if (use_mma)
+    if (wide)
+        [encoder dispatchThreadgroups:
+            MTLSizeMake((rows + 63) / 64, (p->batch + 31) / 32, 1)
+                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+    else if (use_mma)
         [encoder dispatchThreadgroups:
             MTLSizeMake(rows / 32, (p->batch + 31) / 32, 1)
                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
@@ -828,8 +843,12 @@ static void encode_prefill_gemm_residual(
     uint32_t groups_per_row, BOOL residual_is_half) {
     q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
     int use_mma = r->prefill_mma_level > 0 && p->batch > 8;
+    int wide = use_mma && r->prefill_mma_level >= 3;
     id<MTLComputePipelineState> pipeline;
-    if (residual_is_half)
+    if (wide)
+        pipeline = residual_is_half ?
+            p->gemm_f32_residual_f16_mma3 : p->gemm_f32_residual_f32_mma3;
+    else if (residual_is_half)
         pipeline = !use_mma ? p->gemm_f32_residual_f16 :
             (r->prefill_mma_level >= 2 ?
              p->gemm_f32_residual_f16_mma2 : p->gemm_f32_residual_f16_mma);
@@ -854,7 +873,11 @@ static void encode_prefill_gemm_residual(
     [encoder setBuffer:residual offset:0 atIndex:3];
     [encoder setBuffer:output offset:0 atIndex:4];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:5];
-    if (use_mma)
+    if (wide)
+        [encoder dispatchThreadgroups:
+            MTLSizeMake((rows + 63) / 64, (p->batch + 31) / 32, 1)
+                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+    else if (use_mma)
         [encoder dispatchThreadgroups:
             MTLSizeMake(rows / 32, (p->batch + 31) / 32, 1)
                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
@@ -1166,6 +1189,8 @@ static int initialize_pipelines(Q36DecodeRuntime *r, NSString **message) {
     if (r->prefill32 == nil) return -1;
     r->prefill64 = prefill_pipelines(r, 64, message);
     if (r->prefill64 == nil) return -1;
+    r->prefill128 = prefill_pipelines(r, 128, message);
+    if (r->prefill128 == nil) return -1;
     r->prefill4 = prefill_pipelines(r, 4, message);
     if (r->prefill4 == nil) return -1;
     r->prefill8 = prefill_pipelines(r, 8, message);
@@ -1534,7 +1559,8 @@ static Q36PrefillPipelines *prefill_set_for_batch(
     case 8: return r->prefill8;
     case 16: return r->prefill16;
     case 32: return r->prefill32;
-    default: return r->prefill64;
+    case 64: return r->prefill64;
+    default: return r->prefill128;
     }
 }
 
@@ -2293,19 +2319,22 @@ int qwen36_m3_model_prefill(
     memset(result, 0, sizeof(*result));
     result->token_count = token_count;
     const char *mma_env = getenv("QWEN36_PREFILL_MMA");
-    r->prefill_mma_level = mma_env == NULL ? 2 : atoi(mma_env);
+    r->prefill_mma_level = mma_env == NULL ? 3 : atoi(mma_env);
     double begin = decode_seconds();
     const char *max_chunk_env = getenv("QWEN36_PREFILL_MAX_CHUNK");
-    /* The S64 bucket runs only on the half-tile GEMM level: the exact
-     * and float-tile kernels keep their 32-wide shapes. */
+    /* The S64/S128 buckets run only on the half-tile GEMM levels: the
+     * exact and float-tile kernels keep their 32-wide shapes. A full
+     * pass streams every mapped weight byte, so bigger chunks amortize
+     * that stream across more prompt tokens. */
     uint32_t max_chunk = max_chunk_env != NULL ?
         (uint32_t)atoi(max_chunk_env) :
-        (r->prefill_mma_level >= 2 ? 64 : 32);
+        (r->prefill_mma_level >= 2 ? 128 : 32);
     uint32_t offset = 0;
     while (token_count - offset >= 16) {
         uint32_t remaining = token_count - offset;
-        uint32_t chunk = remaining >= 64 && max_chunk >= 64 ? 64 :
-                         (remaining >= 32 && max_chunk >= 32 ? 32 : 16);
+        uint32_t chunk = remaining >= 128 && max_chunk >= 128 ? 128 :
+                         (remaining >= 64 && max_chunk >= 64 ? 64 :
+                          (remaining >= 32 && max_chunk >= 32 ? 32 : 16));
         Q36PrefillPipelines *pipelines = prefill_set_for_batch(r, chunk);
         double chunk_start = decode_seconds();
         MTLCommandBufferStatus status;
@@ -2336,8 +2365,9 @@ int qwen36_m3_model_prefill(
                 [profile->commands addObject:command];
                 [profile->tags addObject:@(Q36_PROFILE_TAG_HEAD)];
                 profile_report(r, profile,
-                               chunk == 64 ? "chunk64" :
-                               (chunk == 32 ? "chunk32" : "chunk16"));
+                               chunk == 128 ? "chunk128" :
+                               (chunk == 64 ? "chunk64" :
+                                (chunk == 32 ? "chunk32" : "chunk16")));
             }
         }
         if (status != MTLCommandBufferStatusCompleted) {
@@ -2358,8 +2388,7 @@ int qwen36_m3_model_prefill(
                 NULL, error_message, error_message_capacity);
             if (mtp_status != 0) return mtp_status;
         }
-        if (chunk == 64) result->chunk32_count += 2;
-        else if (chunk == 32) ++result->chunk32_count;
+        if (chunk >= 32) result->chunk32_count += chunk / 32;
         else ++result->chunk16_count;
         offset += chunk;
     }

@@ -23,7 +23,7 @@ Checkpoints, generated images, binaries, and credentials are never committed.
 |---|---|---:|---|---|---|---|
 | Gemma 4 E2B | two-vCPU x86-64 dev machine | — | implemented | 12/12 written labels, 10/10 layer-0 boundaries | 0.598 tokens/s scalar, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [inputs/outputs](REVIEW.html) · [raw data](models/gemma-4-e2b/results.json) |
 | Qwen3.5-0.8B | Amlogic A113X: 4x Cortex-A53 | 2017 | measured on device: answer scoring and greedy generation | output matches the x86 reference token for token (19/19 generation, 12/12 classification, 20/20 tokenizer) | **3.64 prompt tok/s**, **2.60 decode tok/s**; 488 MiB RSS, zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [generation review](models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html) · [ARC-Easy 5-case HTML](models/qwen3.5-0.8b/benchmarks/arc-easy-5/REVIEW.html) · [PDF](output/pdf/qwen35-arc-easy-5-review.pdf) · [raw data](models/qwen3.5-0.8b/targets/a113x/results.json) |
-| Qwen3.6-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | complete chat runtime: batched prompt reading, lossless speculative decoding, FP16 KV cache, multi-turn serving, OpenAI-compatible API, thinking mode | output matches oMLX token for token; speculative output identical to plain decoding on every test set; ARC-Easy 5-question check 5/5 | **9.42 tok/s end-to-end** on a 3,394-token workload set (7.91 without speculation); **1.5-1.6x faster than mlx-lm and oMLX**; ties llama.cpp without speculation and finishes **1.25x ahead with it**; first token in ~1 s with the model resident | [model](models/qwen3.6-27b/README.md) · [target](models/qwen3.6-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.6-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.6-27b/targets/apple-m3-pro/results.json) |
+| Qwen3.6-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | complete chat runtime: batched prompt reading, lossless speculative decoding, FP16 KV cache, multi-turn serving, OpenAI-compatible API, thinking mode | output matches oMLX token for token; speculative output identical to plain decoding on every test set; ARC-Easy 5-question check 5/5 | **9.42 tok/s end-to-end** on a 3,394-token workload set (7.91 without speculation); **1.5-1.6x faster than mlx-lm and oMLX**; ahead of llama.cpp end to end without speculation and **1.46x ahead with it**; first token in ~1 s with the model resident | [model](models/qwen3.6-27b/README.md) · [target](models/qwen3.6-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.6-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.6-27b/targets/apple-m3-pro/results.json) |
 | Qwen3.8-27B | Apple M3 Pro: 11-core CPU + 14-core Metal 3 GPU, 36 GB unified memory | 2023 | runs on the Qwen3.6 runtime unchanged (architecture verified identical tensor by tensor); adds reasoning-effort thinking mode | all runtime test suites pass; speculative output identical to plain decoding; ARC-Easy 5-question check 3/5 (each miss answers correctly but skips the required format line) | **9.66 tok/s end-to-end** on a 3,305-token workload set (7.94 without speculation) | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) · [raw data](models/qwen3.8-27b/targets/apple-m3-pro/results.json) |
 | Whisper small.en | generic CPU | — | complete C FFT front end, encoder, cached decoder, tokenizer and full-graph image compiler | F32 boundaries pass; three real-weight decoder tokens match NumPy; quantized error recorded separately | arbitrary PCM16 WAV to English text implemented; target-neutral speed is not a release result | [model](models/whisper-small.en/README.md) · [decision record](models/whisper-small.en/DECISIONS.md) · [generic target](models/whisper-small.en/targets/generic/README.md) |
 | Whisper small.en | Amlogic A113X: 4x Cortex-A53 | 2017 | mixed Q4/Q8 full graph with NEON kernels and four-thread scheduling, measured on device | JFK reference sample transcribed with 0 word errors in 22; broader word-error-rate suite still open | 11 s WAV in **45.0 s** (3-run median), 251 MiB RSS, zero swap; **13.08x** faster than the unoptimized baseline | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [HTML review](models/whisper-small.en/targets/a113x/benchmarks/jfk-11s/REVIEW.html) · [PDF review](output/pdf/whisper-small-en-a113x-jfk-11s-review.pdf) · [raw data](models/whisper-small.en/targets/a113x/results.json) |
@@ -49,29 +49,34 @@ record:
 
 | Tokens per second, higher is better | This runtime | llama.cpp | mlx-lm | oMLX |
 |---|---:|---:|---:|---:|
-| **End-to-end: reply tokens / total request time** | **6.08** | 6.06 | 3.96 | 3.74 |
-| Prompt reading (prefill) | 26.0 | 39.3 | 13.9 | 11.6 |
+| **End-to-end: reply tokens / total request time** | **6.54** | 6.06 | 3.96 | 3.74 |
+| Prompt reading, long prompt | 63.6 | 73.0 | 13.9 | 11.6 |
 | Generation (decode) | 8.48 | 7.44 | 6.03 | 5.90 |
-| **End-to-end with speculative decoding on (this runtime's default)** | **7.59** | — | — | — |
+| **End-to-end with speculative decoding on (this runtime's default)** | **8.83** | — | — | — |
 
 | Supporting latencies in seconds, lower is better | This runtime | llama.cpp | mlx-lm | oMLX |
 |---|---:|---:|---:|---:|
-| Total request, model already loaded | 4.94 | 4.95 | 7.58 | 8.03 |
-| First token | 1.39 | 0.92 | 2.60 | 3.11 |
+| Total request, model already loaded | 4.59 | 4.95 | 7.58 | 8.03 |
+| First token | 0.99 | 0.92 | 2.60 | 3.11 |
 
 End-to-end is the primary number: reply tokens divided by the whole
 request time, prompt reading and first-token wait included — the rate a
 user actually experiences. Prompt reading and generation are its two
 components; any workload's end-to-end rate lands between them depending
-on how much of the time is spent reading versus writing. Without
-speculation this runtime and llama.cpp tie end to end from opposite
-strengths — llama.cpp reads the prompt 1.5x faster (73 vs ~52 tok/s on
-512-token prompts too), this runtime generates 1.14x faster — and both
-are 1.5-1.6x faster than the Python stacks. With speculative decoding
-on, this runtime's output stays token-identical to plain decoding and
-reaches 7.59 tok/s on this request and 9.42 tok/s on a 3,394-token
-mixed workload set; llama.cpp has no equivalent mode for this
-architecture.
+on how much of the time is spent reading versus writing. When first
+measured, this runtime and llama.cpp tied end to end from opposite
+strengths; the techniques behind llama.cpp's faster prompt reading
+(wide GEMM output tiles, vectorized quant loads, whole-prompt batching)
+were then ported into this runtime's kernels, closing the long-prompt
+gap to 13% and putting it ahead end to end without speculation. With
+speculative decoding on, output stays token-identical to plain decoding
+and the same request reaches 8.83 tok/s — 1.46x over llama.cpp, which
+has no equivalent mode for this architecture — and 9.42 tok/s on a
+3,394-token mixed workload set. Both native stacks remain 1.6-2.4x
+faster than the Python stacks end to end. mlx-lm and oMLX prompt rates
+were measured on the original 36-token request; this runtime and
+llama.cpp on ~600-token prompts, where prompt reading is
+steady-state.
 
 ## Evaluation isolation
 

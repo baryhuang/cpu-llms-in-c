@@ -197,24 +197,31 @@ runtime's 14.1 GiB), revision and file SHA-256 recorded in
 timings from the server's own report. The reply text matched this
 runtime's on this prompt.
 
-| Metric, mean of 4 | C/Metal (this repo) | llama.cpp + Unsloth Q4_K_M |
+| Metric, mean of 4, model resident | C/Metal (this repo) | llama.cpp + Unsloth Q4_K_M |
 |---|---:|---:|
-| End-to-end, reply tokens / request time | 6.08 tok/s | 6.06 tok/s |
-| Request wall, model resident | 4.935 s | 4.952 s |
-| Prompt reading, 36 tokens | 26.0 tok/s | **39.3 tok/s** |
-| Prompt reading, 512 tokens (`llama-bench`) | ~52 tok/s | **73.0 tok/s** |
+| End-to-end, reply tokens / request time | **6.54 tok/s** | 6.06 tok/s |
+| Request wall | **4.585 s** | 4.952 s |
+| First token | 0.990 s | 0.917 s |
+| Prompt reading, ~620-token prompt | 63.6 tok/s | **73.0 tok/s** (`llama-bench` pp512) |
 | Generation | **8.48 tok/s** | 7.44 tok/s |
-| End-to-end with speculative decoding (this runtime's default) | **7.59 tok/s** | no equivalent mode |
+| End-to-end with speculative decoding (this runtime's default) | **8.83 tok/s** | no equivalent mode |
 
-Without speculation the two runtimes tie end to end on this request
-from opposite strengths: llama.cpp's mature Metal GEMM path reads
-prompts about 1.5x faster (consistent with this runtime's documented
-prefill headroom), while this runtime generates 1.14x faster. With
-speculative decoding on — the default, output token-identical to plain
-decoding — this runtime finishes the same request 1.25x faster than
-llama.cpp. llama.cpp's numbers come from a different quantization of
-the weights, so this is a stack comparison at matched quality class,
-not a bit-identical one. Raw data: `llama_cpp_unsloth_comparison` in
+When first measured, the two runtimes tied end to end (6.08 vs 6.06
+tok/s) from opposite strengths: llama.cpp read prompts about 1.5x
+faster while this runtime generated 1.14x faster. The two structural
+techniques behind that prompt-reading gap were then ported into this
+runtime's kernels — a 64-row output tile with eight accumulators per
+simdgroup, vectorized quant loads in the staging, and an S128 prefill
+bucket so one weight stream covers 128 prompt tokens — closing the
+long-prompt gap from 1.40x to 1.15x and the 36-token first-token gap
+to 8%. With that landed, this runtime leads end to end without
+speculation (6.54 vs 6.06 tok/s), and with speculative decoding on —
+the default, output token-identical to plain decoding — it finishes
+the same request 1.46x faster than llama.cpp. llama.cpp's numbers come
+from a different quantization of the weights, so this is a stack
+comparison at matched quality class, not a bit-identical one. Raw
+data: `llama_cpp_unsloth_comparison` and
+`prefill_wide_tile_and_s128_increment` in
 [`results.json`](results.json).
 
 ### Bare mlx-lm reference
@@ -330,7 +337,7 @@ detokenizer replaces it when generation lengths grow.
 
 The prompt no longer replays the one-token decode graph per token. A
 `qwen36_m3_model_prefill` call pushes prompt tokens through compiled batch
-graphs: S64 chunks first (on the default half-tile GEMM level), then S32,
+graphs: S128 and S64 chunks first (on the default half-tile GEMM levels), then S32,
 then an S16 chunk, then one-token forwards for a tail shorter than 16. The final prompt token stays on the normal decode
 forward so its logits feed the sampler. Batched Q4 GEMM kernels read each
 weight group once per chunk instead of once per token; the GDN convolution
@@ -407,6 +414,25 @@ state drift bounded by 0.249, argmax identical on every prefill-parity
 run, end-to-end token IDs and text identical on the full test set with
 and without MTP. `QWEN36_PREFILL_MMA=1` restores the float MMA path,
 `=0` the exact decode-identical kernels.
+
+**Wide output tiles, vectorized staging and the S128 bucket.** The
+same-machine llama.cpp comparison showed its prompt reading ahead, so
+the two structural techniques behind that were ported here: each
+threadgroup now covers 64 output rows with eight 8x8 accumulators per
+simdgroup (halving activation-fragment loads and barrier rounds per
+unit of math — the output-tile shape mature Metal GEMM implementations
+use), the quant staging loads 4-byte words and unpacks nibbles in
+registers instead of issuing sixteen byte loads per thread, and an
+S128 prefill bucket lets one stream of the weights cover 128 prompt
+tokens. Chunk32 GPU time drops 576 → 505 ms, chunk128 runs at
+14.4 ms/token, and a 621-token prompt reads at 63.6 tok/s (60.0 with
+the speculative draft cache filling during prefill) versus 52 before.
+Parity 36/36 with the battery token-identical; `QWEN36_PREFILL_MMA=2`
+restores the 32-row half tiles. Beyond 96 prefilled tokens the parity
+test reports state drift as information only: the exact path's own
+delta-rule amplification reaches 1.14 absolute through unchanged
+32-token chunks while every argmax decision stays identical, so long
+runs gate on argmax, NaN and the end-to-end token-identity batteries.
 
 **Weight residency at model open.** A CPU prefault of the mapped pages was
 measured and rejected (see Current limits history): the first-chunk cost is
@@ -678,7 +704,7 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 | Limit | Consequence | Next work |
 |---|---|---|
 | One-time weight wiring at open | 6.5 s of MTLResidencySet wiring per process; CPU prefault was measured and rejected before this | amortizes in a long-lived process; batch it against other startup work if a server lands |
-| Warm S32 chunk at 576 ms | profiling shows the half-MMA GEMMs still carry staging/barrier overhead over their ~300 ms compute bound | double-buffered weight tiles, wider K tiles |
+| Warm S32 chunk at 505 ms; long prompts read 13% slower than llama.cpp | remaining staging overhead over the ~300 ms compute bound; llama.cpp additionally batches the whole prompt in one pass | S256 bucket needs a streaming-softmax attention rewrite (the score buffer scales with batch x context) |
 | Per-token CPU encoding of the static decode graph | roughly 2 ms per token, under 2 percent of decode | pre-encode with indirect command buffers if it ever dominates |
 | Prompts under 16 tokens | still run the sequential one-token path | S16 already costs nearly an S32 (weight streaming dominates), so smaller buckets would gain little |
 | Multi-turn state lives in the serving layer | the C API takes one rendered prompt; the engine's continuation matching is token-prefix-based | a message-array C API would let the engine own template rendering |

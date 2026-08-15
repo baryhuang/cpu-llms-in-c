@@ -1278,5 +1278,43 @@
       "versus_this_runtime_plain": "end-to-end 6.06 vs 6.08 tok/s (dead heat, 0.3%); prompt 39.3 vs 26.0 (llama.cpp 1.51x faster); decode 7.44 vs 8.48 (this runtime 1.14x faster)",
       "versus_this_runtime_speculative_default": "on the same prompt with speculative decoding on, this runtime measures 7.59 tok/s end-to-end (3.95 s request wall) - 1.25x over llama.cpp, which has no equivalent mode for this architecture"
     }
+  },
+  "prefill_wide_tile_and_s128_increment": {
+    "measured_at": "2026-08-15",
+    "summary": "Ports the two structural techniques behind llama.cpp's prompt-reading advantage: a 64-row output tile with eight accumulators per simdgroup (halves activation-fragment loads and barrier rounds per unit of math), vectorized 4-byte quant loads with register nibble unpack in the half-tile staging, and an S128 prefill bucket so one weight stream covers 128 prompt tokens.",
+    "chunk32_gpu_ms": {
+      "before": 576,
+      "vectorized_staging": 527,
+      "plus_wide_tile": 505
+    },
+    "chunk128_gpu_ms": {
+      "wide_tile": 1840,
+      "per_token_ms": 14.4
+    },
+    "long_prompt_rate_621_tokens": {
+      "kernel_path_tok_s": 63.6,
+      "with_mtp_cache_fill_tok_s": 60.0,
+      "previous_tok_s": 52.0
+    },
+    "comparison_request_36_prompt_30_reply_resident": {
+      "plain": {
+        "wall_s": 4.585,
+        "e2e_tok_s": 6.54,
+        "ttft_s": 0.99
+      },
+      "speculative_default": {
+        "wall_s": 3.396,
+        "e2e_tok_s": 8.83,
+        "ttft_s": 1.181
+      },
+      "llama_cpp_unsloth_same_request": {
+        "wall_s": 4.952,
+        "e2e_tok_s": 6.06,
+        "ttft_s": 0.917
+      },
+      "note": "four measured rounds after one in-process warm round, matching the llama-server measurement method"
+    },
+    "gates": "parity 36/36 (runs 16-131; beyond 96 prefilled tokens the drift value is informational because the exact path's own delta-rule amplification reaches 1.14 through unchanged 32-token chunks, argmax identical throughout); 4-prompt battery token-identical; api-state 16/16",
+    "gating_env": "QWEN36_PREFILL_MMA: 3 wide half tiles (default), 2 32-row half tiles, 1 float tiles, 0 exact"
   }
 }

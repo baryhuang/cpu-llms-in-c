@@ -9,7 +9,7 @@ using namespace metal;
  * prompt must produce bitwise-identical layer state and downstream tokens. */
 
 constant uint kBatch [[function_constant(0)]];
-constant uint kPrefillMaxBatch = 64;
+constant uint kPrefillMaxBatch = 128;
 
 constant uint kPrefillHidden = 5120;
 constant uint kPrefillVocab = 248320;
@@ -757,12 +757,13 @@ kernel void qwen36_prefill_convert_x(
         Q4PrefillMeta meta = metadata[block];                             \
         half scale = meta.scale;                                          \
         half bias = meta.bias;                                            \
-        for (uint i = 0; i < 16; i += 2) {                                \
-            uchar bits = quants[block * 32 + ((k_base + i) >> 1)];        \
-            w_tile[(k_base + i) * kGemmTileRows + r] =                    \
-                scale * half(bits & 0x0f) + bias;                         \
-            w_tile[(k_base + i + 1) * kGemmTileRows + r] =                \
-                scale * half(bits >> 4) + bias;                           \
+        device const uint *words = (device const uint *)                  \
+            (quants + block * 32 + (k_base >> 1));                        \
+        for (uint word = 0; word < 2; ++word) {                           \
+            uint bits = words[word];                                      \
+            for (uint j = 0; j < 8; ++j)                                  \
+                w_tile[(k_base + word * 8 + j) * kGemmTileRows + r] =     \
+                    scale * half((bits >> (4 * j)) & 0x0f) + bias;        \
         }                                                                 \
         threadgroup_barrier(mem_flags::mem_threadgroup);                  \
         for (uint kk = 0; kk < kGemmTileK; kk += 8) {                     \
@@ -850,6 +851,136 @@ kernel void qwen36_prefill_q4_gemm_f32_residual_f32_mma2(
     output[out_index] = value + residual[out_index]
     QWEN36_PREFILL_GEMM_MMA2_BODY(STORE_RESIDUAL_FLOAT2)
 #undef STORE_RESIDUAL_FLOAT2
+}
+
+/* Wide-tile half MMA: the same half staging, device-direct activation
+ * fragments and per-group float spill as the path above, but each
+ * threadgroup covers 64 output rows and each simdgroup holds eight 8x8
+ * accumulators. Per unit of math this halves the activation-fragment
+ * loads and the barrier rounds — the output-tile shape mature Metal
+ * GEMM implementations use. Row counts need not divide 64; the last
+ * row block stages zeros and guards its stores. */
+
+constant uint kGemmWideRows = 64;
+
+#define QWEN36_PREFILL_GEMM_MMA3_BODY(STORE)                              \
+    threadgroup half w_tile[kGemmTileK * kGemmWideRows];                  \
+    threadgroup half spill[kGemmTileBatch * kGemmWideRows];               \
+    uint row0 = group_id.x * kGemmWideRows;                               \
+    uint batch0 = group_id.y * kGemmTileBatch;                            \
+    uint columns = p.groups_per_row * 64;                                 \
+    simdgroup_half8x8 accumulator[8];                                     \
+    for (uint n = 0; n < 8; ++n)                                          \
+        accumulator[n] = make_filled_simdgroup_matrix<half, 8, 8>(0.0h);  \
+    float c_acc[16];                                                      \
+    for (uint i = 0; i < 16; ++i) c_acc[i] = 0.0f;                        \
+    uint b0 = batch0 + simdgroup_index * 8;                               \
+    uint spill0 = simdgroup_index * 8;                                    \
+    uint r = tid & 63u;                                                   \
+    uint k_base = (tid >> 6) * 32;                                        \
+    for (uint group = 0; group < p.groups_per_row; ++group) {             \
+        if (row0 + r < p.rows) {                                          \
+            uint block = (row0 + r) * p.groups_per_row + group;           \
+            Q4PrefillMeta meta = metadata[block];                         \
+            half scale = meta.scale;                                      \
+            half bias = meta.bias;                                        \
+            device const uint *words = (device const uint *)              \
+                (quants + block * 32 + (k_base >> 1));                    \
+            for (uint word = 0; word < 4; ++word) {                       \
+                uint bits = words[word];                                  \
+                for (uint j = 0; j < 8; ++j)                              \
+                    w_tile[(k_base + word * 8 + j) * kGemmWideRows + r] = \
+                        scale * half((bits >> (4 * j)) & 0x0f) + bias;    \
+            }                                                             \
+        } else {                                                          \
+            for (uint i = 0; i < 32; ++i)                                 \
+                w_tile[(k_base + i) * kGemmWideRows + r] = 0.0h;          \
+        }                                                                 \
+        threadgroup_barrier(mem_flags::mem_threadgroup);                  \
+        for (uint kk = 0; kk < kGemmTileK; kk += 8) {                     \
+            simdgroup_half8x8 a;                                          \
+            simdgroup_load(a, x + b0 * columns + group * 64 + kk,         \
+                           columns);                                      \
+            for (uint n = 0; n < 8; ++n) {                                \
+                simdgroup_half8x8 b_fragment;                             \
+                simdgroup_load(b_fragment,                                \
+                               w_tile + kk * kGemmWideRows + n * 8,       \
+                               kGemmWideRows);                            \
+                simdgroup_multiply_accumulate(accumulator[n], a,          \
+                                              b_fragment,                 \
+                                              accumulator[n]);            \
+            }                                                             \
+        }                                                                 \
+        threadgroup_barrier(mem_flags::mem_threadgroup);                  \
+        {                                                                 \
+            for (uint n = 0; n < 8; ++n) {                                \
+                simdgroup_store(accumulator[n],                           \
+                                spill + spill0 * kGemmWideRows + n * 8,   \
+                                kGemmWideRows);                           \
+                accumulator[n] =                                          \
+                    make_filled_simdgroup_matrix<half, 8, 8>(0.0h);       \
+            }                                                             \
+            simdgroup_barrier(mem_flags::mem_threadgroup);                \
+            for (uint i = 0; i < 16; ++i)                                 \
+                c_acc[i] += float(spill[tid * 16 + i]);                   \
+            threadgroup_barrier(mem_flags::mem_threadgroup);              \
+        }                                                                 \
+    }                                                                     \
+    for (uint i = 0; i < 16; ++i) {                                       \
+        uint linear = tid * 16 + i;                                       \
+        uint b = batch0 + (linear >> 6);                                  \
+        uint out_row = linear & 63u;                                      \
+        if (b < kBatch && row0 + out_row < p.rows) {                      \
+            uint out_index = b * p.rows + row0 + out_row;                 \
+            float value = c_acc[i];                                       \
+            STORE;                                                        \
+        }                                                                 \
+    }
+
+kernel void qwen36_prefill_q4_gemm_f16_mma3(
+    device const half *x [[buffer(0)]],
+    device const uchar *quants [[buffer(1)]],
+    device const Q4PrefillMeta *metadata [[buffer(2)]],
+    device float *output [[buffer(3)]],
+    constant PrefillGemmParams &p [[buffer(4)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group_id [[threadgroup_position_in_grid]]) {
+#define STORE_PLAIN3 output[out_index] = value
+    QWEN36_PREFILL_GEMM_MMA3_BODY(STORE_PLAIN3)
+#undef STORE_PLAIN3
+}
+
+kernel void qwen36_prefill_q4_gemm_f32_residual_f16_mma3(
+    device const half *x [[buffer(0)]],
+    device const uchar *quants [[buffer(1)]],
+    device const Q4PrefillMeta *metadata [[buffer(2)]],
+    device const half *residual [[buffer(3)]],
+    device float *output [[buffer(4)]],
+    constant PrefillGemmParams &p [[buffer(5)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group_id [[threadgroup_position_in_grid]]) {
+#define STORE_RESIDUAL_HALF3 \
+    output[out_index] = value + float(residual[out_index])
+    QWEN36_PREFILL_GEMM_MMA3_BODY(STORE_RESIDUAL_HALF3)
+#undef STORE_RESIDUAL_HALF3
+}
+
+kernel void qwen36_prefill_q4_gemm_f32_residual_f32_mma3(
+    device const half *x [[buffer(0)]],
+    device const uchar *quants [[buffer(1)]],
+    device const Q4PrefillMeta *metadata [[buffer(2)]],
+    device const float *residual [[buffer(3)]],
+    device float *output [[buffer(4)]],
+    constant PrefillGemmParams &p [[buffer(5)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group_id [[threadgroup_position_in_grid]]) {
+#define STORE_RESIDUAL_FLOAT3 \
+    output[out_index] = value + residual[out_index]
+    QWEN36_PREFILL_GEMM_MMA3_BODY(STORE_RESIDUAL_FLOAT3)
+#undef STORE_RESIDUAL_FLOAT3
 }
 
 /* MTP input fusion: normalized token embedding concatenated with the
