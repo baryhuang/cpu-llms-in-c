@@ -40,14 +40,65 @@ run_prompt() {
     fi
 }
 
-# One-shot mode (a prompt as arguments) and QWEN36_RAW keep the
-# per-invocation generator with its JSON contract.
+# --terminal keeps the resident terminal chat. One-shot mode (a prompt as
+# arguments) and QWEN36_RAW keep the per-invocation generator with its
+# JSON contract.
+if [ "$#" -gt 0 ] && [ "$1" = "--terminal" ]; then
+    exec "$chat" "$model_directory" "$metallib" "$tokenizer" \
+        "$context" "$maximum_new" "$temperature" "$top_k" "$seed"
+fi
 if [ "$#" -gt 0 ]; then
     run_prompt "$*"
     exit 0
 fi
 
-# Interactive mode runs the resident chat: the model loads and wires once
-# at startup, then every prompt answers at the ready-state latency.
-exec "$chat" "$model_directory" "$metallib" "$tokenizer" \
-    "$context" "$maximum_new" "$temperature" "$top_k" "$seed"
+# Default: the one-command app experience. Start the OpenAI-compatible
+# server if it is not already running, install the Chatbox client if it
+# is missing, then open the client.
+port=${QWEN36_PORT:-8199}
+base_url="http://127.0.0.1:$port/v1"
+log="$repository/tmp/qwen36-serve.log"
+
+if ! curl -sf --max-time 2 "http://127.0.0.1:$port/health" \
+        > /dev/null 2>&1; then
+    echo "Starting the model server (one-time weight wiring, ~10 s)..." >&2
+    nohup python3 "$repository/tools/qwen36_serve.py" --port "$port" \
+        >> "$log" 2>&1 &
+    waited=0
+    until curl -sf --max-time 2 "http://127.0.0.1:$port/health" \
+            > /dev/null 2>&1; do
+        sleep 1
+        waited=$((waited + 1))
+        if [ "$waited" -ge 120 ]; then
+            echo "Server did not become ready; see $log" >&2
+            exit 3
+        fi
+    done
+    echo "Server ready at $base_url" >&2
+else
+    echo "Server already running at $base_url" >&2
+fi
+
+if [ ! -d "/Applications/Chatbox.app" ]; then
+    if ! command -v brew > /dev/null 2>&1; then
+        echo "Homebrew not found; install the Chatbox client manually" \
+             "from https://chatboxai.app and connect it to $base_url" >&2
+        exit 4
+    fi
+    echo "Installing the Chatbox client (one time)..." >&2
+    brew install --cask chatbox >&2
+fi
+
+printf '%s' "$base_url" | pbcopy 2>/dev/null || true
+cat >&2 <<SETTINGS
+
+Chatbox is opening. First time only, add a provider in its settings:
+  Provider:  OpenAI API Compatible
+  API Host:  $base_url   (already copied to your clipboard)
+  API Key:   anything, e.g. local
+  Model:     qwen3.6-27b
+
+The server keeps running in the background (log: $log).
+Stop it with: pkill -f qwen36_serve.py
+SETTINGS
+exec open "/Applications/Chatbox.app"
