@@ -26,7 +26,7 @@ Status: free-text generation runs end to end. The deployment opens compiled imag
 | Graph | fixed 64-layer loop: three GatedDeltaNet layers then one full-attention layer, repeated | all dimensions and kernel dispatches |
 | State | FP32 Delta recurrent state, convolution history and FP16 attention KV cache | head counts, head dimensions and cache stride |
 | Output | complete 248,320-row Q4 language-model head | padded IDs above tokenizer vocabulary are masked |
-| Sampling | greedy or temperature/top-k sampling in C | vocabulary bound and stop IDs |
+| Sampling | greedy or temperature/top-k/top-p/min-p sampling with presence penalty in C, per request | vocabulary bound and stop IDs |
 | Speculation | optional greedy MTP draft-and-verify with adaptive depth 1-3, output-lossless | draft layer graph and batch 2-4 verify graphs |
 | Decode | C tokenizer decode to UTF-8 | special-token behavior |
 
@@ -506,6 +506,42 @@ The plain-decode baseline itself declines slightly with generated
 length (8.42 at position ~150 to 7.92-8.13 past 1,000) as the KV
 context grows.
 
+## Requests, sampling and conversations
+
+The machine protocol accepts either a JSON string (a rendered prompt,
+greedy with session defaults) or a JSON object carrying per-request
+sampling and budget: `temperature`, `top_k`, `top_p`, `min_p`,
+`presence_penalty` (over output tokens, the vLLM convention) and
+`max_new`. `tools/qwen36_serve.py` passes the corresponding OpenAI
+request fields straight through, so the officially recommended instruct
+settings (temperature 0.7, top_p 0.8, presence 1.5) run end to end;
+requests that stay greedy keep lossless speculative decoding. top_k 0
+now means an unbounded pool (capped at 512 candidates); top_k 1 or
+temperature 0 is greedy.
+
+The engine also continues conversations instead of re-prefilling them.
+It keeps the live token history and a prompt-boundary GDN checkpoint
+(the attention KV cache is per-position and needs no copy): a request
+that token-extends the history prefills only its new suffix; one that
+extends the last prompt boundary — the fallback when a reply does not
+survive the tokenize round trip, which code output regularly does not —
+restores the checkpoint and re-prefills that reply plus the new turn.
+S8/S4 tail chunks keep suffix prefills off the one-token path
+(30/30 parity checks, with the 16+8+4 run bitwise on the exact path).
+Measured on a four-turn conversation, outputs token-identical with the
+feature on and off:
+
+| Turn | Prompt tokens | TTFT, full re-prefill | TTFT, continued | Speedup |
+|---|---:|---:|---:|---:|
+| 2 | 250 | 5.297 s | 1.695 s | 3.1x |
+| 3 | 485 | 8.791 s | 1.451 s | 6.1x |
+| 4 | 769 | 13.743 s | 6.490 s (checkpoint fallback) | 2.1x |
+
+`QWEN36_CONTINUE=0` disables it. serve.py replays the think block the
+model actually saw (empty in no-think mode), which is what makes
+follow-ups exact extensions — and matches the Qwen3.8 template's
+`preserve_thinking` semantics.
+
 ## Verification
 
 Verification is outside the timed benchmark above.
@@ -608,7 +644,7 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 | Warm S32 chunk at 576 ms | profiling shows the half-MMA GEMMs still carry staging/barrier overhead over their ~300 ms compute bound | double-buffered weight tiles, wider K tiles |
 | Per-token CPU encoding of the static decode graph | roughly 2 ms per token, under 2 percent of decode | pre-encode with indirect command buffers if it ever dominates |
 | Prompts under 16 tokens | still run the sequential one-token path | S16 already costs nearly an S32 (weight streaming dominates), so smaller buckets would gain little |
-| Single user-message CLI | free text works, but system and multi-turn message APIs do not | expose a message-array C API without changing the graph |
+| Multi-turn state lives in the serving layer | the C API takes one rendered prompt; the engine's continuation matching is token-prefix-based | a message-array C API would let the engine own template rendering |
 | FP16 KV cache | 64 KiB per context token | verify a Q8 cache path if longer contexts need it |
 | Text-only image | vision inputs are unsupported | separate artifact if vision is required |
 | MTP verify pass at ~168 ms vs ~118 ms single forward | speedup is 1.45x on code, 1.14x on prose instead of the accept-rate bound | tune batch-2 attention and GDN kernels; the GEMM path already uses the exact decode kernels |

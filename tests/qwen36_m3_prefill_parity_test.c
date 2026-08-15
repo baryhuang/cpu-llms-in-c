@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
 
     /* Token counts covering the S32 bucket, the S16 bucket, the single-token
      * tail, and the mixed 32+16 case within capacity 64. */
-    const uint32_t runs[] = {16, 19, 32, 35, 48, 64, 67, 96};
+    const uint32_t runs[] = {16, 19, 28, 32, 35, 44, 48, 64, 67, 96};
     for (size_t run = 0; run < sizeof(runs) / sizeof(runs[0]); ++run) {
         uint32_t count = runs[run];
 

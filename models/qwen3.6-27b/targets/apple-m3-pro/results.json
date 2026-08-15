@@ -1133,5 +1133,39 @@
       "longest_request_wall": "132.2 -> 94.9 s (1031-token code generation, 1.39x)"
     },
     "measured_at": "2026-08-14 evening battery, after the half-MMA, multi-step-MTP, FP16-KV, S64 and detokenizer increments"
+  },
+  "request_and_conversation_increment": {
+    "summary": "Per-request sampling through the whole stack, sampler completeness (top_p/min_p/presence), S8/S4 prefill tail buckets, and conversation continuation (live-extension or prompt-boundary GDN checkpoint restore).",
+    "sampler": {
+      "added": "top_p nucleus, min_p relative floor, presence_penalty over output tokens (vLLM convention), per-request via machine-protocol JSON objects and OpenAI request fields",
+      "tests": "unit battery: nucleus containment, min-p floor, presence suppression, determinism; official instruct settings (temp 0.7, top_p 0.8, presence 1.5) verified end-to-end through serve.py"
+    },
+    "prefill_tail_buckets": {
+      "change": "S8 and S4 batched-exact chunks between the S16 bucket and one-token forwards; a full pass streams all weights, so a 14-token tail cost fourteen streams before",
+      "parity": "30/30 checks; the 16+8+4 run is bitwise-identical on the exact path"
+    },
+    "conversation_continuation": {
+      "design": "the engine keeps the live token history and a prompt-boundary GDN checkpoint (attention KV is per-position and needs no copy); a request that token-extends the history prefills only the suffix, one that extends the last prompt boundary restores the checkpoint and prefills the reply plus the new turn; anything else resets. Generation can tokenize non-canonically, which is why the text-level fallback checkpoint exists",
+      "measured_four_turn_conversation": {
+        "outputs": "token-identical with continuation on and off across all turns",
+        "turn2_ttft_s": {
+          "full": 5.297,
+          "continued": 1.695,
+          "speedup": 3.1
+        },
+        "turn3_ttft_s": {
+          "full": 8.791,
+          "continued": 1.451,
+          "speedup": 6.1
+        },
+        "turn4_ttft_s": {
+          "full": 13.743,
+          "continued": 6.49,
+          "speedup": 2.1,
+          "note": "the turn-3 code reply did not survive the tokenize round trip, so this turn restored the prompt-boundary checkpoint and re-prefilled that reply"
+        }
+      },
+      "gating": "QWEN36_CONTINUE=0 disables; serve.py replays the think block the model actually saw so follow-ups extend the live sequence (the Qwen3.8 preserve_thinking semantics)"
+    }
   }
 }

@@ -37,7 +37,14 @@ MODEL_ID = "qwen3.6-27b"
 
 def render_template(messages):
     """The pinned official template with enable_thinking=false, matching
-    tools/qwen36_m3_chat.c and the published runtime contract."""
+    tools/qwen36_m3_chat.c and the published runtime contract.
+
+    Prior assistant turns replay the think block the model actually saw
+    (empty in no-think mode, or the turn's reasoning_content) — the
+    Qwen3.8 preserve_thinking semantics. This also makes each follow-up
+    request an exact token extension of the resident conversation state,
+    so the engine prefills only the new turn instead of the whole
+    history."""
     parts = []
     for message in messages:
         role = message.get("role", "user")
@@ -47,7 +54,12 @@ def render_template(messages):
         if isinstance(content, list):
             content = "".join(part.get("text", "") for part in content
                               if isinstance(part, dict))
-        parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
+        if role == "assistant":
+            reasoning = message.get("reasoning_content") or ""
+            parts.append(f"<|im_start|>assistant\n<think>\n{reasoning}\n"
+                         f"</think>\n\n{content}<|im_end|>\n")
+        else:
+            parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
     parts.append("<|im_start|>assistant\n<think>\n\n</think>\n\n")
     return "".join(parts)
 
@@ -89,12 +101,17 @@ class Engine:
         print(f"model ready: context {self.ready.get('context')}, "
               f"max reply {self.ready.get('max_new')} tokens", flush=True)
 
-    def generate(self, rendered, on_delta):
+    def generate(self, rendered, on_delta, sampling=None):
         """Run one request; call on_delta(text) per chunk; return stats."""
         with self.lock:
             if self.process.poll() is not None:
                 self.start()
-            self.process.stdin.write(json.dumps(rendered) + "\n")
+            if sampling:
+                request = dict(sampling)
+                request["prompt"] = rendered
+                self.process.stdin.write(json.dumps(request) + "\n")
+            else:
+                self.process.stdin.write(json.dumps(rendered) + "\n")
             self.process.stdin.flush()
             while True:
                 line = self.process.stdout.readline()
@@ -160,20 +177,38 @@ class Handler(BaseHTTPRequestHandler):
                 "type": "invalid_request_error"}}, 400)
             return
         rendered = render_template(messages)
+        # Per-request sampling passes straight through to the engine.
+        # Absent fields keep the engine defaults (greedy, which also
+        # enables lossless speculative decoding); a request that sets
+        # temperature > 0 gets true sampled decoding with top_k, top_p,
+        # min_p and presence_penalty honored.
+        sampling = {}
+        for source, target in (("temperature", "temperature"),
+                               ("top_k", "top_k"),
+                               ("top_p", "top_p"),
+                               ("min_p", "min_p"),
+                               ("presence_penalty", "presence_penalty"),
+                               ("max_tokens", "max_new"),
+                               ("max_completion_tokens", "max_new")):
+            value = request.get(source)
+            if isinstance(value, (int, float)) and not isinstance(
+                    value, bool):
+                sampling[target] = value
         identifier = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         created = int(time.time())
         if request.get("stream"):
             include_usage = bool(
                 (request.get("stream_options") or {}).get("include_usage"))
             self.stream_completion(rendered, identifier, created,
-                                   include_usage)
+                                   include_usage, sampling)
         else:
-            self.plain_completion(rendered, identifier, created)
+            self.plain_completion(rendered, identifier, created, sampling)
 
-    def plain_completion(self, rendered, identifier, created):
+    def plain_completion(self, rendered, identifier, created,
+                         sampling=None):
         chunks = []
         try:
-            stats = ENGINE.generate(rendered, chunks.append)
+            stats = ENGINE.generate(rendered, chunks.append, sampling)
         except RuntimeError as failure:
             self.send_json({"error": {"message": str(failure),
                                       "type": "server_error"}}, 500)
@@ -192,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def stream_completion(self, rendered, identifier, created,
-                          include_usage):
+                          include_usage, sampling=None):
         # The SSE body carries no Content-Length, so it must use chunked
         # transfer encoding: without the 0-length terminator a keep-alive
         # client never sees the body end and its UI stays in the waiting
@@ -222,7 +257,7 @@ class Handler(BaseHTTPRequestHandler):
             event(chunk({"role": "assistant", "content": ""}))
             stats = ENGINE.generate(
                 rendered,
-                lambda text: event(chunk({"content": text})))
+                lambda text: event(chunk({"content": text})), sampling)
             event(chunk({}, stats.get("stop", "stop")))
             if include_usage:
                 prompt_tokens = stats.get("prompt_tokens", 0)

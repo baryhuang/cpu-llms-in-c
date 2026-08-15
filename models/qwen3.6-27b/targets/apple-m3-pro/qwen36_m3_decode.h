@@ -121,6 +121,21 @@ int qwen36_m3_model_mtp_step(
     char *error_message,
     size_t error_message_capacity);
 
+/* Prompt-boundary conversation checkpoint: save copies the cumulative
+ * GDN recurrent/convolution states (the attention KV cache is
+ * per-position and needs no copy); restore rewinds to that point so a
+ * follow-up request that extends the saved prompt can prefill only its
+ * new suffix. One checkpoint slot; saving again overwrites it. */
+int qwen36_m3_model_prefix_save(
+    qwen36_m3_model *model,
+    char *error_message,
+    size_t error_message_capacity);
+
+int qwen36_m3_model_prefix_restore(
+    qwen36_m3_model *model,
+    char *error_message,
+    size_t error_message_capacity);
+
 enum {
     QWEN36_M3_STATE_RECURRENT = 0,
     QWEN36_M3_STATE_CONVOLUTION = 1,

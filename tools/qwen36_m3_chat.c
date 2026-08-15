@@ -119,29 +119,31 @@ static int hex_value(char character) {
     return -1;
 }
 
-/* Decode one JSON string literal (machine-mode request line) to UTF-8. */
-static char *decode_json_string(const char *line) {
-    while (*line == ' ' || *line == '\t') ++line;
+/* Decode one JSON string literal starting at *cursor (which must point
+ * at the opening quote) to UTF-8; advances *cursor past the closing
+ * quote. */
+static char *decode_json_string_span(const char **cursor) {
+    const char *line = *cursor;
     if (*line != '"') return NULL;
     ++line;
     char *output = malloc(strlen(line) * 4 + 1);
     if (output == NULL) return NULL;
-    char *cursor = output;
+    char *out_cursor = output;
     while (*line != '\0' && *line != '"') {
         if (*line != '\\') {
-            *cursor++ = *line++;
+            *out_cursor++ = *line++;
             continue;
         }
         ++line;
         switch (*line) {
-        case '"': *cursor++ = '"'; ++line; break;
-        case '\\': *cursor++ = '\\'; ++line; break;
-        case '/': *cursor++ = '/'; ++line; break;
-        case 'b': *cursor++ = '\b'; ++line; break;
-        case 'f': *cursor++ = '\f'; ++line; break;
-        case 'n': *cursor++ = '\n'; ++line; break;
-        case 'r': *cursor++ = '\r'; ++line; break;
-        case 't': *cursor++ = '\t'; ++line; break;
+        case '"': *out_cursor++ = '"'; ++line; break;
+        case '\\': *out_cursor++ = '\\'; ++line; break;
+        case '/': *out_cursor++ = '/'; ++line; break;
+        case 'b': *out_cursor++ = '\b'; ++line; break;
+        case 'f': *out_cursor++ = '\f'; ++line; break;
+        case 'n': *out_cursor++ = '\n'; ++line; break;
+        case 'r': *out_cursor++ = '\r'; ++line; break;
+        case 't': *out_cursor++ = '\t'; ++line; break;
         case 'u': {
             uint32_t codepoint = 0;
             ++line;
@@ -164,7 +166,7 @@ static char *decode_json_string(const char *line) {
                 codepoint = 0x10000 +
                     ((codepoint - 0xd800) << 10) + (low - 0xdc00);
             }
-            append_utf8(&cursor, codepoint);
+            append_utf8(&out_cursor, codepoint);
             break;
         }
         default:
@@ -173,8 +175,75 @@ static char *decode_json_string(const char *line) {
         }
     }
     if (*line != '"') { free(output); return NULL; }
-    *cursor = '\0';
+    *out_cursor = '\0';
+    *cursor = line + 1;
     return output;
+}
+
+static char *decode_json_string(const char *line) {
+    while (*line == ' ' || *line == '\t') ++line;
+    return decode_json_string_span(&line);
+}
+
+/* One machine-mode request. A plain JSON string line is a greedy
+ * request with the session defaults; a JSON object line carries
+ * per-request sampling and budget:
+ *   {"prompt": "...", "temperature": 0.7, "top_k": 20, "top_p": 0.8,
+ *    "min_p": 0.0, "presence_penalty": 1.5, "max_new": 512}
+ * Unknown keys are ignored. */
+typedef struct {
+    char *chat;
+    float temperature;
+    uint32_t top_k;
+    float top_p;
+    float min_p;
+    float presence_penalty;
+    uint32_t max_new;
+} chat_request;
+
+static int parse_request_object(const char *line, chat_request *request) {
+    while (*line == ' ' || *line == '\t') ++line;
+    if (*line != '{') return -1;
+    ++line;
+    for (;;) {
+        while (*line == ' ' || *line == '\t' || *line == ',') ++line;
+        if (*line == '}') return request->chat != NULL ? 0 : -1;
+        if (*line != '"') return -1;
+        char *key = decode_json_string_span(&line);
+        if (key == NULL) return -1;
+        while (*line == ' ' || *line == '\t') ++line;
+        if (*line != ':') { free(key); return -1; }
+        ++line;
+        while (*line == ' ' || *line == '\t') ++line;
+        if (*line == '"') {
+            char *value = decode_json_string_span(&line);
+            if (value == NULL) { free(key); return -1; }
+            if (strcmp(key, "prompt") == 0) {
+                free(request->chat);
+                request->chat = value;
+            } else {
+                free(value);
+            }
+        } else {
+            char *end = NULL;
+            double value = strtod(line, &end);
+            if (end == line) { free(key); return -1; }
+            line = end;
+            if (strcmp(key, "temperature") == 0)
+                request->temperature = (float)value;
+            else if (strcmp(key, "top_k") == 0)
+                request->top_k = value > 0 ? (uint32_t)value : 0;
+            else if (strcmp(key, "top_p") == 0)
+                request->top_p = (float)value;
+            else if (strcmp(key, "min_p") == 0)
+                request->min_p = (float)value;
+            else if (strcmp(key, "presence_penalty") == 0)
+                request->presence_penalty = (float)value;
+            else if (strcmp(key, "max_new") == 0)
+                request->max_new = value > 0 ? (uint32_t)value : 0;
+        }
+        free(key);
+    }
 }
 
 /* Decode the visible token prefix and print only the new complete UTF-8
@@ -308,8 +377,7 @@ int main(int argc, char **argv) {
     }
     int mtp_depth_max = mtp_depth == 0 ? 3 : mtp_depth;
     const char *mtp_env = getenv("QWEN36_MTP");
-    if ((mtp_env == NULL || strcmp(mtp_env, "0") != 0) &&
-        temperature <= 0.0f && top_k <= 1) {
+    if (mtp_env == NULL || strcmp(mtp_env, "0") != 0) {
         char layer_path[1024];
         char extras_path[1024];
         snprintf(layer_path, sizeof(layer_path), "%s/mtp-layer.q36att",
@@ -333,10 +401,30 @@ int main(int argc, char **argv) {
 
     uint32_t *prompt_ids = malloc((size_t)capacity * sizeof(*prompt_ids));
     uint32_t *generated = malloc((size_t)maximum_new * sizeof(*generated));
+    /* Conversation continuation: history holds the exact token sequence
+     * the resident layer state corresponds to. A request whose tokens
+     * extend it prefills only the new suffix, so multi-turn
+     * time-to-first-token depends on the new turn, not the whole
+     * conversation. QWEN36_CONTINUE=0 disables. */
+    uint32_t *history = malloc((size_t)capacity * sizeof(*history));
+    uint32_t history_count = 0;
+    /* Prompt-boundary checkpoint tokens: generation can tokenize
+     * non-canonically (its tokens need not survive a decode/encode
+     * round trip), so when the live token history does not match a
+     * follow-up's rendering, the engine rewinds the GDN state to the
+     * last prompt boundary — whose tokens are canonical by
+     * construction — and prefills the reply plus the new turn. */
+    uint32_t *snapshot_tokens = malloc((size_t)capacity *
+                                       sizeof(*snapshot_tokens));
+    uint32_t snapshot_count = 0;
+    const char *continue_env = getenv("QWEN36_CONTINUE");
+    int continuation = continue_env == NULL ||
+                       strcmp(continue_env, "0") != 0;
     stream_text stream = {NULL, 0, 0, 0, 0};
     char *line = NULL;
     size_t line_capacity = 0;
-    if (prompt_ids == NULL || generated == NULL) {
+    if (prompt_ids == NULL || generated == NULL || history == NULL ||
+        snapshot_tokens == NULL) {
         fprintf(stderr, "cannot allocate buffers\n");
         return 6;
     }
@@ -352,10 +440,28 @@ int main(int argc, char **argv) {
             break;
         }
         char *chat = NULL;
+        chat_request request = {
+            .chat = NULL, .temperature = temperature, .top_k = top_k,
+            .top_p = 0.0f, .min_p = 0.0f, .presence_penalty = 0.0f,
+            .max_new = 0
+        };
         if (machine) {
             /* One request per line: a JSON string holding the complete
-             * rendered chat template, produced by the serving shim. */
-            chat = decode_json_string(line);
+             * rendered chat template, or a JSON object that also
+             * carries per-request sampling and budget. */
+            const char *scan = line;
+            while (*scan == ' ' || *scan == '\t') ++scan;
+            if (*scan == '{') {
+                if (parse_request_object(line, &request) != 0) {
+                    free(request.chat);
+                    printf("X \"invalid request object\"\n");
+                    fflush(stdout);
+                    continue;
+                }
+                chat = request.chat;
+            } else {
+                chat = decode_json_string(line);
+            }
             if (chat == NULL) {
                 if (line[0] != '\n') {
                     printf("X \"request line is not a JSON string\"\n");
@@ -408,6 +514,8 @@ int main(int argc, char **argv) {
         }
         /* A long prompt shrinks this reply's budget instead of failing. */
         uint32_t budget = maximum_new;
+        if (request.max_new != 0 && request.max_new < budget)
+            budget = request.max_new;
         if (prompt_count + budget > capacity)
             budget = capacity - (uint32_t)prompt_count;
 
@@ -416,15 +524,47 @@ int main(int argc, char **argv) {
             fflush(stdout);
         }
         double prompt_start = seconds_now();
+        uint32_t start_position = 0;
+        if (continuation && history_count != 0 &&
+            prompt_count > history_count &&
+            memcmp(prompt_ids, history,
+                   (size_t)history_count * sizeof(uint32_t)) == 0) {
+            /* The request extends the live state exactly. */
+            start_position = history_count;
+        } else if (continuation && snapshot_count != 0 &&
+                   prompt_count > snapshot_count &&
+                   memcmp(prompt_ids, snapshot_tokens,
+                          (size_t)snapshot_count *
+                              sizeof(uint32_t)) == 0 &&
+                   qwen36_m3_model_prefix_restore(
+                       model, error, sizeof(error)) == 0) {
+            /* The request extends the last prompt boundary: rewind the
+             * GDN state and prefill the reply plus the new turn. */
+            start_position = snapshot_count;
+            history_count = 0;
+        } else {
+            if (getenv("QWEN36_CONTINUE_DEBUG") != NULL &&
+                history_count != 0)
+                fprintf(stderr, "[continue] no match: history %u "
+                        "snapshot %u prompt %zu\n", history_count,
+                        snapshot_count, prompt_count);
+            qwen36_m3_model_reset(model);
+            history_count = 0;
+        }
+        if (getenv("QWEN36_CONTINUE_DEBUG") != NULL)
+            fprintf(stderr, "[continue] prefill from %u of %zu\n",
+                    start_position, prompt_count);
         const float *logits = NULL;
         size_t logit_count = 0;
         qwen36_m3_decode_result result = {0};
         int failed = 0;
-        if (prompt_count > 1) {
+        if (prompt_count - 1 > start_position) {
             qwen36_m3_prefill_result prefill;
             if (qwen36_m3_model_prefill(
-                    model, prompt_ids, (uint32_t)(prompt_count - 1), 0,
-                    &prefill, error, sizeof(error)) != 0) {
+                    model, prompt_ids + start_position,
+                    (uint32_t)(prompt_count - 1 - start_position),
+                    start_position, &prefill, error,
+                    sizeof(error)) != 0) {
                 fprintf(stderr, "prefill failed: %s\n", error);
                 failed = 1;
             }
@@ -438,19 +578,39 @@ int main(int argc, char **argv) {
         }
         if (failed) {
             qwen36_m3_model_reset(model);
+            history_count = 0;
             continue;
+        }
+        memcpy(history, prompt_ids,
+               (size_t)prompt_count * sizeof(uint32_t));
+        history_count = (uint32_t)prompt_count;
+        if (continuation) {
+            if (qwen36_m3_model_prefix_save(model, error,
+                                            sizeof(error)) == 0) {
+                memcpy(snapshot_tokens, prompt_ids,
+                       (size_t)prompt_count * sizeof(uint32_t));
+                snapshot_count = (uint32_t)prompt_count;
+            } else {
+                snapshot_count = 0;
+            }
         }
 
         qwen36_sampler sampler = {
-            .temperature = temperature, .top_k = top_k, .state = seed
+            .temperature = request.temperature, .top_k = request.top_k,
+            .top_p = request.top_p, .min_p = request.min_p,
+            .presence_penalty = request.presence_penalty, .state = seed
         };
+        qwen36_sampler_begin(&sampler, QWEN36_TOKENIZER_VOCAB);
+        int greedy_request = request.temperature <= 0.0f ||
+                             request.top_k == 1;
+        int use_mtp = mtp && greedy_request;
         uint32_t generated_count = 0;
         size_t visible_count = 0;
         stream_text_reset(&stream);
         double first_token_seconds = -1.0;
         size_t mtp_steps = 0;
         size_t mtp_accepts = 0;
-        if (mtp) {
+        if (use_mtp) {
             uint32_t pending;
             size_t sample_count = logit_count;
             if (sample_count > QWEN36_TOKENIZER_VOCAB)
@@ -484,6 +644,9 @@ int main(int argc, char **argv) {
                 }
                 ++mtp_steps;
                 mtp_accepts += (size_t)step_accepted;
+                for (uint32_t i = 0; i < step_count; ++i)
+                    if (history_count < capacity)
+                        history[history_count++] = step_emitted[i];
                 for (uint32_t i = 0; i < step_count && !done; ++i) {
                     generated[generated_count++] = step_emitted[i];
                     if (step_emitted[i] == QWEN36_END_OF_TEXT ||
@@ -536,6 +699,7 @@ int main(int argc, char **argv) {
                               sizeof(error));
                 break;
             }
+            qwen36_sampler_note(&sampler, token);
             uint32_t position = (uint32_t)prompt_count + index;
             if (qwen36_m3_model_forward_submit(
                     model, token, position, error, sizeof(error)) != 0) {
@@ -543,6 +707,8 @@ int main(int argc, char **argv) {
                 failed = 1;
                 break;
             }
+            if (history_count < capacity)
+                history[history_count++] = token;
             emit_new_text(tokenizer, generated, visible_count,
                           &stream, machine, error, sizeof(error));
             if (qwen36_m3_model_forward_wait(
@@ -567,13 +733,15 @@ int main(int argc, char **argv) {
                 printf("E {\"tokens\": %zu, \"prompt_tokens\": %zu, "
                        "\"first_token_s\": %.3f, \"total_s\": %.3f, "
                        "\"stop\": \"%s\", \"mtp_steps\": %zu, "
-                       "\"mtp_accepted\": %zu, \"mtp_depth\": %d}\n",
+                       "\"mtp_accepted\": %zu, \"mtp_depth\": %d, "
+                       "\"prefilled_from\": %u}\n",
                        visible_count, prompt_count,
                        first_token_seconds >= 0.0 ?
                            first_token_seconds : 0.0,
                        total_seconds,
                        stopped ? "stop" : "length",
-                       mtp_steps, mtp_accepts, mtp_depth);
+                       mtp_steps, mtp_accepts, mtp_depth,
+                       start_position);
             }
             fflush(stdout);
         } else {
@@ -600,12 +768,18 @@ int main(int argc, char **argv) {
                         first_token_seconds);
             }
         }
-        qwen36_m3_model_reset(model);
+        qwen36_sampler_release(&sampler);
+        if (failed) {
+            qwen36_m3_model_reset(model);
+            history_count = 0;
+        }
     }
 
     free(line);
     free(prompt_ids);
     free(generated);
+    free(history);
+    free(snapshot_tokens);
     qwen36_m3_model_close(model);
     qwen36_tokenizer_close(tokenizer);
     return 0;

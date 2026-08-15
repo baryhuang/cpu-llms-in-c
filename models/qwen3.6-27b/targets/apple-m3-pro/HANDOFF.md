@@ -299,6 +299,19 @@ unchanged; measured 8.13 -> 9.98 tok/s (1.23x adaptive MTP) on the
 same five-case battery. Remaining 3.8-specific work is template-layer
 only: reasoning_effort injections and preserve_thinking replay.
 
+## Landed: request sampling and conversation continuation (2026-08-15)
+
+Sampler completeness (top_p/min_p/presence, per-request through machine
+JSON objects and serve.py OpenAI fields), S8/S4 prefill tail buckets,
+and conversation continuation: live token-history extension plus a
+prompt-boundary GDN checkpoint for replies that do not survive the
+tokenize round trip (attention KV needs no copy - per-position
+overwrite). Four-turn conversation measured 3.1x/6.1x/2.1x
+time-to-first-token with token-identical output; incremental
+detokenizer landed earlier the same day. The engine's continuation is
+what makes long Chatbox conversations affordable: prompt cost per turn
+is the new turn, not the whole history.
+
 ## Work not yet implemented
 
 - Per-dispatch profiling of the remaining 864 ms warm chunk (recurrence,
@@ -307,14 +320,13 @@ only: reasoning_effort injections and preserve_thinking replay.
   (about 2 ms/token CPU encode today; deferred until it matters).
 - Batched kernel tuning: the warm S32 chunk spends about 1.4 s of compute
   on 32 tokens; profile GEMM tiling and the blocked recurrence.
-- Input-byte streaming tokenizer API.
 - Token ring buffer between tokenizer and prefill.
-- Decode sampling/argmax on GPU; CPU sampling is still a serial dependency.
+- Decode sampling/argmax on GPU for the non-greedy path; the greedy
+  speculative path already chains through a GPU argmax. CPU sampling
+  measures well under 1 ms per token (sub-1%).
 - GPU-to-GPU token ID -> embedding chaining.
 - More than one in-flight command/workspace.
 - Multi-request decode-priority scheduler and continuous batching.
-- Prefix-state snapshots.
-- Stateful O(1)-per-token incremental detokenizer.
 
 ## Recommended continuation order
 

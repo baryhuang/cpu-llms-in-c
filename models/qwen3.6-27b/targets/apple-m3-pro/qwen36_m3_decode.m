@@ -201,6 +201,7 @@ enum { Q36_PREFILL_MAX_BATCH = 64 };
     Q36PrefillPipelines *prefill2;
     Q36PrefillPipelines *prefill3;
     Q36PrefillPipelines *prefill4;
+    Q36PrefillPipelines *prefill8;
     uint32_t mtp_depth;
     Q36PrefillPipelines *prefill16;
     Q36PrefillPipelines *prefill32;
@@ -219,6 +220,8 @@ enum { Q36_PREFILL_MAX_BATCH = 64 };
     id<MTLBuffer> p_logits2;
     id<MTLBuffer> snapshot_recurrent;
     id<MTLBuffer> snapshot_convolution;
+    id<MTLBuffer> prefix_recurrent;
+    id<MTLBuffer> prefix_convolution;
     id<MTLBuffer> p_token_ids;
     id<MTLBuffer> p_hidden_half;
     id<MTLBuffer> p_normalized;
@@ -1163,6 +1166,10 @@ static int initialize_pipelines(Q36DecodeRuntime *r, NSString **message) {
     if (r->prefill32 == nil) return -1;
     r->prefill64 = prefill_pipelines(r, 64, message);
     if (r->prefill64 == nil) return -1;
+    r->prefill4 = prefill_pipelines(r, 4, message);
+    if (r->prefill4 == nil) return -1;
+    r->prefill8 = prefill_pipelines(r, 8, message);
+    if (r->prefill8 == nil) return -1;
     return 0;
 }
 
@@ -1524,6 +1531,7 @@ static Q36PrefillPipelines *prefill_set_for_batch(
     case 2: return r->prefill2;
     case 3: return r->prefill3;
     case 4: return r->prefill4;
+    case 8: return r->prefill8;
     case 16: return r->prefill16;
     case 32: return r->prefill32;
     default: return r->prefill64;
@@ -1869,6 +1877,111 @@ static void gdn_state_copy(Q36DecodeRuntime *r, int restore) {
         [command commit];
         [command waitUntilCompleted];
     }
+}
+
+/* Prompt-boundary GDN state checkpoint. The attention KV cache is
+ * per-position and simply gets overwritten, but the DeltaNet recurrent
+ * and convolution states are cumulative and cannot rewind, so a
+ * follow-up request that extends a previous prompt restores this
+ * checkpoint and prefills only the new suffix. Buffers allocate on
+ * first save. */
+static int prefix_state_copy(qwen36_m3_model *model, int restore,
+                             char *error_message,
+                             size_t error_message_capacity) {
+    if (model == NULL || model->runtime == NULL) {
+        decode_error(error_message, error_message_capacity,
+                     @"invalid prefix state arguments");
+        return 1;
+    }
+    Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
+    if (model->pending_command != NULL) {
+        decode_error(error_message, error_message_capacity,
+                     @"a decode forward is in flight");
+        return 1;
+    }
+    if (r->prefix_recurrent == nil) {
+        if (restore) {
+            decode_error(error_message, error_message_capacity,
+                         @"no prefix state saved");
+            return 1;
+        }
+        size_t recurrent_total = 0;
+        size_t convolution_total = 0;
+        for (Q36DecodeLayer *layer in r->layers) {
+            if (layer->attention) continue;
+            recurrent_total += layer->recurrent_state.length;
+            convolution_total += layer->convolution_state.length;
+        }
+        r->prefix_recurrent = [r->device
+            newBufferWithLength:recurrent_total
+                        options:MTLResourceStorageModeShared];
+        r->prefix_convolution = [r->device
+            newBufferWithLength:convolution_total
+                        options:MTLResourceStorageModeShared];
+        if (r->prefix_recurrent == nil ||
+            r->prefix_convolution == nil) {
+            decode_error(error_message, error_message_capacity,
+                         @"cannot allocate prefix state");
+            return 2;
+        }
+    }
+    @autoreleasepool {
+        id<MTLCommandBuffer> command = [r->queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+        NSUInteger recurrent_offset = 0;
+        NSUInteger convolution_offset = 0;
+        for (Q36DecodeLayer *layer in r->layers) {
+            if (layer->attention) continue;
+            if (restore) {
+                [blit copyFromBuffer:r->prefix_recurrent
+                        sourceOffset:recurrent_offset
+                            toBuffer:layer->recurrent_state
+                   destinationOffset:0
+                                size:layer->recurrent_state.length];
+                [blit copyFromBuffer:r->prefix_convolution
+                        sourceOffset:convolution_offset
+                            toBuffer:layer->convolution_state
+                   destinationOffset:0
+                                size:layer->convolution_state.length];
+            } else {
+                [blit copyFromBuffer:layer->recurrent_state
+                        sourceOffset:0
+                            toBuffer:r->prefix_recurrent
+                   destinationOffset:recurrent_offset
+                                size:layer->recurrent_state.length];
+                [blit copyFromBuffer:layer->convolution_state
+                        sourceOffset:0
+                            toBuffer:r->prefix_convolution
+                   destinationOffset:convolution_offset
+                                size:layer->convolution_state.length];
+            }
+            recurrent_offset += layer->recurrent_state.length;
+            convolution_offset += layer->convolution_state.length;
+        }
+        [blit endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.status != MTLCommandBufferStatusCompleted) {
+            decode_error(error_message, error_message_capacity,
+                         @"prefix state copy failed");
+            return 2;
+        }
+    }
+    return 0;
+}
+
+int qwen36_m3_model_prefix_save(qwen36_m3_model *model,
+                                char *error_message,
+                                size_t error_message_capacity) {
+    return prefix_state_copy(model, 0, error_message,
+                             error_message_capacity);
+}
+
+int qwen36_m3_model_prefix_restore(qwen36_m3_model *model,
+                                   char *error_message,
+                                   size_t error_message_capacity) {
+    return prefix_state_copy(model, 1, error_message,
+                             error_message_capacity);
 }
 
 static uint32_t argmax_f32(const float *values, uint32_t count) {
@@ -2248,6 +2361,49 @@ int qwen36_m3_model_prefill(
         if (chunk == 64) result->chunk32_count += 2;
         else if (chunk == 32) ++result->chunk32_count;
         else ++result->chunk16_count;
+        offset += chunk;
+    }
+    /* S8/S4 tail buckets: a full pass streams all mapped weights, so a
+     * 14-token tail of one-token forwards would cost fourteen streams;
+     * batched-exact chunks of 8 and 4 cut the pass count. */
+    while (token_count - offset >= 4 && max_chunk >= 4) {
+        uint32_t chunk = token_count - offset >= 8 && max_chunk >= 8 ?
+            8 : 4;
+        Q36PrefillPipelines *pipelines = prefill_set_for_batch(r, chunk);
+        double chunk_start = decode_seconds();
+        MTLCommandBufferStatus status;
+        NSString *failure = nil;
+        @autoreleasepool {
+            memcpy(r->p_token_ids.contents, token_ids + offset,
+                   (size_t)chunk * sizeof(uint32_t));
+            id<MTLCommandBuffer> command = [r->queue commandBuffer];
+            id<MTLComputeCommandEncoder> encoder =
+                [command computeCommandEncoder];
+            encode_prefill_chunk(r, pipelines, &command, &encoder,
+                                 start_position + offset, NULL);
+            [encoder endEncoding];
+            [command commit];
+            [command waitUntilCompleted];
+            status = command.status;
+            if (command.error != nil)
+                failure = command.error.localizedDescription;
+        }
+        if (status != MTLCommandBufferStatusCompleted) {
+            decode_error(error_message, error_message_capacity,
+                failure != nil ? failure : @"Metal prefill failed");
+            return 2;
+        }
+        if (result->first_chunk_ms == 0.0)
+            result->first_chunk_ms =
+                (decode_seconds() - chunk_start) * 1000.0;
+        if (r->mtp_layer != nil) {
+            int mtp_status = run_mtp_pass(
+                model, chunk, token_ids + offset + 1,
+                start_position + offset + 1, nil, 0, 0, 1,
+                NULL, error_message, error_message_capacity);
+            if (mtp_status != 0) return mtp_status;
+        }
+        ++result->chunk16_count;
         offset += chunk;
     }
     while (offset < token_count) {
