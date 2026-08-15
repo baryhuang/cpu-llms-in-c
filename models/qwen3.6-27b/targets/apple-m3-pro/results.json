@@ -617,6 +617,18 @@
       "gating": "QWEN36_MTP_DEPTH: 0 adaptive (default), 1..3 fixed"
     }
   },
+  "fp16_kv_cache_increment": {
+    "summary": "Attention KV cache stored as FP16. Decode and prefill both round keys/values once at write, so their cache states stay bitwise-comparable; the verification API converts back to float.",
+    "memory": {
+      "kv_bytes_per_context_token": "64 KiB (was 128 KiB)",
+      "kv_total_at_context_4096": "0.27 GB (was 0.54 GB)"
+    },
+    "verification": {
+      "battery": "identical token IDs and text on 4/4 prompts, MTP adaptive default",
+      "decode_rate": "unchanged at short context (13.48 code / 9.48 prose tok/s); attention read traffic halves as context grows",
+      "parity_test": "argmax identical on all runs; the flat state tolerance gained a 0.8% relative escape (a half ulp at key magnitudes in the hundreds is 0.25-0.5) and the half-tile GEMM mode a measured 0.75 bound"
+    }
+  },
   "bare_mlx_lm_baseline": {
     "measured_at": "2026-08-14T19:40:00+08:00",
     "scope": "bare mlx-lm library baseline, separate from the published oMLX server baseline; comparison-only Python environment, not in the deployment path",

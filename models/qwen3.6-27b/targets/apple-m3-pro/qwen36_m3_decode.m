@@ -514,8 +514,11 @@ static Q36DecodeLayer *load_attention_layer(Q36DecodeRuntime *runtime,
     item->constants = [runtime->device
         newBufferWithLength:h->constants_f32_count * sizeof(float)
                    options:MTLResourceStorageModeShared];
+    /* FP16 KV cache: both the decode and the prefill paths round keys
+     * and values once at write, so their states stay bitwise-comparable
+     * and memory and attention read traffic halve. */
     size_t cache_bytes = (size_t)runtime->capacity * 4 * 256 *
-                         sizeof(float);
+                         sizeof(uint16_t);
     item->key_cache = [runtime->device newBufferWithLength:cache_bytes
                                                    options:
         MTLResourceStorageModeShared];
@@ -2199,7 +2202,20 @@ size_t qwen36_m3_model_copy_state(
     default:
         break;
     }
-    if (source == nil || source.length > destination_capacity) return 0;
+    if (source == nil) return 0;
+    if (kind == QWEN36_M3_STATE_KEY_CACHE ||
+        kind == QWEN36_M3_STATE_VALUE_CACHE) {
+        /* The cache is stored as half; the verification API exposes
+         * float. */
+        size_t count = source.length / sizeof(uint16_t);
+        if (count * sizeof(float) > destination_capacity) return 0;
+        const __fp16 *cache = source.contents;
+        float *out = destination;
+        for (size_t index = 0; index < count; ++index)
+            out[index] = (float)cache[index];
+        return count * sizeof(float);
+    }
+    if (source.length > destination_capacity) return 0;
     memcpy(destination, source.contents, source.length);
     return source.length;
 }

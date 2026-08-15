@@ -24,7 +24,7 @@ Status: free-text generation runs end to end. The deployment opens compiled imag
 | Tokenizer image | C tokenizer compiler and C runtime using system ICU for Unicode classes | pinned tokenizer JSON and special-token table |
 | Chat input | one arbitrary UTF-8 user string | official `enable_thinking=false` template |
 | Graph | fixed 64-layer loop: three GatedDeltaNet layers then one full-attention layer, repeated | all dimensions and kernel dispatches |
-| State | FP32 Delta recurrent state, convolution history and FP32 attention KV cache | head counts, head dimensions and cache stride |
+| State | FP32 Delta recurrent state, convolution history and FP16 attention KV cache | head counts, head dimensions and cache stride |
 | Output | complete 248,320-row Q4 language-model head | padded IDs above tokenizer vocabulary are masked |
 | Sampling | greedy or temperature/top-k sampling in C | vocabulary bound and stop IDs |
 | Speculation | optional greedy MTP draft-and-verify, output-lossless | draft layer graph and batch-2 verify graph |
@@ -71,7 +71,7 @@ Everything except the model images totals 10.3 MB.
 | OS | macOS 15+ for `MTLResidencySet` wiring at model open; older macOS skips it and pays wiring in the first prefill chunk instead |
 | Dependencies to install for the core runtime | none |
 | Optional tool dependencies | system `python3` (standard library) for `qwen36_serve.py` and `qwen36_monitor.py`; Chatbox client |
-| Resident memory while serving | 15.139 GB wired weights + 0.8 GB process footprint at context 4096 |
+| Resident memory while serving | 15.139 GB wired weights + ~0.5 GB process footprint at context 4096 |
 | Practical machine memory | 24 GB minimum, 32 GB or more comfortable |
 | Performance claims | pinned to the M3 Pro target; results do not transfer to other chips |
 
@@ -82,7 +82,7 @@ pin, model loaded, idle between requests:
 
 | Column | Typical reading | Meaning for this runtime |
 |---|---:|---|
-| foot | 0.8 GB | process-private memory: 0.54 GB FP32 KV cache at capacity 4096 + 0.16 GB GDN recurrent/conv state + workspace |
+| foot | ~0.5 GB | process-private memory: 0.27 GB FP16 KV cache at capacity 4096 + 0.16 GB GDN recurrent/conv state + workspace |
 | rss | near 0 | not meaningful here; the mapped weights are file-backed and never counted in RSS |
 | wired | ~20 GB | macOS baseline of roughly 4 GB plus the 15.14 GB weight residency; drops back the moment the server exits |
 | filebk | 2–3 GB | page cache for other files; wired weights are not in this column |
@@ -588,7 +588,7 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 | Per-token CPU encoding of the static decode graph | roughly 2 ms per token, under 2 percent of decode | pre-encode with indirect command buffers if it ever dominates |
 | Prompts under 16 tokens | still run the sequential one-token path | add smaller buckets only if short-prompt TTFT matters |
 | Single user-message CLI | free text works, but system and multi-turn message APIs do not | expose a message-array C API without changing the graph |
-| FP32 KV cache | 128 KiB per context token | verify FP16, then Q8 cache paths |
+| FP16 KV cache | 64 KiB per context token | verify a Q8 cache path if longer contexts need it |
 | Text-only image | vision inputs are unsupported | separate artifact if vision is required |
 | MTP verify pass at ~168 ms vs ~118 ms single forward | speedup is 1.45x on code, 1.14x on prose instead of the accept-rate bound | tune batch-2 attention and GDN kernels; the GEMM path already uses the exact decode kernels |
 | MTP is greedy-only | temperature or top-k sampling disables speculation | lossless sampled speculation needs rejection sampling against full distributions |

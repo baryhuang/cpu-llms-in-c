@@ -101,8 +101,8 @@ kernel void qwen36_attention_prepare_key_value(
     device const float *projected [[buffer(0)]],
     device const float *norm_weight [[buffer(1)]],
     constant AttentionDecodeParameters &parameters [[buffer(2)]],
-    device float *key_cache [[buffer(3)]],
-    device float *value_cache [[buffer(4)]],
+    device half *key_cache [[buffer(3)]],
+    device half *value_cache [[buffer(4)]],
     uint tid [[thread_index_in_threadgroup]],
     uint3 group_id [[threadgroup_position_in_grid]]) {
     threadgroup float values[256];
@@ -131,7 +131,7 @@ kernel void qwen36_attention_prepare_key_value(
 
 kernel void qwen36_attention_scores(
     device const float *query [[buffer(0)]],
-    device const float *key_cache [[buffer(1)]],
+    device const half *key_cache [[buffer(1)]],
     constant AttentionDecodeParameters &parameters [[buffer(2)]],
     device float *scores [[buffer(3)]],
     uint lane [[thread_index_in_simdgroup]],
@@ -159,7 +159,7 @@ kernel void qwen36_attention_scores(
 
 kernel void qwen36_attention_softmax_value_gate(
     device const float *scores [[buffer(0)]],
-    device const float *value_cache [[buffer(1)]],
+    device const half *value_cache [[buffer(1)]],
     device const float *query_gate [[buffer(2)]],
     constant AttentionDecodeParameters &parameters [[buffer(3)]],
     device float *output [[buffer(4)]],
