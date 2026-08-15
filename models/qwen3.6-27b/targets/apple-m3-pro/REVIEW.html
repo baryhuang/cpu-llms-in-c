@@ -138,6 +138,20 @@ int max2(int a, int b) {
   </table>
   <p class="note">No ratio is valid here: hardware, precision, prompt length, generated length and memory accounting differ. Sources: <a href="https://huggingface.co/Qwen/Qwen3.6-27B">Qwen official model card</a> and <a href="https://github.com/huggingface/transformers/blob/main/docs/source/en/model_doc/qwen3_5.md#usage-tips-and-notes">official Transformers implementation notes</a>.</p>
 
+  <h3>Same-window three-way measurement</h3>
+  <p>One session, all three stacks on the same value-equivalent checkpoint and prompt, greedy: one discarded warmup per stack, then four rounds with the stack order rotated each round, fresh process per run, all wall-clock. All 12 measured runs produced the published output. oMLX streams coalesced events, so its decode rate uses first-to-last arrival time.</p>
+  <table>
+    <thead><tr><th>Metric, mean of 4</th><th class="num">C/Metal (this repo)</th><th class="num">Bare mlx-lm 0.31.3</th><th class="num">oMLX 0.5.7</th></tr></thead>
+    <tbody>
+      <tr><td>Ready (open / load / engine start)</td><td class="num">7.093 s</td><td class="num">3.925 s</td><td class="num">4.671 s</td></tr>
+      <tr><td>TTFT after ready</td><td class="num"><strong>1.385 s</strong></td><td class="num">2.598 s</td><td class="num">3.113 s</td></tr>
+      <tr><td>Cold start to first token</td><td class="num">8.478 s</td><td class="num"><strong>6.524 s</strong></td><td class="num">7.784 s</td></tr>
+      <tr><td>Visible decode</td><td class="num"><strong>8.479 tok/s</strong></td><td class="num">6.028 tok/s</td><td class="num">5.898 tok/s</td></tr>
+      <tr><td>Prompt throughput after ready</td><td class="num"><strong>26.0 tok/s</strong></td><td class="num">13.9 tok/s</td><td class="num">11.6 tok/s</td></tr>
+    </tbody>
+  </table>
+  <p>The C runtime decodes 1.41x / 1.44x faster and answers a ready model 1.88x / 2.25x sooner than bare mlx-lm / oMLX. The one loss is cold start: the C ready phase carries the one-time 7 s weight wiring, which amortizes in a long-lived process.</p>
+
   <h3>Bare mlx-lm reference</h3>
   <p>The baseline above is the complete oMLX server stack. This measurement runs the bare <code>mlx-lm</code> library (mlx-lm 0.31.3, mlx 0.32.0, Python 3.13, comparison-only environment) on the same value-equivalent exported checkpoint: one discarded warmup, then four rounds of mlx-lm and the C runtime interleaved with alternating order, fresh process each run, greedy. All eight runs produced the published prompt and output token IDs.</p>
   <table>

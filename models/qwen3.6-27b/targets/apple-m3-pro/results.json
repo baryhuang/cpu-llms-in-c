@@ -1,5 +1,5 @@
 {
-  "schema": 7,
+  "schema": 8,
   "status": "free-text-end-to-end",
   "measured_at": "2026-08-14T13:20:00+08:00",
   "machine": {
@@ -543,6 +543,122 @@
       "mlx-lm reported 27.3 prompt tokens/s in these warm-page-cache rounds versus 13.16 in its own cold warmup run and 13.56 through the oMLX server in the baseline session.",
       "mlx-lm TTFT after load includes first-use lazy weight materialization and kernel compilation, not only prompt compute."
     ]
+  },
+  "same_window_three_way": {
+    "measured_at": "2026-08-14T22:20:00+08:00",
+    "scope": "single-session three-way measurement: this C/Metal runtime, bare mlx-lm, and the oMLX server engine, all on the same value-equivalent checkpoint and the same 36-token published prompt, greedy",
+    "stacks": {
+      "c_metal": "this repository at the tiled-GEMM + residency commit",
+      "bare_mlx_lm": "mlx-lm 0.31.3, mlx 0.32.0, Python 3.13, stream_generate with make_sampler(temp=0)",
+      "omlx": "oMLX 0.5.7 BatchedEngine (mlx 0.32.0, mlx_lm 0.31.3), stream_chat temperature 0; stream events arrive coalesced, so its decode rate uses first-to-last arrival wall time"
+    },
+    "method": "one discarded warmup per stack, then 4 rounds of the three stacks with the order rotated each round, fresh process per run, all wall-clock. Ready = model open / library load / engine start. TTFT = request start to first visible output. C visible decode uses the recorded per-forward GPU durations, the same method as the published baseline; the Python stacks use stream arrival times.",
+    "output_parity_all_12_runs": true,
+    "results": {
+      "c_metal": {
+        "ready_seconds": {
+          "per_round": [
+            7.110432,
+            7.165777,
+            7.004533,
+            7.091736
+          ],
+          "mean": 7.09312
+        },
+        "ttft_after_ready_seconds": {
+          "per_round": [
+            1.396039,
+            1.389957,
+            1.389069,
+            1.364037
+          ],
+          "mean": 1.384775
+        },
+        "cold_start_to_first_token_seconds": 8.477895,
+        "visible_decode_tokens_per_second": {
+          "per_round": [
+            8.50253,
+            8.454303,
+            8.45729,
+            8.502586
+          ],
+          "mean": 8.479177
+        },
+        "prompt_tokens_per_second_after_ready": 25.996994
+      },
+      "bare_mlx_lm": {
+        "ready_seconds": {
+          "per_round": [
+            3.735445,
+            4.227098,
+            3.778703,
+            3.959507
+          ],
+          "mean": 3.925188
+        },
+        "ttft_after_ready_seconds": {
+          "per_round": [
+            2.595872,
+            2.609209,
+            2.538632,
+            2.649848
+          ],
+          "mean": 2.59839
+        },
+        "cold_start_to_first_token_seconds": 6.523578,
+        "visible_decode_tokens_per_second": {
+          "per_round": [
+            6.059673,
+            6.138144,
+            5.909877,
+            6.005481
+          ],
+          "mean": 6.028294
+        },
+        "prompt_tokens_per_second_after_ready": 13.854732
+      },
+      "omlx": {
+        "ready_seconds": {
+          "per_round": [
+            4.990849,
+            4.732148,
+            4.501413,
+            4.457721
+          ],
+          "mean": 4.670533
+        },
+        "ttft_after_ready_seconds": {
+          "per_round": [
+            3.521598,
+            3.0643,
+            2.968253,
+            2.898254
+          ],
+          "mean": 3.113101
+        },
+        "cold_start_to_first_token_seconds": 7.783634,
+        "visible_decode_tokens_per_second": {
+          "per_round": [
+            5.91411,
+            5.89141,
+            6.003176,
+            5.781904
+          ],
+          "mean": 5.89765
+        },
+        "prompt_tokens_per_second_after_ready": 11.564031
+      }
+    },
+    "ratios_vs_c": {
+      "ttft_after_ready": {
+        "mlx_lm": 1.876398,
+        "omlx": 2.248091
+      },
+      "visible_decode": {
+        "c_over_mlx_lm": 1.406563,
+        "c_over_omlx": 1.437721
+      }
+    }
   },
   "same_machine_omlx_baseline": {
     "scope": "oMLX BatchedEngine with the same rendered prompt and a checkpoint exported from the exact C deployment tensor images",

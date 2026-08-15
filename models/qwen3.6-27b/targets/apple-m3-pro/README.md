@@ -111,6 +111,30 @@ The Qwen model card does not publish a token-throughput number for Qwen3.6-27B. 
 
 No speedup ratio is calculated: the hardware, precision, prompt length, generated length and memory accounting differ. Sources: [Qwen official model card](https://huggingface.co/Qwen/Qwen3.6-27B) and [official Transformers Qwen3.5/3.6 implementation notes](https://github.com/huggingface/transformers/blob/main/docs/source/en/model_doc/qwen3_5.md#usage-tips-and-notes).
 
+### Same-window three-way measurement
+
+One session, all three stacks on the same value-equivalent checkpoint and
+the same 36-token prompt, greedy: one discarded warmup per stack, then
+four rounds with the stack order rotated each round, fresh process per
+run, all wall-clock. All 12 measured runs produced the published output.
+Ready means model open (C), library load (mlx-lm) or engine start (oMLX);
+TTFT is request start to first visible output. oMLX streams coalesced
+events, so its decode rate uses first-to-last arrival time.
+
+| Metric, mean of 4 | C/Metal (this repo) | Bare mlx-lm 0.31.3 | oMLX 0.5.7 |
+|---|---:|---:|---:|
+| Ready (open / load / engine start) | 7.093 s | 3.925 s | 4.671 s |
+| TTFT after ready | **1.385 s** | 2.598 s | 3.113 s |
+| Cold start to first token | 8.478 s | **6.524 s** | 7.784 s |
+| Visible decode | **8.479 tok/s** | 6.028 tok/s | 5.898 tok/s |
+| Prompt throughput after ready | **26.0 tok/s** | 13.9 tok/s | 11.6 tok/s |
+
+The C runtime decodes 1.41x faster than bare mlx-lm and 1.44x faster than
+oMLX, and answers a ready model 1.88x and 2.25x sooner respectively. The
+one loss is cold start: the C ready phase carries the one-time 7 s weight
+wiring, which amortizes in a long-lived process. Raw data:
+`same_window_three_way` in [`results.json`](results.json).
+
 ### Bare mlx-lm reference
 
 The published same-machine baseline above is the complete oMLX server
