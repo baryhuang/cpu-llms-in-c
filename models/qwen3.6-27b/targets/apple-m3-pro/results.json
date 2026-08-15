@@ -649,6 +649,14 @@
         "prompt_tokens_per_second_after_ready": 11.564031
       }
     },
+    "end_to_end_request_wall_seconds": {
+      "definition": "model ready to last output token for the full request: 36-token prompt plus 30-token greedy completion; C from prompt_processing+continuation walls, mlx-lm from the last stream arrival, oMLX from its request wall",
+      "c_metal": { "per_round": [4.953, 4.949, 4.937, 4.902], "mean": 4.935 },
+      "bare_mlx_lm": { "per_round": [7.55, 7.5, 7.606, 7.642], "mean": 7.575 },
+      "omlx": { "per_round": [8.428, 7.995, 7.798, 7.905], "mean": 8.031 },
+      "c_speedup": { "vs_mlx_lm": 1.535, "vs_omlx": 1.627 },
+      "completion_tokens_per_second_end_to_end": { "c_metal": 6.08, "bare_mlx_lm": 3.96, "omlx": 3.74 }
+    },
     "ratios_vs_c": {
       "ttft_after_ready": {
         "mlx_lm": 1.876398,
