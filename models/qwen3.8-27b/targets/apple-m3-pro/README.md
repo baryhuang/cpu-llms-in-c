@@ -62,12 +62,22 @@ The serving stack needs no changes either:
 the OpenAI-compatible server and the Chatbox client against these
 images.
 
-The chat template is the pinned `enable_thinking=false` wrapper shared
-with the 3.6 target, which under the 3.8 template semantics is
-equivalent to `reasoning_effort: medium` with an empty think block.
-The 3.8 template's `reasoning_effort` system-message injections and
-`preserve_thinking` replay are not implemented yet; both are
-template-layer work, not graph work.
+The serving layer implements the full 3.8 template semantics.
+`tools/qwen36_serve.py --thinking` (or a per-request OpenAI-style
+`reasoning_effort` field: `low` / `medium` / `xhigh`, `none` to
+disable) renders the thinking-mode template with the verbatim
+reasoning-effort system-message injections, opens the reply at
+`<think>\n`, streams the think block as `reasoning_content` deltas and
+the answer as `content`, and replays prior turns' reasoning
+(`preserve_thinking`). Greedy thinking requests keep lossless
+speculative decoding. Verified end to end against these images: an
+xhigh request streamed 301 characters of reasoning and the correct
+split answer; `reasoning_effort: none` reproduces the pinned no-think
+behavior exactly; a low-effort request that exhausted a 400-token
+budget mid-think returned the truncated thinking in
+`reasoning_content` with empty `content` and `finish_reason: length`
+(the OpenAI reasoning-model convention — give thinking mode a larger
+token budget). The default remains the pinned no-think template.
 
 ## Verification
 
@@ -78,6 +88,8 @@ template-layer work, not graph work.
 | Prefill-vs-decode state parity | 24/24 checks pass (exact/float-tile/half-tile modes, runs 16-96 tokens, argmax identical on every run, zero NaN) |
 | Smoke | "What is 2+2" → `4`; C `max2` function correct; 法国首都 → `巴黎` |
 | MTP | auto-enables against the 3.8 draft head; the code smoke accepted 19 drafts over 9 adaptive steps |
+| Thinking mode | xhigh request: correct answer with reasoning split into `reasoning_content`; `none` reproduces no-think byte behavior |
+| Quality (pinned ARC-Easy-5 smoke) | 3/5 strict at the 32-token budget, 4/5 at 96; every miss states the correct answer's content in prose without the required `Answer: X` line — under the no-think template 3.8 drifts toward explanation where 3.6 stays format-compliant (5/5). [Record](../../benchmarks/arc-easy-5/results-macos-m3-pro.json) |
 
 ## Measured throughput
 

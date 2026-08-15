@@ -35,9 +35,32 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MODEL_ID = "qwen3.6-27b"
 
 
-def render_template(messages):
-    """The pinned official template with enable_thinking=false, matching
-    tools/qwen36_m3_chat.c and the published runtime contract.
+REASONING_EFFORT_TEXT = {
+    "xhigh": ("Reasoning effort is set to xhigh. Please think carefully "
+              "through the task, validate key assumptions, consider "
+              "plausible alternatives, and prioritize correctness, "
+              "consistency, and clarity in the final answer."),
+    "low": ("Reasoning effort is set to low. Keep your thinking brief "
+            "and focused, moving directly to the conclusion without "
+            "unnecessary elaboration."),
+    "medium": None,
+}
+
+
+def message_text(message):
+    content = message.get("content", "")
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content
+                          if isinstance(part, dict))
+    return content
+
+
+def render_template(messages, thinking=False, effort="xhigh"):
+    """The official Qwen3.6/3.8 template. Default is the pinned
+    enable_thinking=false rendering; thinking mode opens the reply at
+    '<think>\n' and injects the Qwen3.8 reasoning-effort instructions
+    (verbatim template strings) at the top of the system turn, creating
+    one when the effort is not medium and no system message exists.
 
     Prior assistant turns replay the think block the model actually saw
     (empty in no-think mode, or the turn's reasoning_content) — the
@@ -46,22 +69,72 @@ def render_template(messages):
     so the engine prefills only the new turn instead of the whole
     history."""
     parts = []
-    for message in messages:
+    remaining = list(messages)
+    instructions = REASONING_EFFORT_TEXT.get(effort) if thinking else None
+    if remaining and remaining[0].get("role") == "system":
+        content = message_text(remaining[0]).strip()
+        remaining = remaining[1:]
+        head = (instructions + "\n\n" if instructions else "") + content
+        if head:
+            parts.append(f"<|im_start|>system\n{head}<|im_end|>\n")
+    elif instructions:
+        parts.append(f"<|im_start|>system\n{instructions}<|im_end|>\n")
+    for message in remaining:
         role = message.get("role", "user")
         if role not in ("system", "user", "assistant"):
             role = "user"
-        content = message.get("content", "")
-        if isinstance(content, list):
-            content = "".join(part.get("text", "") for part in content
-                              if isinstance(part, dict))
+        content = message_text(message)
         if role == "assistant":
             reasoning = message.get("reasoning_content") or ""
             parts.append(f"<|im_start|>assistant\n<think>\n{reasoning}\n"
                          f"</think>\n\n{content}<|im_end|>\n")
         else:
             parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
-    parts.append("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+    if thinking:
+        parts.append("<|im_start|>assistant\n<think>\n")
+    else:
+        parts.append("<|im_start|>assistant\n<think>\n\n</think>\n\n")
     return "".join(parts)
+
+
+class ThinkSplitter:
+    """Split a streamed reply into reasoning and answer. In thinking
+    mode the generation begins inside the think block; everything before
+    '</think>' is reasoning_content, everything after (minus the
+    separating blank line) is content. Holds back a possible partial tag
+    at a delta boundary."""
+
+    def __init__(self, active):
+        self.active = active
+        self.buffer = ""
+        self.done = not active
+
+    def feed(self, text):
+        if self.done:
+            return ("", text) if self.active else (None, text)
+        self.buffer += text
+        marker = self.buffer.find("</think>")
+        if marker >= 0:
+            reasoning = self.buffer[:marker]
+            rest = self.buffer[marker + len("</think>"):]
+            rest = rest.lstrip("\n")
+            self.buffer = ""
+            self.done = True
+            return (reasoning, rest)
+        # hold back a suffix that could start the closing tag
+        keep = 0
+        for probe in range(min(len("</think>") - 1, len(self.buffer)), 0, -1):
+            if "</think>".startswith(self.buffer[-probe:]):
+                keep = probe
+                break
+        emit = self.buffer[:len(self.buffer) - keep]
+        self.buffer = self.buffer[len(self.buffer) - keep:]
+        return (emit, "")
+
+    def flush(self):
+        rest = self.buffer
+        self.buffer = ""
+        return rest
 
 
 class Engine:
@@ -126,6 +199,8 @@ class Engine:
 
 
 ENGINE = None
+THINKING_DEFAULT = False
+EFFORT_DEFAULT = "xhigh"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -176,7 +251,22 @@ class Handler(BaseHTTPRequestHandler):
                 "message": "body must be JSON with a messages array",
                 "type": "invalid_request_error"}}, 400)
             return
-        rendered = render_template(messages)
+        # Thinking mode: the server default (--thinking /
+        # QWEN36_THINKING) can be overridden per request with the
+        # OpenAI-style reasoning_effort field ("none" disables thinking,
+        # low/medium/xhigh select the Qwen3.8 effort levels; "high" maps
+        # to xhigh).
+        thinking = THINKING_DEFAULT
+        effort = EFFORT_DEFAULT
+        effort_field = request.get("reasoning_effort")
+        if isinstance(effort_field, str):
+            level = effort_field.lower()
+            if level == "none":
+                thinking = False
+            elif level in ("low", "medium", "xhigh", "high"):
+                thinking = True
+                effort = "xhigh" if level == "high" else level
+        rendered = render_template(messages, thinking, effort)
         # Per-request sampling passes straight through to the engine.
         # Absent fields keep the engine defaults (greedy, which also
         # enables lossless speculative decoding); a request that sets
@@ -200,12 +290,13 @@ class Handler(BaseHTTPRequestHandler):
             include_usage = bool(
                 (request.get("stream_options") or {}).get("include_usage"))
             self.stream_completion(rendered, identifier, created,
-                                   include_usage, sampling)
+                                   include_usage, sampling, thinking)
         else:
-            self.plain_completion(rendered, identifier, created, sampling)
+            self.plain_completion(rendered, identifier, created, sampling,
+                                  thinking)
 
     def plain_completion(self, rendered, identifier, created,
-                         sampling=None):
+                         sampling=None, thinking=False):
         chunks = []
         try:
             stats = ENGINE.generate(rendered, chunks.append, sampling)
@@ -213,11 +304,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": {"message": str(failure),
                                       "type": "server_error"}}, 500)
             return
+        text = "".join(chunks)
+        message = {"role": "assistant", "content": text}
+        if thinking:
+            marker = text.find("</think>")
+            if marker >= 0:
+                message["reasoning_content"] = text[:marker]
+                message["content"] = text[marker + len("</think>"):] \
+                    .lstrip("\n")
+            else:
+                message["reasoning_content"] = text
+                message["content"] = ""
         self.send_json({
             "id": identifier, "object": "chat.completion",
             "created": created, "model": MODEL_ID,
-            "choices": [{"index": 0, "message": {
-                "role": "assistant", "content": "".join(chunks)},
+            "choices": [{"index": 0, "message": message,
                 "finish_reason": stats.get("stop", "stop")}],
             "usage": {
                 "prompt_tokens": stats.get("prompt_tokens", 0),
@@ -227,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def stream_completion(self, rendered, identifier, created,
-                          include_usage, sampling=None):
+                          include_usage, sampling=None, thinking=False):
         # The SSE body carries no Content-Length, so it must use chunked
         # transfer encoding: without the 0-length terminator a keep-alive
         # client never sees the body end and its UI stays in the waiting
@@ -255,9 +356,22 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             event(chunk({"role": "assistant", "content": ""}))
-            stats = ENGINE.generate(
-                rendered,
-                lambda text: event(chunk({"content": text})), sampling)
+            splitter = ThinkSplitter(thinking)
+
+            def deliver(text):
+                reasoning, content = splitter.feed(text)
+                if reasoning:
+                    event(chunk({"reasoning_content": reasoning}))
+                if content:
+                    event(chunk({"content": content}))
+
+            stats = ENGINE.generate(rendered, deliver, sampling)
+            tail = splitter.flush()
+            if tail:
+                if splitter.done:
+                    event(chunk({"content": tail}))
+                else:
+                    event(chunk({"reasoning_content": tail}))
             event(chunk({}, stats.get("stop", "stop")))
             if include_usage:
                 prompt_tokens = stats.get("prompt_tokens", 0)
@@ -295,6 +409,13 @@ def main():
     parser.add_argument("--max-tokens", type=int,
                         default=int(os.environ.get("QWEN36_MAX_TOKENS",
                                                    3072)))
+    parser.add_argument("--thinking", action="store_true",
+                        default=os.environ.get("QWEN36_THINKING",
+                                               "") not in ("", "0"))
+    parser.add_argument("--reasoning-effort",
+                        default=os.environ.get("QWEN36_REASONING_EFFORT",
+                                               "xhigh"),
+                        choices=["low", "medium", "xhigh"])
     parser.add_argument("--temperature", type=float,
                         default=float(os.environ.get("QWEN36_TEMPERATURE",
                                                      0)))
@@ -304,7 +425,9 @@ def main():
                         default=int(os.environ.get("QWEN36_SEED", 42)))
     arguments = parser.parse_args()
 
-    global ENGINE
+    global ENGINE, THINKING_DEFAULT, EFFORT_DEFAULT
+    THINKING_DEFAULT = bool(arguments.thinking)
+    EFFORT_DEFAULT = arguments.reasoning_effort
     ENGINE = Engine(arguments)
     ENGINE.start()
 
