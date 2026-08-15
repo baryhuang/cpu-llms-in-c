@@ -181,6 +181,9 @@ kernel void qwen36_attention_softmax_value_gate(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
     float maximum = reduction[0];
+    /* The same threadgroup array carries the next reduction; every thread
+     * must finish reading the maximum before any thread overwrites slot 0. */
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     float local_sum = 0.0f;
     for (uint position = tid; position < parameters.context_length;
          position += 256) {

@@ -316,22 +316,53 @@ int main(int argc, char **argv) {
     start = seconds_now();
     double prompt_first_forward_ms = 0.0;
     double prompt_start = start;
-    for (size_t position = 0; position < prompt_count; ++position) {
-        double token_start = seconds_now();
-        if (qwen36_m3_model_forward(
-                model, prompt_ids[position], (uint32_t)position, &result,
-                &logits, &logit_count, error, sizeof(error)) != 0) {
-            fprintf(stderr, "prompt forward failed at %zu: %s\n",
-                    position, error);
+    const char *prefill_env = getenv("QWEN36_PREFILL");
+    int prefill_enabled = prefill_env == NULL ||
+                          strcmp(prefill_env, "0") != 0;
+    qwen36_m3_prefill_result prefill_info = {0};
+    if (prefill_enabled && prompt_count > 1) {
+        if (qwen36_m3_model_prefill(
+                model, prompt_ids, (uint32_t)(prompt_count - 1), 0,
+                &prefill_info, error, sizeof(error)) != 0) {
+            fprintf(stderr, "prompt prefill failed: %s\n", error);
             qwen36_m3_model_close(model);
-            free(generated); free(token_ms); free(trimmed_prompt);
-            free(chat); free(prompt_ids);
+            free(generated); free(token_ms); free(emitted_ms);
+            free(trimmed_prompt); free(chat); free(prompt_ids);
             qwen36_tokenizer_close(tokenizer);
             return 7;
         }
-        if (position == 0)
-            prompt_first_forward_ms =
-                (seconds_now() - token_start) * 1000.0;
+        prompt_first_forward_ms = prefill_info.first_chunk_ms;
+        if (qwen36_m3_model_forward(
+                model, prompt_ids[prompt_count - 1],
+                (uint32_t)(prompt_count - 1), &result, &logits,
+                &logit_count, error, sizeof(error)) != 0) {
+            fprintf(stderr, "prompt forward failed at %zu: %s\n",
+                    prompt_count - 1, error);
+            qwen36_m3_model_close(model);
+            free(generated); free(token_ms); free(emitted_ms);
+            free(trimmed_prompt); free(chat); free(prompt_ids);
+            qwen36_tokenizer_close(tokenizer);
+            return 7;
+        }
+    } else {
+        for (size_t position = 0; position < prompt_count; ++position) {
+            double token_start = seconds_now();
+            if (qwen36_m3_model_forward(
+                    model, prompt_ids[position], (uint32_t)position,
+                    &result, &logits, &logit_count,
+                    error, sizeof(error)) != 0) {
+                fprintf(stderr, "prompt forward failed at %zu: %s\n",
+                        position, error);
+                qwen36_m3_model_close(model);
+                free(generated); free(token_ms); free(emitted_ms);
+                free(trimmed_prompt); free(chat); free(prompt_ids);
+                qwen36_tokenizer_close(tokenizer);
+                return 7;
+            }
+            if (position == 0)
+                prompt_first_forward_ms =
+                    (seconds_now() - token_start) * 1000.0;
+        }
     }
     double prompt_processing_ms = (seconds_now() - start) * 1000.0;
     double prompt_after_first_ms =
@@ -404,7 +435,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "generated text decode failed: %s\n", error);
         return 9;
     }
-    printf("{\n  \"schema\": 2,\n");
+    printf("{\n  \"schema\": 3,\n");
     printf("  \"scope\": \"Qwen3.6-27B free-text end-to-end generation\",\n");
     printf("  \"prompt\": "); print_json_string(argv[9]); printf(",\n");
     printf("  \"rendered_chat\": "); print_json_string(chat); printf(",\n");
@@ -464,6 +495,14 @@ int main(int argc, char **argv) {
         printf("null");
     printf(", \"cpu_decode_and_flush_ms\": %.6f},\n",
            text_stream.cpu_seconds * 1000.0);
+    printf("  \"prefill\": {\"enabled\": %s, \"token_count\": %u, "
+           "\"chunk32_count\": %u, \"chunk16_count\": %u, "
+           "\"single_count\": %u, \"duration_ms\": %.6f, "
+           "\"first_chunk_ms\": %.6f},\n",
+           prefill_enabled && prompt_count > 1 ? "true" : "false",
+           prefill_info.token_count, prefill_info.chunk32_count,
+           prefill_info.chunk16_count, prefill_info.single_count,
+           prefill_info.duration_ms, prefill_info.first_chunk_ms);
     printf("  \"memory\": {\"mapped_weights_bytes\": %zu, "
            "\"recurrent_state_bytes\": %zu, \"kv_cache_bytes\": %zu, "
            "\"physical_footprint_bytes\": %zu}\n}\n",

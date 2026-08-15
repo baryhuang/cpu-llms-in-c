@@ -39,6 +39,7 @@ QWEN36_M3_DELTANET_AIR := $(BUILD_DIR)/qwen36-m3-deltanet.air
 QWEN36_M3_LAYER_AIR := $(BUILD_DIR)/qwen36-m3-layer.air
 QWEN36_M3_ATTENTION_AIR := $(BUILD_DIR)/qwen36-m3-attention.air
 QWEN36_M3_GLOBAL_AIR := $(BUILD_DIR)/qwen36-m3-global.air
+QWEN36_M3_PREFILL_AIR := $(BUILD_DIR)/qwen36-m3-prefill.air
 QWEN36_M3_METALLIB := $(BUILD_DIR)/qwen36-m3-q4.metallib
 QWEN36_M3_RUNTIME_OBJECT := $(BUILD_DIR)/qwen36-m3.o
 QWEN36_M3_BENCH_OBJECT := $(BUILD_DIR)/qwen36-m3-mlp-bench.o
@@ -72,8 +73,9 @@ QWEN36_M3_GENERATE_OBJECT := $(BUILD_DIR)/qwen36-m3-generate-cli.o
 QWEN36_M3_GENERATE := $(BUILD_DIR)/qwen36-m3-generate
 QWEN36_SAMPLER_TEST := $(BUILD_DIR)/qwen36-sampler-test
 QWEN36_M3_API_STATE_TEST := $(BUILD_DIR)/qwen36-m3-api-state-test
+QWEN36_M3_PREFILL_PARITY_TEST := $(BUILD_DIR)/qwen36-m3-prefill-parity-test
 
-.PHONY: all a113x clean fixture linux-tools qwen36-m3-bench qwen36-m3-deltanet-bench qwen36-m3-layer-bench qwen36-m3-attention-bench qwen36-m3-decode qwen36-m3-generate qwen36-m3-api-state-test qwen36-tools test whisper-small-tools
+.PHONY: all a113x clean fixture linux-tools qwen36-m3-bench qwen36-m3-deltanet-bench qwen36-m3-layer-bench qwen36-m3-attention-bench qwen36-m3-decode qwen36-m3-generate qwen36-m3-api-state-test qwen36-m3-prefill-parity-test qwen36-tools test whisper-small-tools
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
@@ -105,6 +107,11 @@ qwen36-m3-generate: $(QWEN36_M3_GENERATE) $(QWEN36_M3_METALLIB)
 # fixture-only `test` target. Run it manually:
 #   build/qwen36-m3-api-state-test <model-directory> <metallib>
 qwen36-m3-api-state-test: $(QWEN36_M3_API_STATE_TEST) $(QWEN36_M3_METALLIB)
+
+# Live bitwise parity between batched prefill and one-token decode. Run:
+#   build/qwen36-m3-prefill-parity-test <model-directory> <metallib>
+qwen36-m3-prefill-parity-test: $(QWEN36_M3_PREFILL_PARITY_TEST) \
+	$(QWEN36_M3_METALLIB)
 
 qwen36-tools: $(QWEN36_SAFETENSORS_INSPECT) $(QWEN36_M3_PACK) \
 	$(QWEN36_M3_ATTENTION_PACK) $(QWEN36_M3_GLOBAL_PACK) \
@@ -312,9 +319,13 @@ $(QWEN36_M3_GLOBAL_AIR): $(QWEN36_M3)/qwen36_global.metal
 	mkdir -p $(BUILD_DIR)
 	xcrun -sdk macosx metal -c $< -o $@
 
+$(QWEN36_M3_PREFILL_AIR): $(QWEN36_M3)/qwen36_prefill.metal
+	mkdir -p $(BUILD_DIR)
+	xcrun -sdk macosx metal -c $< -o $@
+
 $(QWEN36_M3_METALLIB): $(QWEN36_M3_AIR) $(QWEN36_M3_DELTANET_AIR) \
 	$(QWEN36_M3_LAYER_AIR) $(QWEN36_M3_ATTENTION_AIR) \
-	$(QWEN36_M3_GLOBAL_AIR)
+	$(QWEN36_M3_GLOBAL_AIR) $(QWEN36_M3_PREFILL_AIR)
 	xcrun -sdk macosx metallib $^ -o $@
 
 $(QWEN36_M3_RUNTIME_OBJECT): $(QWEN36_M3)/qwen36_m3.m $(QWEN36_M3)/qwen36_m3.h \
@@ -436,6 +447,14 @@ $(QWEN36_M3_API_STATE_TEST): tests/qwen36_m3_api_state_test.c \
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN36_M3) \
 		tests/qwen36_m3_api_state_test.c $(QWEN36_M3_DECODE_OBJECT) \
+		-o $@ -framework Foundation -framework Metal -lm
+
+$(QWEN36_M3_PREFILL_PARITY_TEST): tests/qwen36_m3_prefill_parity_test.c \
+	$(QWEN36_M3_DECODE_OBJECT) $(QWEN36_M3)/qwen36_m3_decode.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN36_M3) \
+		tests/qwen36_m3_prefill_parity_test.c \
+		$(QWEN36_M3_DECODE_OBJECT) \
 		-o $@ -framework Foundation -framework Metal -lm
 
 $(QWEN36_SAFETENSORS_INSPECT): tools/qwen36_safetensors_inspect.c \

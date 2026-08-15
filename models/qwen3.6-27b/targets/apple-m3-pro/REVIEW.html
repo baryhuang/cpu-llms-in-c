@@ -47,7 +47,7 @@
     <div class="metric"><b>15.139 GB</b><span>mapped compiled model image</span></div>
   </div>
 
-  <p class="note"><strong>Result:</strong> free-text generation is end to end and the C path matches oMLX on the compared prompt and output token IDs. Decode is faster than oMLX. Prompt processing is still sequential and is 4.2554x slower than oMLX on the 36-token case.</p>
+  <p class="note"><strong>Result:</strong> free-text generation is end to end and the C path matches oMLX on the compared prompt and output token IDs. Decode is faster than oMLX. Batched prefill cut measured TTFT to 9,725.9 ms; the remaining gap to oMLX's 2,655.8 ms is dominated by per-process cold page faults on the 15.1 GB mapped model.</p>
 
   <h2>1. Execution contract</h2>
   <table>
@@ -184,6 +184,19 @@ int max2(int a, int b) {
     </tbody>
   </table>
 
+  <h3>Batched prefill A/B</h3>
+  <p>The prompt now runs through compiled S32/S16 batch graphs plus a one-token tail; the final prompt token stays on the logits-producing decode forward. Nine fresh-process runs: one discarded warmup, then four rounds of prefill-on and prefill-off with alternating order, the 36-token prompt above, greedy seed 42. All eight measured runs produced identical token IDs and text.</p>
+  <table>
+    <thead><tr><th>Metric</th><th class="num">Prefill off</th><th class="num">Prefill on</th></tr></thead>
+    <tbody>
+      <tr><td>TTFT after model open, mean of 4</td><td class="num">11,547.6 ms</td><td class="num"><strong>9,725.9 ms — 1.187x faster</strong></td></tr>
+      <tr><td>First weight-touching unit, cold page faults included</td><td class="num">7,370.1 ms first forward</td><td class="num">8,831.5 ms first S32 chunk of 32 tokens</td></tr>
+      <tr><td>Prompt work after that unit</td><td class="num">4,177.1 ms, 35 sequential forwards</td><td class="num">894.2 ms, 3 tail forwards + final prompt forward</td></tr>
+      <tr><td>Decode decisions/s</td><td class="num">8.3588</td><td class="num">8.2408; gap 0.118 vs 0.39 round spread</td></tr>
+    </tbody>
+  </table>
+  <p>Numeric parity: S16 chunks are bitwise identical to the one-token path in all 256 layer-state buffers and probe logits. S32 chunks decide the identical next token in every tested run; their states carry fast-math FMA-contraction drift bounded by 0.0841 absolute on state magnitudes near 20 with zero NaN. End-to-end token parity — the published comparison standard — held on 5/5 smoke prompts and 8/8 A/B runs. Building the batched graph exposed a latent threadgroup race in the decode attention softmax reduction, present but never manifested in the one-token dispatch; both kernels now carry the missing barrier, an ordering-only change.</p>
+
   <h2>4. Verification</h2>
   <p>This section is not included in any benchmark duration above.</p>
   <table>
@@ -200,6 +213,8 @@ int max2(int a, int b) {
       <tr><td>Smoke-case semantics / strict format</td><td>5/5 / 4/5</td><td>one documented format failure</td></tr>
       <tr><td>Async decode API state machine</td><td>16/16 checks: double submit, wait without submit, invalid token, position bound, reset and close with a pending command</td><td class="pass">pass</td></tr>
       <tr><td>Streaming A/B token parity</td><td>12/12 runs identical IDs and text across parent, async and streaming variants</td><td class="pass">pass</td></tr>
+      <tr><td>Prefill state parity</td><td>S16 bitwise identical in all 256 layer-state buffers and logits; S32 argmax-identical, drift &le; 0.0841, zero NaN</td><td class="pass">pass</td></tr>
+      <tr><td>Prefill end-to-end token parity</td><td>identical IDs and text on 5/5 smoke prompts and 8/8 A/B runs</td><td class="pass">pass</td></tr>
     </tbody>
   </table>
 
@@ -220,7 +235,8 @@ build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib \
   <h2>6. Open work</h2>
   <table>
     <tr><th>Open item</th><th>Measured reason</th></tr>
-    <tr><td>Batched prefill</td><td>Current 36-token prompt path is 4.2554x slower than oMLX.</td></tr>
+    <tr><td>Cold page prefault</td><td>Roughly 7.4 s of the 9.73 s TTFT faults mapped model pages per process.</td></tr>
+    <tr><td>Batched kernel tuning</td><td>The warm S32 chunk spends about 1.4 s of compute on 32 tokens; correctness-first, untuned.</td></tr>
     <tr><td>Message-array C API</td><td>Current CLI accepts arbitrary text but only as one user message.</td></tr>
     <tr><td>FP16/Q8 KV cache</td><td>Current cache costs 128 KiB per context token.</td></tr>
     <tr><td>Standardized quality suite</td><td>Five smoke cases are insufficient for a general quality claim.</td></tr>

@@ -1,5 +1,5 @@
 {
-  "schema": 4,
+  "schema": 5,
   "status": "free-text-end-to-end",
   "measured_at": "2026-08-14T13:20:00+08:00",
   "machine": {
@@ -249,6 +249,96 @@
       }
     ],
     "verdict": "No decode-throughput regression: the three variant means differ by at most 0.037 decisions/s while per-variant round spread is 0.115 to 0.254 decisions/s. The 7.679 decisions/s reading in the first streaming smoke run is attributed to run-to-run variance, not to the async API change. Streaming adds 0.115 to 0.211 ms total CPU decode-and-flush work per 30-token generation."
+  },
+  "prefill_increment": {
+    "measured_at": "2026-08-14T18:40:00+08:00",
+    "scope": "batched S32/S16 prompt prefill graphs with a one-token tail; the final prompt token stays on the logits-producing decode forward",
+    "api": "qwen36_m3_model_prefill(model, ids, count, start_position, result, error, capacity); QWEN36_PREFILL=0 restores the sequential path, QWEN36_PREFILL_MAX_CHUNK=16 restricts to the bitwise-exact S16 bucket",
+    "verification": {
+      "state_parity_test": "build/qwen36-m3-prefill-parity-test: token runs 16/19/32/35/48 vs the one-token reference; S16-only runs bitwise-identical in all 256 layer-state buffers and probe logits; S32 runs argmax-identical with fast-math state drift bounded by 0.0841 absolute on state magnitudes around 20 and zero NaN",
+      "s32_drift_cause": "fast-math FMA contraction differs between the unrolled batch positions of the S32 specialization and the one-token kernel; the S16 specialization happens to contract identically",
+      "end_to_end_token_parity": "prefill on vs off: identical token IDs and text on the five published smoke prompts and the 8-run interleaved A/B",
+      "race_fixed": "qwen36_attention_softmax_value reused one threadgroup array for the max and sum reductions with no barrier between reading the maximum and overwriting slot 0; latent in the 24-threadgroup decode dispatch, exposed by the 24-x-batch prefill dispatch; fixed with a threadgroup barrier in both kernels"
+    },
+    "ab_comparison": {
+      "method": "9 fresh-process runs: 1 discarded warmup, then 4 rounds of prefill-on and prefill-off with order alternating per round; same 36-token published prompt, greedy seed 42",
+      "token_parity_across_all_8_runs": true,
+      "time_to_first_token_after_model_open_ms": {
+        "prefill_off": {
+          "per_round": [
+            11516.487,
+            11568.123,
+            11637.916,
+            11467.985
+          ],
+          "mean": 11547.628
+        },
+        "prefill_on": {
+          "per_round": [
+            9797.485,
+            9641.884,
+            9805.483,
+            9658.601
+          ],
+          "mean": 9725.863
+        },
+        "speedup": 1.187311
+      },
+      "prompt_after_first_unit_ms": {
+        "prefill_off_35_sequential_forwards": {
+          "per_round": [
+            4192.251,
+            4137.254,
+            4222.481,
+            4156.275
+          ],
+          "mean": 4177.065
+        },
+        "prefill_on_tail_3_singles_plus_final_forward": {
+          "per_round": [
+            950.286,
+            892.61,
+            856.703,
+            877.225
+          ],
+          "mean": 894.206
+        }
+      },
+      "first_unit_cold_page_touch_ms": {
+        "prefill_off_first_forward": [
+          7324.099,
+          7430.723,
+          7415.288,
+          7310.116
+        ],
+        "prefill_on_first_s32_chunk": [
+          8847.06,
+          8749.132,
+          8948.656,
+          8781.22
+        ]
+      },
+      "decode_decisions_per_second": {
+        "prefill_off": [
+          8.265626,
+          8.467322,
+          8.385482,
+          8.316871
+        ],
+        "prefill_on": [
+          8.233855,
+          8.291782,
+          8.078106,
+          8.359424
+        ],
+        "note": "difference of the means is 0.118 while the combined round spread is 0.39; no structural decode change"
+      }
+    },
+    "remaining_limits": [
+      "per-process cold page touch of the mapped model dominates the remaining time to first token",
+      "batched kernels are correctness-first; the S32 chunk takes about 1.4 s of warm compute for 32 tokens and has not been tuned",
+      "prompts shorter than 16 tokens still run the sequential path"
+    ]
   },
   "same_machine_omlx_baseline": {
     "scope": "oMLX BatchedEngine with the same rendered prompt and a checkpoint exported from the exact C deployment tensor images",

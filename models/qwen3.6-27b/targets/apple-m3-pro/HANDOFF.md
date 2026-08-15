@@ -77,6 +77,28 @@ Verification of the increment (raw data in `results.json`
   generated length, measured at most 0.211 ms total at 30 tokens. Replace
   with a stateful incremental detokenizer when generation lengths grow.
 
+## Landed: batched prefill (2026-08-14, second increment)
+
+- `qwen36_prefill.metal` + `qwen36_m3_model_prefill`: S32/S16 chunk graphs
+  specialized through a Metal function constant, one-token tail under 16.
+  Batched Q4 GEMM reads each weight group once per chunk; GDN conv and the
+  delta rule keep time sequential inside blocked kernels; attention chunks
+  run causal batched attention on the shared KV cache. The final prompt
+  token stays on the logits-producing decode forward.
+- `QWEN36_PREFILL=0` restores the sequential path;
+  `QWEN36_PREFILL_MAX_CHUNK=16` restricts to the S16 bucket.
+- Fixed a latent threadgroup race in the decode attention softmax reduction
+  (missing barrier between the max read and the sum-reduction overwrite);
+  ordering-only change, both kernels.
+- Verified: S16 bitwise state+logits parity; S32 argmax-identical with
+  fast-math drift <= 0.0841 abs and zero NaN
+  (`make qwen36-m3-prefill-parity-test`); token parity on 5/5 smoke prompts
+  and 8/8 interleaved A/B runs; TTFT 11,547.6 -> 9,725.9 ms mean
+  (raw data in `results.json` `prefill_increment`).
+- Do not chase bitwise parity across kernel shape variants: fast-math FMA
+  contraction differs per specialization. The published gate is end-to-end
+  token parity plus bounded state drift, matching the C-vs-oMLX standard.
+
 ## Model and target facts
 
 | Item | Value |
@@ -118,9 +140,9 @@ still be learned from the open `mlx-lm` implementation.
 
 | Technique | C/Metal translation |
 |---|---|
-| Separate full-sequence prefill from one-token decode | Compile separate Q4 GEMM and Q4 GEMV graphs |
-| Preserve the sequence dimension through model layers | Accept `[S, 5120]` activations instead of immediately splitting tokens |
-| Chunk long prefill | Compile S16/S32/S64/S128 shape buckets and a tail path |
+| Separate full-sequence prefill from one-token decode | Landed: Q4 GEMM chunk graphs beside the Q4 GEMV decode graph |
+| Preserve the sequence dimension through model layers | Landed: `[S, 5120]` activations through the chunk graph |
+| Chunk long prefill | Landed for S16/S32 with a one-token tail; S64/S128 open |
 | Async evaluate the next decode step | Landed: submit/wait decode API |
 | Use model-specific cache types | Separate GDN conv/recurrent state from attention KV state |
 | Reuse prompt prefix state | Snapshot all layer states at compiler-approved prefix boundaries |
@@ -162,12 +184,11 @@ MLP: packed gate/up -> activation -> down
 
 ## Work not yet implemented
 
-- A real batched prefill graph. The prompt path still executes the one-token
-  decode graph once per prompt token; this is the controlling TTFT limit
-  (4.2554x slower than oMLX on the measured 36-token prompt).
-- Q4 GEMM kernels for S16/S32/S64/S128 prompt buckets.
-- Batched GDN projections and blocked recurrent prefill.
-- Batched causal/FlashAttention prefill for the 16 attention layers.
+- Cold-page prefault/advise for the 15.1 GB mapping: about 7.4 s of the
+  9.73 s TTFT is per-process page faulting, now the controlling limit.
+- Batched kernel tuning: the warm S32 chunk spends about 1.4 s of compute
+  on 32 tokens; profile GEMM tiling and the blocked recurrence.
+- S64/S128 prompt buckets for long prompts, after tuning.
 - Input-byte streaming tokenizer API.
 - Token ring buffer between tokenizer and prefill.
 - Decode sampling/argmax on GPU; CPU sampling is still a serial dependency.
@@ -179,26 +200,17 @@ MLP: packed gate/up -> activation -> down
 
 ## Recommended continuation order
 
-1. Implement a batched prefill API while retaining the streaming decode API:
-
-   ```c
-   qwen36_m3_model_prefill(model, ids, count, ...);
-   qwen36_m3_model_forward_submit(model, token, position, ...);
-   qwen36_m3_model_forward_wait(model, ...);
-   ```
-
-2. Compile fixed prefill shape buckets, beginning with S16 and S32 because the
-   measured review prompt has 36 tokens. Add larger buckets only after boundary
-   and end-to-end parity pass.
-3. Implement model-specific GDN prefill: batch Q/K/V/Z/A/B projections and
-   convolution, keep the recurrent time dependency in a blocked sequential
-   kernel, then batch the output projection.
-4. Batch the causal attention prefill for the 16 attention layers.
-5. Verify: layer-boundary parity against the independent C oracle, then
-   end-to-end token parity on the published prompt set, then a controlled
-   before/after TTFT benchmark with the same rotated-round method used for
-   the streaming A/B.
-6. Update docs/results only with measured incremental effects and exact raw
+1. Measure and remove the cold page-fault cost: try `madvise(MADV_WILLNEED)`
+   or an explicit prefault pass on the mapped images before the first chunk,
+   and measure TTFT with the same rotated-round A/B method.
+2. Profile the S32 chunk (GPU counters or per-dispatch timing) and tune the
+   dominant batched kernels; re-run the prefill parity test after every
+   kernel change.
+3. Add S64/S128 buckets once tuned kernels justify them; verify with the
+   same parity gates.
+4. Continue the streaming pipeline: input-byte tokenizer API, token ring
+   buffer, GPU sampling, prefix-state snapshots.
+5. Update docs/results only with measured incremental effects and exact raw
    commands. Commit and push after verification.
 
 ## Relevant files
@@ -212,7 +224,9 @@ MLP: packed gate/up -> activation -> down
 | `qwen36_q4.metal` | Q4 matrix kernels |
 | `qwen36_layer.metal` | GDN/MLP layer kernels |
 | `qwen36_attention.metal` | full-attention kernels |
+| `qwen36_prefill.metal` | batched S32/S16 prefill kernels |
 | `tests/qwen36_m3_api_state_test.c` | live async API state-machine test |
+| `tests/qwen36_m3_prefill_parity_test.c` | live prefill-vs-decode state and logits parity test |
 | `results.json` | published machine-readable record, includes `streaming_increment` |
 | `REVIEW.html` | published human review |
 

@@ -1,6 +1,6 @@
 # Qwen3.6-27B on Apple M3 Pro
 
-Status: free-text generation runs end to end. The deployment opens compiled images, tokenizes one UTF-8 user prompt, renders the pinned no-thinking chat template, executes the complete 64-layer text graph, samples, and decodes text. Generated text streams incrementally while the next GPU forward is in flight. It does not load Python, MLX, llama.cpp, or a C++ runtime.
+Status: free-text generation runs end to end. The deployment opens compiled images, tokenizes one UTF-8 user prompt, renders the pinned no-thinking chat template, prefills the prompt through batched S32/S16 graphs, executes the complete 64-layer text graph, samples, and decodes text. Generated text streams incrementally while the next GPU forward is in flight. It does not load Python, MLX, llama.cpp, or a C++ runtime.
 
 ## Target pin
 
@@ -86,7 +86,11 @@ The same-machine comparison uses the prompt above, the same 36 prompt IDs, greed
 | Model tensor memory | 15.139 GB file-mapped | 15.135 GB MLX active + 0.827 GB MLX cache | both exclude comparison-stack code pages |
 | Peak process physical footprint | 0.277 GB plus file-backed mapped pages | 16.376 GB | accounting models differ; see Memory |
 
-The C TTFT result is not competitive yet. It runs the one-token graph 36 times; oMLX submits a batched prompt graph. The first C forward also takes 7,129.150 ms because it faults the mapped model pages into the process. The remaining 35 prompt forwards take 4,172.052 ms.
+The table above is the published baseline record from before batched prefill
+landed; it ran the one-token graph 36 times. The batched prefill section
+below reduces measured TTFT to 9,725.9 ms mean. The dominant remaining cost
+is the per-process fault-in of the mapped model pages, roughly 7.4 s inside
+whichever unit touches the weights first.
 
 oMLX 0.5.7 was built with its native `qwen35_prefill` extension available. Its default Q4 and FA256 routes start at 2,048 prompt tokens, so those native long-prefill kernels did not engage for this 36-token case.
 
@@ -184,6 +188,56 @@ visible token prefix each step, which is O(T^2) in generated length but
 measured at most 0.211 ms total for 30 tokens; a stateful incremental
 detokenizer replaces it when generation lengths grow.
 
+## Batched prefill
+
+The prompt no longer replays the one-token decode graph per token. A
+`qwen36_m3_model_prefill` call pushes prompt tokens through compiled batch
+graphs: S32 chunks first, then an S16 chunk, then one-token forwards for a
+tail shorter than 16. The final prompt token stays on the normal decode
+forward so its logits feed the sampler. Batched Q4 GEMM kernels read each
+weight group once per chunk instead of once per token; the GDN convolution
+and delta-rule recurrence keep their time dependency inside blocked
+sequential kernels; the attention chunk performs causal batched attention
+against the shared KV cache. `QWEN36_PREFILL=0` restores the sequential
+path and `QWEN36_PREFILL_MAX_CHUNK=16` restricts chunking to the S16 bucket.
+
+### Measured effect
+
+Nine fresh-process runs: one discarded warmup, then four rounds of
+prefill-on and prefill-off with the order alternating each round; the same
+36-token published prompt, greedy seed 42. All eight measured runs produced
+identical token IDs and text.
+
+| Metric | Prefill off | Prefill on |
+|---|---:|---:|
+| Time to first token after model open, mean of 4 | 11,547.6 ms | **9,725.9 ms (1.187x faster)** |
+| First weight-touching unit, includes cold page faults | 7,370.1 ms first forward | 8,831.5 ms first S32 chunk, 32 tokens |
+| Prompt work after that unit | 4,177.1 ms, 35 sequential forwards | 894.2 ms, 3 tail forwards plus the final prompt forward |
+| Decode decisions/s | 8.3588 | 8.2408; gap 0.118 vs combined round spread 0.39 |
+
+### Numeric parity
+
+`build/qwen36-m3-prefill-parity-test` compares every persistent layer state
+buffer and the next-token logits between prefilled and sequentially pushed
+token runs of 16, 19, 32, 35 and 48 tokens:
+
+- S16-only runs are bitwise identical in all 256 state buffers and logits.
+- S32 runs decide the identical next token in every case; their states show
+  fast-math drift bounded by 0.0841 absolute on state magnitudes around 20,
+  with zero NaN. The cause is FMA contraction differing between the unrolled
+  batch positions of the S32 kernel specialization and the one-token kernel;
+  end-to-end token parity is the published gate, matching the C-vs-oMLX
+  comparison standard.
+- Prefill on versus off produced identical token IDs and text on all five
+  published smoke prompts.
+
+Building the batched graph also exposed a latent threadgroup race in the
+decode attention softmax kernel: the same threadgroup array carried the max
+and sum reductions with no barrier between reading the maximum and
+overwriting slot 0. The 24-threadgroup decode dispatch never manifested it;
+the 24-by-batch prefill dispatch did. Both kernels now carry the barrier,
+which changes ordering only, not arithmetic.
+
 ## Verification
 
 Verification is outside the timed benchmark above.
@@ -202,6 +256,8 @@ Verification is outside the timed benchmark above.
 | Five free-text smoke cases | semantic 5/5; strict requested format 4/5 |
 | Async decode API state machine | 16/16 checks: double submit, wait without submit, invalid token, position bound, reset and close with a pending command (`make qwen36-m3-api-state-test`, needs the model images) |
 | Streaming A/B token parity | 12/12 runs identical IDs and text across parent, async and streaming variants |
+| Prefill state parity | S16 bitwise identical in all 256 layer-state buffers and logits; S32 argmax-identical with drift bounded by 0.0841 and zero NaN (`make qwen36-m3-prefill-parity-test`) |
+| Prefill end-to-end token parity | identical IDs and text on 5/5 smoke prompts and 8/8 A/B runs |
 
 The norm oracle uses the deployed checkpoint convention: standard RMSNorm and q/k norm tensors are direct multiplicative weights, not Hugging Face-style delta weights. Delta q/k normalization uses the exact 128-dimensional epsilon algebra.
 
@@ -245,7 +301,9 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 
 | Limit | Consequence | Next work |
 |---|---|---|
-| Sequential prompt processing | TTFT is 4.256x slower than oMLX on the measured 36-token prompt | emit a separate batched prefill graph |
+| Per-process cold page touch | roughly 7.4 s of the 9.73 s TTFT faults mapped model pages | prefault or advise the mapping before the first chunk |
+| Untuned batched kernels | the warm S32 chunk spends about 1.4 s on 32 tokens | tune GEMM tiling and the blocked recurrence after profiling |
+| Prompts under 16 tokens | still run the sequential one-token path | add smaller buckets only if short-prompt TTFT matters |
 | Single user-message CLI | free text works, but system and multi-turn message APIs do not | expose a message-array C API without changing the graph |
 | FP32 KV cache | 128 KiB per context token | verify FP16, then Q8 cache paths |
 | Text-only image | vision inputs are unsupported | separate artifact if vision is required |
