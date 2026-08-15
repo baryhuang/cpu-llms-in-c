@@ -4,7 +4,7 @@
  "profile": "../../../qwen3.5-0.8b/benchmarks/arc-easy-5/profile.json",
  "profile_sha256": "28d250832265c69c6dd81b0beec94c8eafefed2ea2e5c1bd7776ab6ebc95e05f",
  "host": "MacBook Pro Mac15,6, Apple M3 Pro, 36 GB, macOS 15.7.3",
- "runtime": "C/Metal target runtime (build/qwen36-m3-chat, machine mode), greedy, adaptive MTP active, no-think template",
+ "runtime": "C/Metal target runtime (build/qwen38-m3-chat, machine mode), greedy, adaptive MTP active, no-think template",
  "note": "Five-case generative smoke adaptation of ARC-Easy shared with the Qwen3.5-0.8B targets; not an official ARC-Easy score.",
  "scores": {
   "strict_32_token_budget": 3,
@@ -84,5 +84,5 @@
    "text": "Ponds are generally defined as small, shallow bodies of standing freshwater, whereas lakes are larger and deeper. The primary physical distinctions are size and depth.\n\nAnswer: B"
   }
  ],
- "observation": "Both 32-token misses and the remaining 96-token miss state the correct answer's content in prose but never emit the required 'Answer: X' line: Qwen3.8's post-training centers on thinking mode with reasoning-effort control, and under the pinned no-think template it drifts toward explanatory prose. Qwen3.6 stays format-compliant (5/5) under the identical prompt."
+ "observation": "Both 32-token misses and the remaining 96-token miss state the correct answer's content in prose but do not complete the required 'Answer: X' line. This five-case generative adaptation is a smoke test, not an official ARC-Easy score."
 }

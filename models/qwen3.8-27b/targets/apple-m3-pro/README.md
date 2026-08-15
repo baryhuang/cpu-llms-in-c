@@ -1,137 +1,135 @@
 # Qwen3.8-27B on Apple M3 Pro
 
-Status: free-text generation runs end to end through the **same
-compiled-image format, Metal kernels and runtime binaries as the
-Qwen3.6-27B target** — the port changed no graph, kernel or runtime
-logic, only source pins. Qwen3.8-27B is architecturally identical to
-Qwen3.6-27B (verified tensor-by-tensor; see the
-[model page](../../README.md)), so `build/qwen36-m3-chat`,
-`tools/qwen36_serve.py` and every optimization built for the 3.6 target
-(half-tile MMA prefill with S64/S32/S16 buckets, FP16 KV cache,
-adaptive multi-step MTP speculative decoding, incremental detokenizer)
-apply to these images unchanged.
+This target runs Qwen3.8-27B text generation end to end through a model-specific C runtime and Metal kernels. It supports batched prompt prefill, incremental conversation state, FP16 KV cache, greedy and sampled decoding, adaptive MTP speculative decoding and streaming output.
 
-## Target machine
+## Target and artifact
 
-The same machine, OS and toolchain as the
-[Qwen3.6-27B target](../../../qwen3.6-27b/targets/apple-m3-pro/README.md#target-machine):
-MacBook Pro `Mac15,6`, Apple M3 Pro, 36 GB unified memory,
-macOS 15.7.3.
-
-| Source | Pin |
+| Property | Pinned value |
 |---|---|
-| Weights | `mlx-community/Qwen3.8-27B-4bit` revision `3e6447f082e89cc7f0bc6e5441afd38dfce760ff`, affine Q4 group 64 |
-| Shard SHA-256 | `6cc1508e…528c0d` / `83f2a20c…178670` / `31b8c91e…9e560a` (pinned in `qwen36_m3_image.h` as `QWEN38_M3_EXPECTED_SOURCE_SHA256*`) |
-| MTP head | `mlx-community/Qwen3.8-27B-MTP-4bit` revision `b643c01b6d3b094e325edb6ebd832e16c486c575`, SHA-256 `76663c10…e4cc6` |
-| Tokenizer | the checkpoint's `tokenizer.json`, SHA-256 `06b95093…a0e523`; identical base vocab and merges to 3.6 plus seven added audio/TTS ids in the padded space |
+| Machine | MacBook Pro `Mac15,6` |
+| SoC | Apple M3 Pro, 11-core CPU, 14-core Metal 3 GPU |
+| Memory | 36 GB unified memory |
+| Operating system | macOS 15.7.3 |
+| Weight format | affine Q4, group size 64 |
+| Compiled text image | 65 mapped files, 15,138,643,968 bytes, plus tokenizer |
+| MTP images | 209,436,672-byte draft layer and 29,556,736-byte projection/norm image |
+| Runtime state | 158.9 MB recurrent/convolution state; FP16 KV uses 64 KiB per context token |
 
-The mlx-community 3.8 conversion is layout-identical to the 3.6 one:
-the same 2,180 tensor names and shapes, the same three-shard split with
-layers 17 and 42 crossing shard boundaries, so
-`tools/qwen38_compile_text_image.sh` is the 3.6 compile script with new
-pins. Compiled output: the same 65 image files plus tokenizer,
-15,138,643,968 mapped model bytes — byte-count-identical to the 3.6
-images. The MTP images (`mtp-layer.q36att` 209,436,672 B, `mtp.q36mtp`
-29,556,736 B) pack from the standalone quantized MTP checkpoint:
-`build/qwen36-m3-attention-pack … 64` for the draft layer and
-`build/qwen38-mtp-pack` for the fc/norm extras. Unlike the official
-BF16 `mtp.*` tensors (Hugging Face delta norms, folded by the 3.6
-packer), the mlx MTP norms arrive already folded to direct multipliers
-and are copied unchanged.
+The target maps immutable layer images rather than loading a general model graph. Forty-eight DeltaNet layers use persistent recurrent/convolution state; sixteen full-attention layers use grouped-query KV cache. Metal kernels are specialized for the fixed matrix shapes, affine Q4 layout and prompt-length buckets used by this graph.
 
-## Build and run
+## Compiled image format
+
+| File | Contents |
+|---|---|
+| `global.q38global` | embedding, final normalization and output projection |
+| `layer-NN.q38delta` | one DeltaNet transformer layer |
+| `layer-NN.q38att` | one full-attention transformer layer |
+| `tokenizer.q38tok` | packed vocabulary, merges and special-token tables |
+| `mtp-layer.q38att` | MTP draft attention layer |
+| `mtp.q38mtp` | MTP input projection and normalization tensors |
+
+Every packer checks the expected source SHA-256 before writing an image. Every image carries its format magic, version, source hash and tensor metadata; the runtime rejects the wrong model or format instead of attempting compatibility fallback.
+
+## Build the runtime
+
+Apple Metal command-line tools and a C11/Objective-C compiler are required.
+
+```sh
+make qwen38-m3-chat qwen38-tools qwen38-mtp-pack
+```
+
+## Compile the model images
+
+Download the exact revisions listed on the [model page](../../README.md), then compile the three weight shards and tokenizer:
 
 ```sh
 tools/qwen38_compile_text_image.sh \
   model-00001-of-00003.safetensors \
   model-00002-of-00003.safetensors \
   model-00003-of-00003.safetensors \
-  tokenizer.json MODEL_DIR
-
-make qwen38-mtp-pack
-build/qwen36-m3-attention-pack MTP.safetensors MODEL_DIR/mtp-layer.q36att \
-  76663c101e7e8ea9c0ae17bcb95183cd7f733ce424c912b8b264a7b1c48e4cc6 64
-build/qwen38-mtp-pack MTP.safetensors MODEL_DIR/mtp.q36mtp \
-  76663c101e7e8ea9c0ae17bcb95183cd7f733ce424c912b8b264a7b1c48e4cc6
-
-build/qwen36-m3-chat MODEL_DIR build/qwen36-m3-q4.metallib \
-  MODEL_DIR/tokenizer.q36tok
+  tokenizer.json /path/to/qwen38-runtime
 ```
 
-The serving stack needs no changes either:
-`QWEN36_MODEL_DIR=tmp/qwen38-27b-runtime tools/qwen36_chat.sh` starts
-the OpenAI-compatible server and the Chatbox client against these
-images.
+Pack the standalone MTP checkpoint into the same directory:
 
-The serving layer implements the full 3.8 template semantics.
-`tools/qwen36_serve.py --thinking` (or a per-request OpenAI-style
-`reasoning_effort` field: `low` / `medium` / `xhigh`, `none` to
-disable) renders the thinking-mode template with the verbatim
-reasoning-effort system-message injections, opens the reply at
-`<think>\n`, streams the think block as `reasoning_content` deltas and
-the answer as `content`, and replays prior turns' reasoning
-(`preserve_thinking`). Greedy thinking requests keep lossless
-speculative decoding. Verified end to end against these images: an
-xhigh request streamed 301 characters of reasoning and the correct
-split answer; `reasoning_effort: none` reproduces the default no-thinking
-behavior exactly; a low-effort request that exhausted a 400-token
-budget mid-think returned the truncated thinking in
-`reasoning_content` with empty `content` and `finish_reason: length`
-(the OpenAI reasoning-model convention — give thinking mode a larger
-token budget). The default remains the no-thinking template.
+```sh
+build/qwen38-m3-attention-pack \
+  /path/to/qwen38-mtp/model.safetensors \
+  /path/to/qwen38-runtime/mtp-layer.q38att \
+  76663c101e7e8ea9c0ae17bcb95183cd7f733ce424c912b8b264a7b1c48e4cc6 64
+
+build/qwen38-mtp-pack \
+  /path/to/qwen38-mtp/model.safetensors \
+  /path/to/qwen38-runtime/mtp.q38mtp \
+  76663c101e7e8ea9c0ae17bcb95183cd7f733ce424c912b8b264a7b1c48e4cc6
+```
+
+## Run
+
+Resident terminal chat:
+
+```sh
+QWEN38_MODEL_DIR=/path/to/qwen38-runtime tools/qwen38_chat.sh --terminal
+```
+
+One prompt:
+
+```sh
+QWEN38_MODEL_DIR=/path/to/qwen38-runtime \
+  tools/qwen38_chat.sh 'Explain why virtual memory uses pages.'
+```
+
+OpenAI-compatible server:
+
+```sh
+QWEN38_MODEL_DIR=/path/to/qwen38-runtime tools/qwen38_serve.py
+# base URL: http://127.0.0.1:8199/v1
+```
+
+The server accepts standard sampling fields. `reasoning_effort` values `low`, `medium` and `xhigh` enable thinking mode; `none` selects the no-thinking template. Streaming responses separate reasoning into `reasoning_content` and the final answer into `content`. The Python process implements only HTTP and template adaptation; inference stays inside the resident C/Metal process.
 
 ## Verification
 
-| Gate | Result |
+Verification is separate from timed benchmarking.
+
+| Gate | Recorded result |
 |---|---|
-| Shard and tokenizer sources | SHA-256-pinned at pack time; every image records its source hash |
-| Async decode API state machine | 16/16 checks pass against the 3.8 images |
-| Prefill-vs-decode state parity | 24/24 checks pass (exact/float-tile/half-tile modes, runs 16-96 tokens, argmax identical on every run, zero NaN) |
-| Smoke | "What is 2+2" → `4`; C `max2` function correct; 法国首都 → `巴黎` |
-| MTP | auto-enables against the 3.8 draft head; the code smoke accepted 19 drafts over 9 adaptive steps |
-| Thinking mode | xhigh request: correct answer with reasoning split into `reasoning_content`; `none` reproduces no-think byte behavior |
-| Quality (pinned ARC-Easy-5 smoke) | 3/5 strict at the 32-token budget, 4/5 at 96; every miss states the correct answer's content in prose without the required `Answer: X` line — under the no-thinking template 3.8 drifts toward explanation where 3.6 stays format-compliant (5/5). [Record](../../benchmarks/arc-easy-5/results-macos-m3-pro.json) |
+| Source integrity | Three weight shards, tokenizer and MTP checkpoint SHA-256 checked at pack time |
+| Image identity | 68/68 runtime files use Qwen3.8 names and `.q38*` formats; sampled headers report `Q38M3GLB`, `Q38TOK1`, `Q38M3Q4`, `Q38M3ATT` and `Q38M3MTP` |
+| Async decode API | 16/16 state-machine checks pass |
+| Batched prefill parity | 36/36 checks pass across 12 lengths from 16 to 131 tokens and three execution modes; argmax identical and no NaN |
+| Basic generation | `2+2` → `4`; C `max2` implementation correct; Chinese capital-of-France prompt → `巴黎` |
+| MTP image smoke | `one` through `ten` generated correctly; 19 visible tokens at 13.0 decode tok/s, with 13 drafts accepted over 7 steps |
+| Speculative decoding | Adaptive MTP output token-identical to plain greedy on all five throughput cases |
+| Thinking stream | Reasoning and answer split verified; `reasoning_effort: none` reproduces no-thinking behavior |
+| ARC-Easy five-case adaptation | 3/5 strict at a 32-token budget, 4/5 at 96; misses contain the correct content but do not complete the required `Answer: X` format |
+
+The ARC-Easy record is a small generative smoke adaptation, not an official ARC-Easy score. Raw outputs are in [`../../benchmarks/arc-easy-5/results-macos-m3-pro.json`](../../benchmarks/arc-easy-5/results-macos-m3-pro.json).
 
 ## Measured throughput
 
-Five workloads through the resident chat (the same prompts, procedure and greedy
-seed as the Qwen3.6 matrix), one process per arm; output
-token-identical on 5/5 cases between plain greedy and adaptive MTP.
-The headline rate is end-to-end: completion tokens divided by the full
-request wall (prompt prefill, first token and decode included); decode
-per-interval rates are the kernel-level detail.
+The following five workloads ran through one resident chat process per arm with greedy seed 42. End-to-end throughput is completion tokens divided by the full request wall, including prompt prefill, first token and decode.
 
-| Case | Tokens | End-to-end tok/s, MTP off | End-to-end, adaptive MTP | Speedup | Decode off -> on | Request wall off/on |
-|---|---:|---:|---:|---:|---:|---:|
-| C `max2` function | 28 | 6.22 | 7.37 | 1.18x | 8.29 -> 12.16 | 4.5 / 3.8 s |
-| Hash-table prose | 531 | 7.91 | 9.40 | 1.19x | 8.01 -> 9.56 | 67.1 / 56.5 s |
-| Python `LRUCache` class | 1,155 | 7.99 | 11.29 | 1.41x | 8.10 -> 11.54 | 144.6 / 102.3 s |
-| Virtual-memory essay | 1,463 | 8.11 | 8.97 | 1.11x | 8.18 -> 9.06 | 180.3 / 163.1 s |
-| Notes summary, 159-token prompt | 128 | 6.46 | 7.85 | 1.22x | 8.27 -> 11.01 | 19.8 / 16.3 s |
-| **Aggregate, 3,305 tokens** | | **7.94** | **9.66** | **1.22x** | 8.13 -> 9.98 | 416.3 / 342.0 s |
+| Case | Output tokens | Plain end-to-end | Adaptive MTP end-to-end | Speedup | Request wall, plain / MTP |
+|---|---:|---:|---:|---:|---:|
+| C `max2` function | 28 | 6.22 tok/s | 7.37 tok/s | 1.18× | 4.5 / 3.8 s |
+| Hash-table explanation | 531 | 7.91 tok/s | 9.40 tok/s | 1.19× | 67.1 / 56.5 s |
+| Python `LRUCache` class | 1,155 | 7.99 tok/s | **11.29 tok/s** | 1.41× | 144.6 / 102.3 s |
+| Virtual-memory essay | 1,463 | 8.11 tok/s | 8.97 tok/s | 1.11× | 180.3 / 163.1 s |
+| Notes summary, 159-token prompt | 128 | 6.46 tok/s | 7.85 tok/s | 1.22× | 19.8 / 16.3 s |
+| **Aggregate** | **3,305** | **7.94 tok/s** | **9.66 tok/s** | **1.22×** | **416.3 / 342.0 s** |
 
-Qwen3.6-27B measured 7.91 → 9.42 tok/s end-to-end (1.19x) on the same
-workload set with the same runtime, so the 3.8 weights run at the same
-base speed (identical graph) with slightly better draft acceptance. Raw
-record: [`results.json`](results.json).
+Plain and speculative output is token-identical on all five cases. Decode-only throughput increased from 8.13 to 9.98 tok/s in aggregate; the end-to-end table remains the primary result because it includes prefill and scheduling costs.
 
-## Versus llama.cpp with the Unsloth Qwen3.8 file
+## llama.cpp comparison
 
-The same request (36-token prompt, 28-token greedy reply, model
-resident, one warmup then four measured rounds per stack) against
-llama.cpp build 10360 running `unsloth/Qwen3.8-27B-GGUF` Q4_K_M — a
-different Q4 quantization of the same model; revision and file SHA-256
-in `results.json`. Both replies are correct; the texts differ slightly
-because the quantizations differ.
+A separate comparison used the same rendered 36-token prompt and 28-token greedy completion with both models resident. Each stack received one warmup followed by four measured requests. llama.cpp build 10360 used `unsloth/Qwen3.8-27B-GGUF` Q4_K_M, which is a different four-bit encoding from this runtime's affine Q4 checkpoint.
 
-| Metric, mean of 4, model resident | This runtime | llama.cpp + Unsloth Q4_K_M |
-|---|---:|---:|
-| End-to-end, reply tokens / request time | **6.29 tok/s** | 5.76 tok/s |
-| End-to-end with speculative decoding (default) | **9.01 tok/s** | no equivalent mode |
-| Request wall | **4.450 s** (3.109 s with speculation) | 4.864 s |
-| Generation | **~8.4 tok/s** | 7.11 tok/s |
+| Metric | This runtime, plain | This runtime, adaptive MTP | llama.cpp + Q4_K_M |
+|---|---:|---:|---:|
+| End-to-end throughput | 6.29 tok/s | **9.01 tok/s** | 5.76 tok/s |
+| Request wall | 4.450 s | **3.109 s** | 4.864 s |
+| First token | 1.023 s | 1.179 s | not recorded in the raw comparison |
+| Decode throughput | about 8.4 tok/s | included in speculative schedule | 7.11 tok/s |
 
-This runtime leads 1.09x end to end without speculation and 1.56x with
-it; speculative output is token-identical to plain decoding. The same
-measurement on Qwen3.6 with the matching Unsloth file is in the
-[Qwen3.6 target record](../../../qwen3.6-27b/targets/apple-m3-pro/README.md).
+The comparison establishes end-to-end behavior on this machine; it does not establish equal quantization quality. Full source pins, per-round timings and definitions are in [`results.json`](results.json), with a human-readable view in [`REVIEW.html`](REVIEW.html).

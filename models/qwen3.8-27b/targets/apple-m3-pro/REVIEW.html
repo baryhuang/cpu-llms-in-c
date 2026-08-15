@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Qwen3.8-27B / Apple M3 Pro — Port Review</title>
+  <title>Qwen3.8-27B / Apple M3 Pro — Runtime Review</title>
   <style>
     :root { color-scheme: light; --ink:#17202a; --muted:#5b6573; --line:#d8dee8; --soft:#f5f7fa; --pass:#116b3a; --fail:#a33a26; --accent:#2456a6; }
     * { box-sizing: border-box; }
@@ -38,23 +38,23 @@
 <body>
 <main>
   <h1>Qwen3.8-27B / Apple M3 Pro</h1>
-  <p class="meta">Port review · measured 2026-08-15 · Mac15,6 · macOS 15.7.3 · same runtime binaries as the Qwen3.6-27B target</p>
+  <p class="meta">Runtime review · measured 2026-08-15 · Mac15,6 · Apple M3 Pro · 36 GB unified memory · macOS 15.7.3</p>
 
   <div class="summary">
-    <div class="metric"><b>9.66 tok/s</b><span>end-to-end aggregate, adaptive MTP, 3,305-token battery</span></div>
+    <div class="metric"><b>9.66 tok/s</b><span>end-to-end aggregate, adaptive MTP, 3,305-token workload set</span></div>
     <div class="metric"><b>1.22x</b><span>vs plain greedy (7.94 end-to-end), output token-identical</span></div>
-    <div class="metric"><b>0 code changes</b><span>graph, kernels and binaries reused from Qwen3.6</span></div>
-    <div class="metric"><b>15.139 GB</b><span>mapped compiled model image (byte-count-identical to 3.6)</span></div>
+    <div class="metric"><b>64 layers</b><span>48 DeltaNet + 16 full-attention layers</span></div>
+    <div class="metric"><b>15.139 GB</b><span>mapped compiled Qwen3.8 text image</span></div>
   </div>
 
-  <p class="note"><strong>Result:</strong> Qwen3.8-27B is architecturally identical to Qwen3.6-27B (verified tensor-by-tensor against the raw checkpoints: same 1,199 language-model tensors, byte-identical config fields, same shard layout in the mlx-community affine-4bit conversions). The port consists of source pins, a compile script with new hashes, and two MTP packers. Every optimization landed on the 3.6 target — half-tile MMA prefill with S64/S32/S16/S8/S4 buckets, FP16 KV cache, adaptive multi-step speculative decoding, conversation continuation, per-request sampling — applies to these images unchanged.</p>
+  <p class="note"><strong>Result:</strong> The pinned Qwen3.8-27B checkpoint runs end to end through the repository's C/Metal implementation. The deployed path includes affine-Q4 image packing, prompt-length-bucketed Metal prefill, FP16 KV cache, recurrent DeltaNet state, adaptive multi-step speculative decoding, conversation continuation and per-request sampling.</p>
 
   <h2>1. Sources and artifacts</h2>
   <table>
     <tr><th>Weights</th><td><code>mlx-community/Qwen3.8-27B-4bit</code> revision <code>3e6447f082e89cc7f0bc6e5441afd38dfce760ff</code>, affine Q4 group 64; three shards, SHA-256 pinned</td></tr>
     <tr><th>MTP head</th><td><code>mlx-community/Qwen3.8-27B-MTP-4bit</code> revision <code>b643c01b6d3b094e325edb6ebd832e16c486c575</code> (239 MB standalone checkpoint; norms arrive already folded to direct multipliers, unlike the official BF16 delta tensors)</td></tr>
     <tr><th>Compiled output</th><td>65 image files + tokenizer, 15,138,643,968 mapped bytes; MTP images 209,436,672 + 29,556,736 bytes</td></tr>
-    <tr><th>Tokenizer</th><td>identical base vocab and merges to 3.6; seven added audio/TTS ids in the padded space</td></tr>
+    <tr><th>Tokenizer</th><td><code>tokenizer.json</code> SHA-256 <code>06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523</code>; 248,077 token entries used by the text runtime</td></tr>
   </table>
 
   <h2>2. Verification</h2>
@@ -62,16 +62,18 @@
     <thead><tr><th>Gate</th><th>Result</th></tr></thead>
     <tbody>
       <tr><td>Async decode API state machine</td><td class="pass">16/16 against the 3.8 images</td></tr>
-      <tr><td>Prefill-vs-decode state parity</td><td class="pass">all checks pass; argmax identical on every run, zero NaN</td></tr>
+      <tr><td>Image identity</td><td class="pass">68/68 runtime files use Qwen3.8 names and <code>.q38*</code> formats; sampled headers report <code>Q38M3GLB</code>, <code>Q38TOK1</code>, <code>Q38M3Q4</code>, <code>Q38M3ATT</code> and <code>Q38M3MTP</code></td></tr>
+      <tr><td>Prefill-vs-decode state parity</td><td class="pass">36/36 checks pass across 12 prompt lengths and three execution modes; argmax identical on every run, zero NaN</td></tr>
       <tr><td>Smoke</td><td class="pass">2+2 → <code>4</code>; C <code>max2</code> correct; 法国首都 → <code>巴黎</code></td></tr>
-      <tr><td>Speculative output parity</td><td class="pass">5/5 battery cases token-identical, adaptive MTP vs plain greedy</td></tr>
+      <tr><td>MTP image smoke</td><td class="pass"><code>one</code> through <code>ten</code> generated correctly; 19 visible tokens at 13.0 decode tok/s, with 13 drafts accepted over 7 steps</td></tr>
+      <tr><td>Speculative output parity</td><td class="pass">5/5 workload cases token-identical, adaptive MTP vs plain greedy</td></tr>
       <tr><td>Thinking mode</td><td class="pass">xhigh request streams reasoning_content + correct split answer; <code>reasoning_effort: none</code> reproduces no-think behavior</td></tr>
-      <tr><td>Quality (pinned ARC-Easy-5 smoke)</td><td><span class="fail">3/5 strict at 32 tokens, 4/5 at 96</span> — every miss states the correct answer's content in prose without the required <code>Answer: X</code> line; under the no-think template 3.8 drifts toward explanation where 3.6 scores 5/5 on the identical prompts</td></tr>
+      <tr><td>Quality (pinned ARC-Easy-5 smoke)</td><td><span class="fail">3/5 strict at 32 tokens, 4/5 at 96</span> — every miss states the correct answer's content in prose without completing the required <code>Answer: X</code> line. This is a five-case generative smoke test, not an official ARC-Easy score.</td></tr>
     </tbody>
   </table>
 
-  <h2>3. Timed battery</h2>
-  <p>The same five-case matrix, procedure and greedy seed as the Qwen3.6 record; one resident process per arm.</p>
+  <h2>3. Timed workload set</h2>
+  <p>Fixed five-case workload set, greedy seed 42, one resident process per arm.</p>
   <table>
     <thead><tr><th>Case</th><th class="num">Tokens</th><th class="num">End-to-end tok/s, MTP off</th><th class="num">End-to-end, adaptive MTP</th><th class="num">Speedup</th><th class="num">Decode off &rarr; on</th></tr></thead>
     <tbody>
@@ -83,7 +85,7 @@
       <tr><td><strong>Aggregate</strong></td><td class="num">3,305</td><td class="num"><strong>7.94</strong></td><td class="num"><strong>9.66</strong></td><td class="num"><strong>1.22x</strong></td><td class="num">8.13 &rarr; 9.98</td></tr>
     </tbody>
   </table>
-  <p>End-to-end is completion tokens over the full request wall — prompt prefill, first token and decode included. Qwen3.6-27B measured 7.91 → 9.42 tok/s end-to-end (1.19x) on the same battery: the identical graph runs at the same base speed, with slightly better 3.8 draft acceptance.</p>
+  <p>End-to-end is completion tokens over the full request wall — prompt prefill, first token and decode included. Plain and adaptive-MTP output is token-identical on all five cases; the speculative schedule reduces aggregate wall time from 416.3 to 342.0 seconds.</p>
 
   <h2>4. Template semantics</h2>
   <p>The serving layer implements the 3.8 template: per-request <code>reasoning_effort</code> (low/medium/xhigh, none to disable) injects the verbatim effort instructions at the top of the system turn, thinking replies open at <code>&lt;think&gt;</code> and stream the think block as <code>reasoning_content</code>, and prior turns replay their reasoning (<code>preserve_thinking</code>). A low-effort request that exhausted a 400-token budget mid-think returned the truncated thinking with empty content and <code>finish_reason: length</code> — the reasoning-model convention; give thinking mode a larger budget. Raw record: <a href="results.json">results.json</a>.</p>

@@ -1,6 +1,6 @@
 # Compiler and Runtime Architecture
 
-Status: one bounded Gemma 4 E2B artifact is implemented. The cross-model compiler is not complete.
+Status: the repository contains measured model-target implementations for Qwen3.8-27B, Qwen3.5-0.8B and Whisper small.en, plus an earlier restricted Gemma 4 E2B artifact. Packing and runtime code still use model adapters; a single declarative cross-model compiler is not complete.
 
 ## Output
 
@@ -136,4 +136,11 @@ No Gemma 4 CPU target has been selected yet. The current Gemma 4 E2B results und
 
 Cross-model contracts stay in this file. Checkpoints, generated model images, binaries, machine credentials, and access tokens are not committed.
 
-Current model record: [`models/gemma-4-e2b/`](models/gemma-4-e2b/).
+Current model records:
+
+| Model | Measured target |
+|---|---|
+| [Qwen3.8-27B](models/qwen3.8-27b/) | [Apple M3 Pro](models/qwen3.8-27b/targets/apple-m3-pro/) |
+| [Qwen3.5-0.8B](models/qwen3.5-0.8b/) | [Amlogic A113X](models/qwen3.5-0.8b/targets/a113x/) |
+| [Whisper small.en](models/whisper-small.en/) | [Amlogic A113X](models/whisper-small.en/targets/a113x/) |
+| [Gemma 4 E2B](models/gemma-4-e2b/) | unpinned legacy development machine |

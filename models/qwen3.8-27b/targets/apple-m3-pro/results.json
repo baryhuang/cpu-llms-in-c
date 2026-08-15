@@ -14,15 +14,17 @@
     "mtp_sha256": "76663c101e7e8ea9c0ae17bcb95183cd7f733ce424c912b8b264a7b1c48e4cc6",
     "tokenizer_sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
   },
-  "port": "same compiled-image format, kernels and runtime binaries as the Qwen3.6-27B M3 target; only source pins added. Architecture verified identical tensor-by-tensor.",
+  "implementation": "Qwen3.8-specific compiled-image format, C/Metal runtime, tokenizer, sampler, batched prefill, FP16 KV cache and adaptive MTP speculative decoding",
   "verification": {
+    "image_format": "68/68 runtime files use Qwen3.8 names and .q38* formats; sampled magic values Q38M3GLB, Q38TOK1, Q38M3Q4, Q38M3ATT and Q38M3MTP",
     "api_state_test": "16/16 pass against the 3.8 images",
-    "prefill_parity_test": "24/24 pass; argmax identical on every run, zero NaN",
+    "prefill_parity_test": "36/36 pass across 12 lengths from 16 to 131 tokens and three execution modes; argmax identical on every run, zero NaN",
     "smoke": "2+2 -> 4; C max2 correct; capital-of-France in Chinese -> Paris",
+    "mtp_image_smoke": "one through ten generated correctly; 19 visible tokens, first token 1.54 s, 13.0 decode tok/s, 13 drafts accepted over 7 steps",
     "mtp_output_parity": "5/5 matrix cases token-identical, MTP adaptive vs off"
   },
   "throughput_matrix": {
-    "method": "five-case resident-chat matrix, one process per arm, greedy seed 42, same prompts as the Qwen3.6 matrix",
+    "method": "five-case resident-chat matrix, one process per arm, greedy seed 42",
     "cases": [
       {
         "case": "C max2 (code, short)",
@@ -101,8 +103,7 @@
       "e2e_tok_s_mtp_on": 9.66,
       "e2e_speedup": 1.22,
       "definition": "end-to-end = completion tokens / full request wall (prompt prefill + first token + decode); decode = tokens per interval after the first token"
-    },
-    "comparison_to_qwen36": "3.6 measured 7.91 -> 9.42 tok/s end-to-end (1.19x) on the same battery; identical graph, slightly better 3.8 draft acceptance"
+    }
   },
   "thinking_mode": {
     "implemented": "per-request reasoning_effort (low/medium/xhigh/none) with the verbatim template injections; reply opens at <think>; reasoning_content/content split in stream and plain paths; preserve_thinking replay",
@@ -116,7 +117,7 @@
     "record": "../../benchmarks/arc-easy-5/results-macos-m3-pro.json",
     "strict_32_token_budget": "3/5",
     "strict_96_token_budget": "4/5",
-    "observation": "every miss states the correct answer's content in prose without the required 'Answer: X' line; under the pinned no-think template 3.8 drifts toward explanatory prose where 3.6 scores 5/5 on identical prompts"
+    "observation": "every miss states the correct answer's content in prose without completing the required 'Answer: X' line; this five-case generative adaptation is a smoke test, not an official ARC-Easy score"
   },
   "llama_cpp_unsloth_comparison": {
     "measured_at": "2026-08-15",

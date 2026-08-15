@@ -26,7 +26,7 @@ for source_file in "$shard1" "$shard2" "$shard3" "$tokenizer_json"; do
     fi
 done
 
-make -C "$repository" qwen36-tools
+make -C "$repository" qwen38-tools
 mkdir -p "$output_dir"
 
 pack_if_missing() {
@@ -39,13 +39,13 @@ pack_if_missing() {
     fi
 }
 
-pack_if_missing "$output_dir/global.q36global" \
-    "$repository/build/qwen36-m3-global-pack" \
-    "$shard1" "$shard3" "$output_dir/global.q36global" "$sha1" "$sha3"
+pack_if_missing "$output_dir/global.q38global" \
+    "$repository/build/qwen38-m3-global-pack" \
+    "$shard1" "$shard3" "$output_dir/global.q38global" "$sha1" "$sha3"
 
-pack_if_missing "$output_dir/tokenizer.q36tok" \
-    "$repository/build/qwen36-tokenizer-pack" \
-    "$tokenizer_json" "$output_dir/tokenizer.q36tok"
+pack_if_missing "$output_dir/tokenizer.q38tok" \
+    "$repository/build/qwen38-tokenizer-pack" \
+    "$tokenizer_json" "$output_dir/tokenizer.q38tok"
 
 layer=0
 while [ "$layer" -lt 64 ]; do
@@ -62,25 +62,25 @@ while [ "$layer" -lt 64 ]; do
     padded=$(printf '%02d' "$layer")
     remainder=$((layer % 4))
     if [ "$remainder" -eq 3 ]; then
-        output="$output_dir/layer-$padded.q36att"
+        output="$output_dir/layer-$padded.q38att"
         pack_if_missing "$output" \
-            "$repository/build/qwen36-m3-attention-pack" \
+            "$repository/build/qwen38-m3-attention-pack" \
             "$core_source" "$output" "$core_sha" "$layer"
     else
-        output="$output_dir/layer-$padded.q36delta"
+        output="$output_dir/layer-$padded.q38delta"
         if [ "$layer" -eq 17 ]; then
             pack_if_missing "$output" \
-                "$repository/build/qwen36-m3-pack" \
+                "$repository/build/qwen38-m3-pack" \
                 "$core_source" "$output" "$core_sha" "$layer" \
                 "$shard2" "$sha2"
         elif [ "$layer" -eq 42 ]; then
             pack_if_missing "$output" \
-                "$repository/build/qwen36-m3-pack" \
+                "$repository/build/qwen38-m3-pack" \
                 "$core_source" "$output" "$core_sha" "$layer" \
                 "$shard3" "$sha3"
         else
             pack_if_missing "$output" \
-                "$repository/build/qwen36-m3-pack" \
+                "$repository/build/qwen38-m3-pack" \
                 "$core_source" "$output" "$core_sha" "$layer"
         fi
     fi

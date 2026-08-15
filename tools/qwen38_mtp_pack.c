@@ -1,19 +1,19 @@
-/* Pack the Qwen3.8-27B MTP extras image (mtp.q36mtp) from the
+/* Pack the Qwen3.8-27B MTP extras image (mtp.q38mtp) from the
  * standalone quantized MTP checkpoint
  * (mlx-community/Qwen3.8-27B-MTP-4bit): the fc projection arrives
  * already in the affine Q4 group-64 layout the runtime consumes, and
  * the three norm vectors arrive already folded to direct multipliers —
  * unlike the official BF16 mtp.* tensors, whose Hugging Face delta
- * convention tools/qwen36_mtp_pack.c has to fold at pack time. The MTP
+ * convention tools/qwen38_mtp_pack.c has to fold at pack time. The MTP
  * transformer layer itself is packed separately by
- * qwen36-m3-attention-pack with layer index 64. */
+ * qwen38-m3-attention-pack with layer index 64. */
 
 #define _POSIX_C_SOURCE 200809L
 
-#include "qwen36_m3.h"
-#include "qwen36_m3_mtp_image.h"
-#include "qwen36_sha256.h"
-#include "qwen36_safetensors.h"
+#include "qwen38_m3.h"
+#include "qwen38_m3_mtp_image.h"
+#include "qwen38_sha256.h"
+#include "qwen38_safetensors.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -57,9 +57,9 @@ static int verify_sha256(int file, const char *expected) {
     unsigned char *buffer = malloc(CHUNK);
     unsigned char digest[32];
     char actual[65];
-    qwen36_sha256_context context;
+    qwen38_sha256_context context;
     if (buffer == NULL) return -1;
-    qwen36_sha256_init(&context);
+    qwen38_sha256_init(&context);
     uint64_t offset = 0;
     for (;;) {
         ssize_t amount = pread(file, buffer, CHUNK, (off_t)offset);
@@ -69,11 +69,11 @@ static int verify_sha256(int file, const char *expected) {
             return -1;
         }
         if (amount == 0) break;
-        qwen36_sha256_update(&context, buffer, (size_t)amount);
+        qwen38_sha256_update(&context, buffer, (size_t)amount);
         offset += (uint64_t)amount;
     }
     free(buffer);
-    qwen36_sha256_final(&context, digest);
+    qwen38_sha256_final(&context, digest);
     for (size_t index = 0; index < 32; ++index) {
         snprintf(actual + index * 2, 3, "%02x", digest[index]);
     }
@@ -122,16 +122,16 @@ static float bf16_to_float(uint16_t input) {
 }
 
 static int find_tensor(const char *path, const char *name,
-                       qwen36_tensor_view *view) {
+                       qwen38_tensor_view *view) {
     char error[512];
-    int status = qwen36_safetensors_find(path, name, 1, view,
+    int status = qwen38_safetensors_find(path, name, 1, view,
                                          error, sizeof(error));
     if (status != 0) fprintf(stderr, "%s\n", error);
     return status;
 }
 
 static int copy_tensor(int source, int output,
-                       const qwen36_tensor_view *tensor,
+                       const qwen38_tensor_view *tensor,
                        uint64_t output_offset) {
     enum { CHUNK = 8 * 1024 * 1024 };
     unsigned char *buffer = malloc(CHUNK);
@@ -154,8 +154,8 @@ static int copy_tensor(int source, int output,
 }
 
 static int convert_metadata(int source, int output,
-                            const qwen36_tensor_view *scale,
-                            const qwen36_tensor_view *bias,
+                            const qwen38_tensor_view *scale,
+                            const qwen38_tensor_view *bias,
                             uint64_t output_offset) {
     size_t values = (size_t)(scale->data_length / 2);
     uint16_t *scales = malloc(values * 2);
@@ -180,7 +180,7 @@ static int convert_metadata(int source, int output,
 
 /* Direct multiplier conversion: the source vectors are already folded. */
 static int convert_vector_f32(int source, int output,
-                              const qwen36_tensor_view *tensor,
+                              const qwen38_tensor_view *tensor,
                               uint64_t output_offset) {
     size_t values = (size_t)(tensor->data_length / 2);
     uint16_t *input = malloc(values * 2);
@@ -201,7 +201,7 @@ static int convert_vector_f32(int source, int output,
 
 int main(int argc, char **argv) {
     if (argc != 4 || strlen(argv[3]) != 64) {
-        fprintf(stderr, "usage: %s MTP.safetensors OUTPUT.q36mtp "
+        fprintf(stderr, "usage: %s MTP.safetensors OUTPUT.q38mtp "
                         "SOURCE_SHA256\n", argv[0]);
         return 2;
     }
@@ -209,8 +209,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "source is not the pinned Qwen3.8 MTP file\n");
         return 2;
     }
-    qwen36_tensor_view fc_w, fc_s, fc_b;
-    qwen36_tensor_view embedding_norm, hidden_norm, final_norm;
+    qwen38_tensor_view fc_w, fc_s, fc_b;
+    qwen38_tensor_view embedding_norm, hidden_norm, final_norm;
     if (find_tensor(argv[1], "fc.weight", &fc_w) ||
         find_tensor(argv[1], "fc.scales", &fc_s) ||
         find_tensor(argv[1], "fc.biases", &fc_b) ||
@@ -241,17 +241,17 @@ int main(int argc, char **argv) {
         return 4;
     }
 
-    qwen36_m3_mtp_image_header h;
+    qwen38_m3_mtp_image_header h;
     memset(&h, 0, sizeof(h));
-    memcpy(h.magic, QWEN36_M3_MTP_IMAGE_MAGIC, 8);
-    h.version = QWEN36_M3_MTP_IMAGE_VERSION;
-    h.header_bytes = QWEN36_M3_MTP_HEADER_BYTES;
+    memcpy(h.magic, QWEN38_M3_MTP_IMAGE_MAGIC, 8);
+    h.version = QWEN38_M3_MTP_IMAGE_VERSION;
+    h.header_bytes = QWEN38_M3_MTP_HEADER_BYTES;
     h.hidden_size = 5120;
     h.fc_rows = (uint32_t)fc_rows;
     h.fc_groups_per_row = (uint32_t)fc_groups;
     h.group_size = 64;
     h.constants_f32_count = 3 * 5120;
-    h.fc_quants_offset = QWEN36_M3_MTP_HEADER_BYTES;
+    h.fc_quants_offset = QWEN38_M3_MTP_HEADER_BYTES;
     h.fc_quants_bytes = fc_quant_bytes;
     h.fc_metadata_offset = h.fc_quants_offset + fc_quant_bytes;
     h.fc_metadata_bytes = fc_meta_bytes;
