@@ -299,8 +299,8 @@ detokenizer replaces it when generation lengths grow.
 
 The prompt no longer replays the one-token decode graph per token. A
 `qwen36_m3_model_prefill` call pushes prompt tokens through compiled batch
-graphs: S32 chunks first, then an S16 chunk, then one-token forwards for a
-tail shorter than 16. The final prompt token stays on the normal decode
+graphs: S64 chunks first (on the default half-tile GEMM level), then S32,
+then an S16 chunk, then one-token forwards for a tail shorter than 16. The final prompt token stays on the normal decode
 forward so its logits feed the sampler. Batched Q4 GEMM kernels read each
 weight group once per chunk instead of once per token; the GDN convolution
 and delta-rule recurrence keep their time dependency inside blocked
@@ -586,7 +586,7 @@ The exporter hard-checks 1,847 tensors and 15,132,802,048 tensor-data bytes. The
 | One-time weight wiring at open | 6.5 s of MTLResidencySet wiring per process; CPU prefault was measured and rejected before this | amortizes in a long-lived process; batch it against other startup work if a server lands |
 | Warm S32 chunk at 576 ms | profiling shows the half-MMA GEMMs still carry staging/barrier overhead over their ~300 ms compute bound | double-buffered weight tiles, wider K tiles |
 | Per-token CPU encoding of the static decode graph | roughly 2 ms per token, under 2 percent of decode | pre-encode with indirect command buffers if it ever dominates |
-| Prompts under 16 tokens | still run the sequential one-token path | add smaller buckets only if short-prompt TTFT matters |
+| Prompts under 16 tokens | still run the sequential one-token path | S16 already costs nearly an S32 (weight streaming dominates), so smaller buckets would gain little |
 | Single user-message CLI | free text works, but system and multi-turn message APIs do not | expose a message-array C API without changing the graph |
 | FP16 KV cache | 64 KiB per context token | verify a Q8 cache path if longer contexts need it |
 | Text-only image | vision inputs are unsupported | separate artifact if vision is required |

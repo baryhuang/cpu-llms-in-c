@@ -291,7 +291,6 @@ committed.
   (about 2 ms/token CPU encode today; deferred until it matters).
 - Batched kernel tuning: the warm S32 chunk spends about 1.4 s of compute
   on 32 tokens; profile GEMM tiling and the blocked recurrence.
-- S64/S128 prompt buckets for long prompts, after tuning.
 - Input-byte streaming tokenizer API.
 - Token ring buffer between tokenizer and prefill.
 - Decode sampling/argmax on GPU; CPU sampling is still a serial dependency.
@@ -303,6 +302,11 @@ committed.
 
 ## Recommended continuation order
 
+0. S64 landed: chunk64 measures 1,047 ms vs 1,132 for two S32 chunks
+   (7.5% per token for prompts >= 64); S128 not attempted. The fused
+   single-command-buffer MTP step (GPU argmax chains drafts) measured a
+   near-null 0.3-0.5% gain: warm-queue command-buffer round trips are
+   cheap. Recorded so nobody re-estimates them optimistically.
 1. Profile the S32 chunk (GPU counters or per-dispatch timing) and tune the
    dominant batched kernels; re-run the prefill parity test after every
    kernel change. CPU prefaulting was tried and rejected; see the negative

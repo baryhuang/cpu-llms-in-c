@@ -9,7 +9,7 @@ using namespace metal;
  * prompt must produce bitwise-identical layer state and downstream tokens. */
 
 constant uint kBatch [[function_constant(0)]];
-constant uint kPrefillMaxBatch = 32;
+constant uint kPrefillMaxBatch = 64;
 
 constant uint kPrefillHidden = 5120;
 constant uint kPrefillVocab = 248320;
@@ -741,13 +741,15 @@ kernel void qwen36_prefill_convert_x(
     threadgroup half w_tile[kGemmTileK * kGemmTileRows];                  \
     threadgroup half spill[kGemmTileBatch * kGemmTileRows];               \
     uint row0 = group_id.x * kGemmTileRows;                               \
+    uint batch0 = group_id.y * kGemmTileBatch;                            \
     uint columns = p.groups_per_row * 64;                                 \
     simdgroup_half8x8 accumulator[4];                                     \
     for (uint n = 0; n < 4; ++n)                                          \
         accumulator[n] = make_filled_simdgroup_matrix<half, 8, 8>(0.0h);  \
     float c_acc[8];                                                       \
     for (uint i = 0; i < 8; ++i) c_acc[i] = 0.0f;                         \
-    uint b0 = simdgroup_index * 8;                                        \
+    uint b0 = batch0 + simdgroup_index * 8;                               \
+    uint spill0 = simdgroup_index * 8;                                    \
     uint r = tid & 31u;                                                   \
     uint k_base = (tid >> 5) * 16;                                        \
     for (uint group = 0; group < p.groups_per_row; ++group) {             \
@@ -782,7 +784,7 @@ kernel void qwen36_prefill_convert_x(
             group == p.groups_per_row - 1) {                              \
             for (uint n = 0; n < 4; ++n) {                                \
                 simdgroup_store(accumulator[n],                           \
-                                spill + b0 * kGemmTileRows + n * 8,       \
+                                spill + spill0 * kGemmTileRows + n * 8,   \
                                 kGemmTileRows);                           \
                 accumulator[n] =                                          \
                     make_filled_simdgroup_matrix<half, 8, 8>(0.0h);       \
@@ -795,7 +797,7 @@ kernel void qwen36_prefill_convert_x(
     }                                                                     \
     for (uint i = 0; i < 8; ++i) {                                        \
         uint linear = tid * 8 + i;                                        \
-        uint b = linear >> 5;                                             \
+        uint b = batch0 + (linear >> 5);                                  \
         uint out_row = linear & 31u;                                      \
         if (b < kBatch) {                                                 \
             uint out_index = b * p.rows + row0 + out_row;                 \

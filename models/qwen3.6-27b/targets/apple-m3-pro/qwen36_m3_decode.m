@@ -36,7 +36,7 @@ typedef struct {
     uint32_t cache_capacity;
 } q36_prefill_attention_parameters;
 
-enum { Q36_PREFILL_MAX_BATCH = 32 };
+enum { Q36_PREFILL_MAX_BATCH = 64 };
 
 /* One specialized pipeline set per compiled prefill shape bucket. */
 @interface Q36PrefillPipelines : NSObject {
@@ -175,6 +175,7 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
     id<MTLComputePipelineState> embedding;
     id<MTLComputePipelineState> convert_hidden;
     id<MTLComputePipelineState> lm_head;
+    id<MTLComputePipelineState> argmax;
 
     id<MTLBuffer> hidden_half;
     id<MTLBuffer> normalized;
@@ -203,6 +204,7 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
     uint32_t mtp_depth;
     Q36PrefillPipelines *prefill16;
     Q36PrefillPipelines *prefill32;
+    Q36PrefillPipelines *prefill64;
 
     Q36DecodeLayer *mtp_layer;
     int mtp_file;
@@ -799,7 +801,8 @@ static void encode_prefill_gemm_f16(
     [encoder setBuffer:output offset:0 atIndex:3];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4];
     if (use_mma)
-        [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
+        [encoder dispatchThreadgroups:
+            MTLSizeMake(rows / 32, (p->batch + 31) / 32, 1)
                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
     else
         [encoder dispatchThreadgroups:MTLSizeMake((rows + 7) / 8, 1, 1)
@@ -841,7 +844,8 @@ static void encode_prefill_gemm_residual(
     [encoder setBuffer:output offset:0 atIndex:4];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:5];
     if (use_mma)
-        [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
+        [encoder dispatchThreadgroups:
+            MTLSizeMake(rows / 32, (p->batch + 31) / 32, 1)
                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
     else
         [encoder dispatchThreadgroups:MTLSizeMake((rows + 7) / 8, 1, 1)
@@ -1143,11 +1147,14 @@ static int initialize_pipelines(Q36DecodeRuntime *r, NSString **message) {
     MAKE(embedding, @"qwen36_q4_embedding_lookup");
     MAKE(convert_hidden, @"qwen36_f32_to_f16_hidden");
     MAKE(lm_head, @"qwen36_q4_lm_head");
+    MAKE(argmax, @"qwen36_argmax");
 #undef MAKE
     r->prefill16 = prefill_pipelines(r, 16, message);
     if (r->prefill16 == nil) return -1;
     r->prefill32 = prefill_pipelines(r, 32, message);
     if (r->prefill32 == nil) return -1;
+    r->prefill64 = prefill_pipelines(r, 64, message);
+    if (r->prefill64 == nil) return -1;
     return 0;
 }
 
@@ -1510,7 +1517,8 @@ static Q36PrefillPipelines *prefill_set_for_batch(
     case 3: return r->prefill3;
     case 4: return r->prefill4;
     case 16: return r->prefill16;
-    default: return r->prefill32;
+    case 32: return r->prefill32;
+    default: return r->prefill64;
     }
 }
 
@@ -1524,7 +1532,8 @@ static Q36PrefillPipelines *prefill_set_for_batch(
  * the global final norm over p_layer_output rows (chunk-fill path). */
 static void encode_mtp_pass(Q36DecodeRuntime *r,
                             id<MTLComputeCommandEncoder> encoder,
-                            uint32_t batch, uint32_t start_j,
+                            uint32_t batch, uint32_t token_slot,
+                            uint32_t start_j,
                             id<MTLBuffer> hidden, NSUInteger hidden_offset,
                             int with_head, int normalize_hidden) {
     Q36PrefillPipelines *p = prefill_set_for_batch(r, batch);
@@ -1541,7 +1550,9 @@ static void encode_mtp_pass(Q36DecodeRuntime *r,
     [encoder setComputePipelineState:p->mtp_fuse];
     [encoder setBuffer:r->global->embedding_quants offset:0 atIndex:0];
     [encoder setBuffer:r->global->embedding_metadata offset:0 atIndex:1];
-    [encoder setBuffer:r->p_token_ids offset:0 atIndex:2];
+    [encoder setBuffer:r->p_token_ids
+                 offset:(NSUInteger)token_slot * sizeof(uint32_t)
+                atIndex:2];
     [encoder setBuffer:hidden offset:hidden_offset atIndex:3];
     [encoder setBuffer:r->mtp_constants
                  offset:r->mtp_header->embedding_norm_constants_index *
@@ -1617,8 +1628,8 @@ static int run_mtp_pass(qwen36_m3_model *model, uint32_t batch,
         id<MTLCommandBuffer> command = [r->queue commandBuffer];
         id<MTLComputeCommandEncoder> encoder =
             [command computeCommandEncoder];
-        encode_mtp_pass(r, encoder, batch, start_j, hidden, hidden_offset,
-                        with_head, normalize_hidden);
+        encode_mtp_pass(r, encoder, batch, 0, start_j, hidden,
+                        hidden_offset, with_head, normalize_hidden);
         [encoder endEncoding];
         [command commit];
         [command waitUntilCompleted];
@@ -1642,6 +1653,99 @@ static int run_mtp_pass(qwen36_m3_model *model, uint32_t batch,
             }
         }
         *draft = best;
+    }
+    return 0;
+}
+
+static void encode_snapshot_blit(Q36DecodeRuntime *r,
+                                 id<MTLBlitCommandEncoder> blit) {
+    NSUInteger recurrent_offset = 0;
+    NSUInteger convolution_offset = 0;
+    for (Q36DecodeLayer *layer in r->layers) {
+        if (layer->attention) continue;
+        [blit copyFromBuffer:layer->recurrent_state
+                sourceOffset:0
+                    toBuffer:r->snapshot_recurrent
+           destinationOffset:recurrent_offset
+                        size:layer->recurrent_state.length];
+        [blit copyFromBuffer:layer->convolution_state
+                sourceOffset:0
+                    toBuffer:r->snapshot_convolution
+           destinationOffset:convolution_offset
+                        size:layer->convolution_state.length];
+        recurrent_offset += layer->recurrent_state.length;
+        convolution_offset += layer->convolution_state.length;
+    }
+}
+
+/* One command buffer for a whole speculative step: the chained draft
+ * passes feed each other through the GPU argmax into the token buffer,
+ * the GDN snapshot blit follows, then the batch-(depth+1) verify with
+ * per-row head logits and the full-accept draft-cache refresh. The
+ * accept path pays a single CPU round trip per step; a partial accept
+ * additionally replays and re-refreshes. */
+static int fused_step_submit(qwen36_m3_model *model, uint32_t depth,
+                             uint32_t position, id<MTLBuffer> hidden,
+                             NSUInteger hidden_offset,
+                             char *error_message,
+                             size_t error_message_capacity) {
+    Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
+    if ((uint64_t)position + depth + 1 > r->capacity) {
+        decode_error(error_message, error_message_capacity,
+                     @"verification exceeds context capacity");
+        return 1;
+    }
+    MTLCommandBufferStatus status;
+    NSString *failure = nil;
+    @autoreleasepool {
+        id<MTLCommandBuffer> command = [r->queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder =
+            [command computeCommandEncoder];
+        for (uint32_t i = 0; i < depth; ++i) {
+            encode_mtp_pass(r, encoder, 1, i, position + i,
+                            i == 0 ? hidden : r->final_normalized,
+                            i == 0 ? hidden_offset : 0, 1, 0);
+            uint32_t slot = i + 1;
+            [encoder setComputePipelineState:r->argmax];
+            [encoder setBuffer:r->mtp_logits offset:0 atIndex:0];
+            [encoder setBuffer:r->p_token_ids offset:0 atIndex:1];
+            [encoder setBytes:&slot length:sizeof(slot) atIndex:2];
+            [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1)
+                    threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        }
+        [encoder endEncoding];
+        id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+        encode_snapshot_blit(r, blit);
+        [blit endEncoding];
+        encoder = [command computeCommandEncoder];
+        Q36PrefillPipelines *pipelines =
+            prefill_set_for_batch(r, depth + 1);
+        encode_prefill_chunk(r, pipelines, &command, &encoder, position,
+                             NULL);
+        [encoder setComputePipelineState:pipelines->rms_f32];
+        [encoder setBuffer:r->p_layer_output offset:0 atIndex:0];
+        [encoder setBuffer:r->global->constants offset:0 atIndex:1];
+        [encoder setBuffer:r->p_post_normalized offset:0 atIndex:2];
+        [encoder dispatchThreadgroups:MTLSizeMake(depth + 1, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        encode_prefill_gemm_f16(r, pipelines, encoder,
+                                r->p_post_normalized,
+                                r->global->lm_head_quants,
+                                r->global->lm_head_metadata,
+                                r->p_logits2, QWEN36_VOCAB_SIZE, 80);
+        encode_mtp_pass(r, encoder, depth, 1, position + 1,
+                        r->p_post_normalized, 0, 0, 0);
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        status = command.status;
+        if (command.error != nil)
+            failure = command.error.localizedDescription;
+    }
+    if (status != MTLCommandBufferStatusCompleted) {
+        decode_error(error_message, error_message_capacity,
+            failure != nil ? failure : @"Metal speculative step failed");
+        return 2;
     }
     return 0;
 }
@@ -1675,23 +1779,7 @@ static int model_forward_batch(qwen36_m3_model *model,
         id<MTLCommandBuffer> command = [r->queue commandBuffer];
         if (snapshot_first) {
             id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
-            NSUInteger recurrent_offset = 0;
-            NSUInteger convolution_offset = 0;
-            for (Q36DecodeLayer *layer in r->layers) {
-                if (layer->attention) continue;
-                [blit copyFromBuffer:layer->recurrent_state
-                        sourceOffset:0
-                            toBuffer:r->snapshot_recurrent
-                   destinationOffset:recurrent_offset
-                                size:layer->recurrent_state.length];
-                [blit copyFromBuffer:layer->convolution_state
-                        sourceOffset:0
-                            toBuffer:r->snapshot_convolution
-                   destinationOffset:convolution_offset
-                                size:layer->convolution_state.length];
-                recurrent_offset += layer->recurrent_state.length;
-                convolution_offset += layer->convolution_state.length;
-            }
+            encode_snapshot_blit(r, blit);
             [blit endEncoding];
             if (profile != NULL) {
                 [command commit];
@@ -1837,7 +1925,7 @@ int qwen36_m3_model_mtp_open(
             newBufferWithLength:h->constants_f32_count * sizeof(float)
                         options:MTLResourceStorageModeShared];
         r->mtp_fused = [r->device
-            newBufferWithLength:(size_t)32 * 10240 * 2
+            newBufferWithLength:(size_t)Q36_PREFILL_MAX_BATCH * 10240 * 2
                         options:MTLResourceStorageModeShared];
         r->mtp_logits = [r->device
             newBufferWithLength:(size_t)QWEN36_VOCAB_SIZE * sizeof(float)
@@ -1944,31 +2032,45 @@ int qwen36_m3_model_mtp_step(
     uint32_t tokens[8];
     tokens[0] = *current_token;
     double phase0 = decode_seconds();
-    /* Chained drafting: step 1 consumes the target model's
-     * post-final-norm hidden; later steps consume the previous MTP
-     * pass's own post-norm hidden, which the with_head encode leaves in
-     * final_normalized (the reference implementation returns
-     * self.norm(hidden) as the next spec step's hidden). */
-    for (uint32_t i = 0; i < depth; ++i) {
-        uint32_t draft = 0;
-        int draft_status = run_mtp_pass(
-            model, 1, &tokens[i], j + i,
-            i == 0 ? hidden : r->final_normalized,
-            i == 0 ? hidden_offset : 0, 1, 0, &draft, error_message,
-            error_message_capacity);
-        if (draft_status != 0) return draft_status;
-        tokens[i + 1] = draft;
-    }
-    double phase1 = decode_seconds();
-    int status = model_forward_batch(model, tokens, depth + 1, j, 1,
+    int status;
+    int fused = decode_profile_level() == 0;
+    if (fused) {
+        ((uint32_t *)r->p_token_ids.contents)[0] = tokens[0];
+        status = fused_step_submit(model, depth, j, hidden,
+                                   hidden_offset, error_message,
+                                   error_message_capacity);
+        if (status != 0) return status;
+        const uint32_t *drafted = r->p_token_ids.contents;
+        for (uint32_t i = 0; i < depth; ++i)
+            tokens[i + 1] = drafted[i + 1];
+    } else {
+        /* Profiled path: one command buffer per pass so the per-layer
+         * profiler stays attributable. Chained drafting: step 1
+         * consumes the target model's post-final-norm hidden; later
+         * steps consume the previous MTP pass's own post-norm hidden,
+         * which the with_head encode leaves in final_normalized (the
+         * reference implementation returns self.norm(hidden) as the
+         * next spec step's hidden). */
+        for (uint32_t i = 0; i < depth; ++i) {
+            uint32_t draft = 0;
+            int draft_status = run_mtp_pass(
+                model, 1, &tokens[i], j + i,
+                i == 0 ? hidden : r->final_normalized,
+                i == 0 ? hidden_offset : 0, 1, 0, &draft, error_message,
+                error_message_capacity);
+            if (draft_status != 0) return draft_status;
+            tokens[i + 1] = draft;
+        }
+        status = model_forward_batch(model, tokens, depth + 1, j, 1,
                                      error_message,
                                      error_message_capacity);
-    if (status != 0) return status;
+        if (status != 0) return status;
+    }
     double phase2 = decode_seconds();
     if (getenv("QWEN36_MTP_DEBUG") != NULL)
-        fprintf(stderr, "[mtp-time] depth %u draft %.1f ms, "
-                "snapshot+verify %.1f ms\n", depth,
-                (phase1 - phase0) * 1000.0, (phase2 - phase1) * 1000.0);
+        fprintf(stderr, "[mtp-time] depth %u draft+snapshot+verify%s "
+                "%.1f ms\n", depth, fused ? "+refresh" : "",
+                (phase2 - phase0) * 1000.0);
 
     const float *logits = r->p_logits2.contents;
     uint32_t true_next[8];
@@ -2016,11 +2118,15 @@ int qwen36_m3_model_mtp_step(
     /* Refresh the draft cache for every confirmed successor with the
      * true post-final-norm hidden rows the last forward produced; the
      * rows written speculatively during chained drafting are among the
-     * ones overwritten. */
-    status = run_mtp_pass(model, emit_count - 1, emitted + 1, j + 1,
-                          r->p_post_normalized, 0, 0, 0, NULL,
-                          error_message, error_message_capacity);
-    if (status != 0) return status;
+     * ones overwritten. The fused command buffer already encoded the
+     * full-accept refresh, so only a partial accept (or the profiled
+     * path) re-runs it with the corrected tokens. */
+    if (!fused || accepted_count != depth) {
+        status = run_mtp_pass(model, emit_count - 1, emitted + 1, j + 1,
+                              r->p_post_normalized, 0, 0, 0, NULL,
+                              error_message, error_message_capacity);
+        if (status != 0) return status;
+    }
 
     *current_token = next_pending;
     *position = j + emit_count;
@@ -2067,14 +2173,17 @@ int qwen36_m3_model_prefill(
     r->prefill_mma_level = mma_env == NULL ? 2 : atoi(mma_env);
     double begin = decode_seconds();
     const char *max_chunk_env = getenv("QWEN36_PREFILL_MAX_CHUNK");
+    /* The S64 bucket runs only on the half-tile GEMM level: the exact
+     * and float-tile kernels keep their 32-wide shapes. */
     uint32_t max_chunk = max_chunk_env != NULL ?
-        (uint32_t)atoi(max_chunk_env) : 32;
+        (uint32_t)atoi(max_chunk_env) :
+        (r->prefill_mma_level >= 2 ? 64 : 32);
     uint32_t offset = 0;
     while (token_count - offset >= 16) {
-        uint32_t chunk = token_count - offset >= 32 && max_chunk >= 32 ?
-            32 : 16;
-        Q36PrefillPipelines *pipelines =
-            chunk == 32 ? r->prefill32 : r->prefill16;
+        uint32_t remaining = token_count - offset;
+        uint32_t chunk = remaining >= 64 && max_chunk >= 64 ? 64 :
+                         (remaining >= 32 && max_chunk >= 32 ? 32 : 16);
+        Q36PrefillPipelines *pipelines = prefill_set_for_batch(r, chunk);
         double chunk_start = decode_seconds();
         MTLCommandBufferStatus status;
         NSString *failure = nil;
@@ -2104,7 +2213,8 @@ int qwen36_m3_model_prefill(
                 [profile->commands addObject:command];
                 [profile->tags addObject:@(Q36_PROFILE_TAG_HEAD)];
                 profile_report(r, profile,
-                               chunk == 32 ? "chunk32" : "chunk16");
+                               chunk == 64 ? "chunk64" :
+                               (chunk == 32 ? "chunk32" : "chunk16"));
             }
         }
         if (status != MTLCommandBufferStatusCompleted) {
@@ -2125,7 +2235,8 @@ int qwen36_m3_model_prefill(
                 NULL, error_message, error_message_capacity);
             if (mtp_status != 0) return mtp_status;
         }
-        if (chunk == 32) ++result->chunk32_count;
+        if (chunk == 64) result->chunk32_count += 2;
+        else if (chunk == 32) ++result->chunk32_count;
         else ++result->chunk16_count;
         offset += chunk;
     }

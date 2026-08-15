@@ -629,6 +629,21 @@
       "parity_test": "argmax identical on all runs; the flat state tolerance gained a 0.8% relative escape (a half ulp at key magnitudes in the hundreds is 0.25-0.5) and the half-tile GEMM mode a measured 0.75 bound"
     }
   },
+  "s64_and_fused_step_increment": {
+    "summary": "S64 prefill bucket on the half-tile GEMM level (2D batch-tile grid), a fused single-command-buffer speculative step with GPU argmax draft chaining, and parity-gate recalibration.",
+    "s64_bucket": {
+      "chunk64_gpu_ms": 1047.0,
+      "two_chunk32_gpu_ms": 1132.0,
+      "per_token_gain": "17.7 -> 16.4 ms/token GPU (7.5%) for prompts >= 64 tokens",
+      "note": "S16 chunk measures 546 ms vs 565 for S32: fixed weight streaming dominates, so short chunks are inherently expensive",
+      "bug_found": "first S64 cut had the half-tile spill offset using the global batch index, overflowing threadgroup memory for the second batch tile; caught by the extended parity runs (64/67/96) as a 65.06 state error with a wrong argmax"
+    },
+    "fused_step": {
+      "design": "drafts chain through a GPU argmax into the token buffer, then snapshot blit, batch verify, and the full-accept draft-cache refresh, all in one command buffer; one CPU round trip per accepted step",
+      "measured_gain": "13.49 -> 13.54 code / 9.49 -> 9.52 prose tok/s (~0.3-0.5%): command-buffer round trips on a warm queue cost far less than estimated; kept for the structure, recorded as a near-null result"
+    },
+    "parity_gate": "state tolerance now scales with run length in 32-token units (the exact path itself drifts 0.084 -> 0.27 from 48 to 96 tokens through delta-rule amplification, argmax identical throughout); relative escape 1.5%; 24/24 checks pass"
+  },
   "bare_mlx_lm_baseline": {
     "measured_at": "2026-08-14T19:40:00+08:00",
     "scope": "bare mlx-lm library baseline, separate from the published oMLX server baseline; comparison-only Python environment, not in the deployment path",

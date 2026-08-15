@@ -59,3 +59,42 @@ kernel void qwen36_q4_lm_head(
     float reduced = simd_sum(partial);
     if (lane == 0) logits[row] = reduced;
 }
+
+/* First-occurrence argmax over the masked head logits, written into a
+ * uint32 slot. Matches the CPU loop: strict greater-than keeps the
+ * lowest index among equal maxima. Lets a draft token feed the next
+ * chained MTP pass without a CPU round trip. */
+kernel void qwen36_argmax(
+    device const float *logits [[buffer(0)]],
+    device uint *output [[buffer(1)]],
+    constant uint &slot [[buffer(2)]],
+    uint tid [[thread_index_in_threadgroup]]) {
+    threadgroup float best_value[256];
+    threadgroup uint best_index[256];
+    float value = -INFINITY;
+    uint index = 0;
+    for (uint i = tid; i < 248320; i += 256) {
+        float candidate = logits[i];
+        if (candidate > value) {
+            value = candidate;
+            index = i;
+        }
+    }
+    best_value[tid] = value;
+    best_index[tid] = index;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 128; stride != 0; stride >>= 1) {
+        if (tid < stride) {
+            float other = best_value[tid + stride];
+            uint other_index = best_index[tid + stride];
+            if (other > best_value[tid] ||
+                (other == best_value[tid] &&
+                 other_index < best_index[tid])) {
+                best_value[tid] = other;
+                best_index[tid] = other_index;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0) output[slot] = best_index[0];
+}
