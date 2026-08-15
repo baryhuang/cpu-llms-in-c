@@ -452,9 +452,38 @@ rate is tokens divided by time after the first token.
 Structured output (code) accepts nearly everything; free prose accepts
 about 83 %. Per step the draft pass costs ~8 ms and the batch-2
 verify (snapshot included) ~168 ms against ~118 ms for a plain one-token
-forward; the verify gap is the current cost ceiling and the next tuning
-target. Resident cost of MTP: 239 MB more mapped weights and one more
+forward. Resident cost of MTP: 239 MB more mapped weights and one more
 attention layer's KV cache (34 MB at context 4096).
+
+### Multi-step drafting
+
+The reference implementations run the single MTP layer recursively
+(Qwen recommends three speculative tokens for this family), each step
+consuming the previous step's post-norm MTP hidden. This runtime chains
+up to three drafts, verifies pending plus all drafts in one
+batch-(depth+1) forward, and on a partial accept restores the
+pre-verify GDN snapshot and re-verifies the accepted prefix plus the
+corrected token — so output stays token-identical to plain greedy at
+every depth (verified on the full battery). Deeper chains trade verify
+rows and replays against acceptance:
+
+| Decode tok/s | MTP off | depth 1 | depth 2 | depth 3 | adaptive (default) |
+|---|---:|---:|---:|---:|---:|
+| C function, 30 tokens | 8.4 | 11.93 | 14.18 | **15.40** | 13.49 |
+| Prose, 446 tokens | 8.4 | **9.60** | 8.83 | 8.10 | 9.49 |
+
+Per-draft acceptance falls with chain position (prose: 83 % at depth 1,
+71 % cumulative at 2, 57 % at 3), so a fixed deep chain loses on prose.
+The default is adaptive: a per-draft acceptance EMA (alpha 0.15,
+deepen above 0.90/0.95) keeps prose at depth 1 within noise of its
+optimum and lets code climb to depth 3. `QWEN36_MTP_DEPTH=1..3` fixes
+the depth; `0` is the adaptive default.
+
+Two batch-2..4 verify kernel experiments were measured and rejected:
+an 8x8-MMA tile variant (barrier/staging bound at small batch) and a
+half-math GEMV (196 ms vs 168 ms at batch 2 — Metal scalar half is not
+faster here). The verify keeps the exact decode-identical float GEMV
+kernels, which also keeps verify logits bitwise-anchored to decode.
 
 ## Verification
 

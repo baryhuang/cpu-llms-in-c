@@ -279,6 +279,14 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Model resident in %.1f s. Enter /quit to exit.\n",
             seconds_now() - start);
     int mtp = 0;
+    int mtp_depth = 0; /* 0 = adaptive (max 3) */
+    const char *mtp_depth_env = getenv("QWEN36_MTP_DEPTH");
+    if (mtp_depth_env != NULL) {
+        mtp_depth = atoi(mtp_depth_env);
+        if (mtp_depth < 0) mtp_depth = 0;
+        if (mtp_depth > 3) mtp_depth = 3;
+    }
+    int mtp_depth_max = mtp_depth == 0 ? 3 : mtp_depth;
     const char *mtp_env = getenv("QWEN36_MTP");
     if ((mtp_env == NULL || strcmp(mtp_env, "0") != 0) &&
         temperature <= 0.0f && top_k <= 1) {
@@ -436,12 +444,13 @@ int main(int argc, char **argv) {
             while (!done) {
                 if (pending == QWEN36_END_OF_TEXT ||
                     pending == QWEN36_IM_END ||
-                    generated_count + 2 > budget ||
+                    generated_count + (uint32_t)mtp_depth_max + 1 >
+                        budget ||
                     (uint64_t)mtp_position + 2 > capacity) {
                     generated[generated_count++] = pending;
                     break;
                 }
-                uint32_t step_emitted[2];
+                uint32_t step_emitted[8];
                 uint32_t step_count = 0;
                 int step_accepted = 0;
                 if (qwen36_m3_model_mtp_step(
@@ -453,7 +462,7 @@ int main(int argc, char **argv) {
                     break;
                 }
                 ++mtp_steps;
-                mtp_accepts += step_accepted != 0;
+                mtp_accepts += (size_t)step_accepted;
                 for (uint32_t i = 0; i < step_count && !done; ++i) {
                     generated[generated_count++] = step_emitted[i];
                     if (step_emitted[i] == QWEN36_END_OF_TEXT ||
@@ -537,13 +546,13 @@ int main(int argc, char **argv) {
                 printf("E {\"tokens\": %zu, \"prompt_tokens\": %zu, "
                        "\"first_token_s\": %.3f, \"total_s\": %.3f, "
                        "\"stop\": \"%s\", \"mtp_steps\": %zu, "
-                       "\"mtp_accepted\": %zu}\n",
+                       "\"mtp_accepted\": %zu, \"mtp_depth\": %d}\n",
                        visible_count, prompt_count,
                        first_token_seconds >= 0.0 ?
                            first_token_seconds : 0.0,
                        total_seconds,
                        stopped ? "stop" : "length",
-                       mtp_steps, mtp_accepts);
+                       mtp_steps, mtp_accepts, mtp_depth);
             }
             fflush(stdout);
         } else {
@@ -553,7 +562,8 @@ int main(int argc, char **argv) {
                 total_seconds > first_token_seconds) {
                 if (mtp_steps != 0)
                     fprintf(stderr, "[first token %.2f s, %zu tokens, "
-                            "%.1f tok/s, draft accepted %zu/%zu]\n",
+                            "%.1f tok/s, drafts accepted %zu over "
+                            "%zu steps]\n",
                             first_token_seconds, visible_count,
                             (double)(visible_count - 1) /
                             (total_seconds - first_token_seconds),

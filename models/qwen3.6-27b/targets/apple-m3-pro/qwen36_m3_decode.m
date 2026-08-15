@@ -198,6 +198,9 @@ enum { Q36_PREFILL_MAX_BATCH = 32 };
 
     Q36PrefillPipelines *prefill1;
     Q36PrefillPipelines *prefill2;
+    Q36PrefillPipelines *prefill3;
+    Q36PrefillPipelines *prefill4;
+    uint32_t mtp_depth;
     Q36PrefillPipelines *prefill16;
     Q36PrefillPipelines *prefill32;
 
@@ -250,6 +253,8 @@ struct qwen36_m3_model {
     /* Source of the hidden state feeding the next MTP draft:
      * 0 = decode workspace, 1 = verify batch row 0, 2 = row 1. */
     int mtp_hidden_source;
+    uint32_t mtp_adaptive_depth;
+    float mtp_accept_ema;
 };
 
 static void decode_error(char *message, size_t capacity_value,
@@ -781,7 +786,7 @@ static void encode_prefill_gemm_f16(
     id<MTLBuffer> x, id<MTLBuffer> quants, id<MTLBuffer> metadata,
     id<MTLBuffer> output, uint32_t rows, uint32_t groups_per_row) {
     q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
-    int use_mma = r->prefill_mma_level > 0 && p->batch > 2;
+    int use_mma = r->prefill_mma_level > 0 && p->batch > 8;
     [encoder setComputePipelineState:
         use_mma ? (r->prefill_mma_level >= 2 ?
                    p->gemm_f16_mma2 : p->gemm_f16_mma) : p->gemm_f16];
@@ -805,7 +810,7 @@ static void encode_prefill_gemm_residual(
     id<MTLBuffer> residual, id<MTLBuffer> output, uint32_t rows,
     uint32_t groups_per_row, BOOL residual_is_half) {
     q36_prefill_gemm_parameters parameters = {rows, groups_per_row};
-    int use_mma = r->prefill_mma_level > 0 && p->batch > 2;
+    int use_mma = r->prefill_mma_level > 0 && p->batch > 8;
     id<MTLComputePipelineState> pipeline;
     if (residual_is_half)
         pipeline = !use_mma ? p->gemm_f32_residual_f16 :
@@ -1342,6 +1347,8 @@ void qwen36_m3_model_reset(qwen36_m3_model *model) {
                    layer->convolution_state.length);
         }
     }
+    model->mtp_adaptive_depth = 1;
+    model->mtp_accept_ema = 0.85f;
     if (r->mtp_layer != nil) {
         memset(r->mtp_layer->key_cache.contents, 0,
                r->mtp_layer->key_cache.length);
@@ -1497,6 +1504,8 @@ static Q36PrefillPipelines *prefill_set_for_batch(
     switch (batch) {
     case 1: return r->prefill1;
     case 2: return r->prefill2;
+    case 3: return r->prefill3;
+    case 4: return r->prefill4;
     case 16: return r->prefill16;
     default: return r->prefill32;
     }
@@ -1634,14 +1643,15 @@ static int run_mtp_pass(qwen36_m3_model *model, uint32_t batch,
     return 0;
 }
 
-/* Batch-2 forward with logits at both positions: the verification step of
- * speculative decoding. Layer states advance by two positions. */
-static int model_forward2(qwen36_m3_model *model, uint32_t token0,
-                          uint32_t token1, uint32_t position,
-                          int snapshot_first, char *error_message,
-                          size_t error_message_capacity) {
+/* Batched forward with logits at every position: the verification step of
+ * speculative decoding. Layer states advance by batch positions. */
+static int model_forward_batch(qwen36_m3_model *model,
+                               const uint32_t *tokens, uint32_t batch,
+                               uint32_t position, int snapshot_first,
+                               char *error_message,
+                               size_t error_message_capacity) {
     Q36DecodeRuntime *r = (__bridge Q36DecodeRuntime *)model->runtime;
-    if ((uint64_t)position + 2 > r->capacity) {
+    if ((uint64_t)position + batch > r->capacity) {
         decode_error(error_message, error_message_capacity,
                      @"verification exceeds context capacity");
         return 1;
@@ -1656,8 +1666,9 @@ static int model_forward2(qwen36_m3_model *model, uint32_t token0,
             profile_storage.tags = [NSMutableArray array];
             profile = &profile_storage;
         }
-        uint32_t tokens[2] = {token0, token1};
-        memcpy(r->p_token_ids.contents, tokens, sizeof(tokens));
+        Q36PrefillPipelines *pipelines = prefill_set_for_batch(r, batch);
+        memcpy(r->p_token_ids.contents, tokens,
+               (size_t)batch * sizeof(uint32_t));
         id<MTLCommandBuffer> command = [r->queue commandBuffer];
         if (snapshot_first) {
             id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
@@ -1688,15 +1699,15 @@ static int model_forward2(qwen36_m3_model *model, uint32_t token0,
         }
         id<MTLComputeCommandEncoder> encoder =
             [command computeCommandEncoder];
-        encode_prefill_chunk(r, r->prefill2, &command, &encoder, position,
+        encode_prefill_chunk(r, pipelines, &command, &encoder, position,
                              profile);
-        [encoder setComputePipelineState:r->prefill2->rms_f32];
+        [encoder setComputePipelineState:pipelines->rms_f32];
         [encoder setBuffer:r->p_layer_output offset:0 atIndex:0];
         [encoder setBuffer:r->global->constants offset:0 atIndex:1];
         [encoder setBuffer:r->p_post_normalized offset:0 atIndex:2];
-        [encoder dispatchThreadgroups:MTLSizeMake(2, 1, 1)
+        [encoder dispatchThreadgroups:MTLSizeMake(batch, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-        encode_prefill_gemm_f16(r, r->prefill2, encoder,
+        encode_prefill_gemm_f16(r, pipelines, encoder,
                                 r->p_post_normalized,
                                 r->global->lm_head_quants,
                                 r->global->lm_head_metadata,
@@ -1710,7 +1721,7 @@ static int model_forward2(qwen36_m3_model *model, uint32_t token0,
         if (profile != NULL && status == MTLCommandBufferStatusCompleted) {
             [profile->commands addObject:command];
             [profile->tags addObject:@(Q36_PROFILE_TAG_HEAD)];
-            profile_report(r, profile, "verify2");
+            profile_report(r, profile, "verify");
         }
     }
     if (status != MTLCommandBufferStatusCompleted) {
@@ -1828,9 +1839,18 @@ int qwen36_m3_model_mtp_open(
         r->mtp_logits = [r->device
             newBufferWithLength:(size_t)QWEN36_VOCAB_SIZE * sizeof(float)
                         options:MTLResourceStorageModeShared];
+        /* 1..3 fixes the draft depth; 0 (the default) adapts it per
+         * step: a fully accepted step deepens the next draft chain, any
+         * reject resets it to one. */
+        const char *depth_env = getenv("QWEN36_MTP_DEPTH");
+        int depth_value = depth_env != NULL ? atoi(depth_env) : 0;
+        if (depth_value < 0) depth_value = 0;
+        if (depth_value > 3) depth_value = 3;
+        r->mtp_depth = (uint32_t)depth_value;
+        uint32_t max_depth = r->mtp_depth == 0 ? 3 : r->mtp_depth;
         r->p_logits2 = [r->device
-            newBufferWithLength:(size_t)2 * QWEN36_VOCAB_SIZE *
-                                sizeof(float)
+            newBufferWithLength:(size_t)(max_depth + 1) *
+                                QWEN36_VOCAB_SIZE * sizeof(float)
                         options:MTLResourceStorageModeShared];
         size_t recurrent_total = 0;
         size_t convolution_total = 0;
@@ -1850,12 +1870,20 @@ int qwen36_m3_model_mtp_open(
             r->prefill1 = prefill_pipelines(r, 1, &pipeline_message);
         if (r->prefill2 == nil)
             r->prefill2 = prefill_pipelines(r, 2, &pipeline_message);
+        int deep = r->mtp_depth == 0 || r->mtp_depth >= 2;
+        if (deep && r->prefill3 == nil)
+            r->prefill3 = prefill_pipelines(r, 3, &pipeline_message);
+        if ((r->mtp_depth == 0 || r->mtp_depth >= 3) &&
+            r->prefill4 == nil)
+            r->prefill4 = prefill_pipelines(r, 4, &pipeline_message);
         if (r->mtp_fc_quants == nil || r->mtp_fc_metadata == nil ||
             r->mtp_constants == nil || r->mtp_fused == nil ||
             r->mtp_logits == nil || r->p_logits2 == nil ||
             r->snapshot_recurrent == nil ||
             r->snapshot_convolution == nil || r->prefill1 == nil ||
-            r->prefill2 == nil) {
+            r->prefill2 == nil || (deep && r->prefill3 == nil) ||
+            ((r->mtp_depth == 0 || r->mtp_depth >= 3) &&
+             r->prefill4 == nil)) {
             munmap(mapping, length);
             close(file);
             decode_error(error_message, error_message_capacity,
@@ -1878,7 +1906,7 @@ int qwen36_m3_model_mtp_open(
 
 int qwen36_m3_model_mtp_step(
     qwen36_m3_model *model, uint32_t *current_token, uint32_t *position,
-    uint32_t emitted[2], uint32_t *emitted_count, int *accepted,
+    uint32_t emitted[8], uint32_t *emitted_count, int *accepted,
     char *error_message, size_t error_message_capacity) {
     if (model == NULL || model->runtime == NULL ||
         current_token == NULL || position == NULL || emitted == NULL ||
@@ -1893,65 +1921,111 @@ int qwen36_m3_model_mtp_step(
                      @"MTP images are not loaded");
         return 1;
     }
+    uint32_t j = *position;
+    uint32_t depth = r->mtp_depth;
+    if (depth == 0) {
+        /* Adaptive: a running per-draft acceptance estimate picks the
+         * chain length. Around 0.83 (free prose) a deeper chain loses
+         * to the extra verify rows and replays, so the thresholds sit
+         * where measured break-even is. */
+        float ema = model->mtp_accept_ema;
+        depth = ema > 0.95f ? 3 : (ema > 0.90f ? 2 : 1);
+    }
+    while (depth > 1 && (uint64_t)j + depth + 1 > r->capacity) --depth;
     id<MTLBuffer> hidden = model->mtp_hidden_source == 0 ?
         r->final_normalized : r->p_post_normalized;
-    NSUInteger hidden_offset = model->mtp_hidden_source == 2 ?
-        (NSUInteger)5120 * sizeof(uint16_t) : 0;
+    NSUInteger hidden_offset = model->mtp_hidden_source >= 1 ?
+        (NSUInteger)(model->mtp_hidden_source - 1) * 5120 *
+            sizeof(uint16_t) : 0;
 
-    uint32_t pending = *current_token;
-    uint32_t j = *position;
-    uint32_t draft = 0;
+    uint32_t tokens[8];
+    tokens[0] = *current_token;
     double phase0 = decode_seconds();
-    int status = run_mtp_pass(model, 1, &pending, j, hidden,
-                              hidden_offset, 1, 0, &draft, error_message,
-                              error_message_capacity);
-    if (status != 0) return status;
-
+    /* Chained drafting: step 1 consumes the target model's
+     * post-final-norm hidden; later steps consume the previous MTP
+     * pass's own post-norm hidden, which the with_head encode leaves in
+     * final_normalized (the reference implementation returns
+     * self.norm(hidden) as the next spec step's hidden). */
+    for (uint32_t i = 0; i < depth; ++i) {
+        uint32_t draft = 0;
+        int draft_status = run_mtp_pass(
+            model, 1, &tokens[i], j + i,
+            i == 0 ? hidden : r->final_normalized,
+            i == 0 ? hidden_offset : 0, 1, 0, &draft, error_message,
+            error_message_capacity);
+        if (draft_status != 0) return draft_status;
+        tokens[i + 1] = draft;
+    }
     double phase1 = decode_seconds();
-    status = model_forward2(model, pending, draft, j, 1, error_message,
-                            error_message_capacity);
+    int status = model_forward_batch(model, tokens, depth + 1, j, 1,
+                                     error_message,
+                                     error_message_capacity);
     if (status != 0) return status;
-    double phase3 = decode_seconds();
+    double phase2 = decode_seconds();
     if (getenv("QWEN36_MTP_DEBUG") != NULL)
-        fprintf(stderr, "[mtp-time] draft %.1f ms, snapshot+verify "
-                "%.1f ms\n", (phase1 - phase0) * 1000.0,
-                (phase3 - phase1) * 1000.0);
-    const float *logits2 = r->p_logits2.contents;
-    uint32_t true_next = argmax_f32(logits2, QWEN36_VOCAB_SIZE);
-    if (getenv("QWEN36_MTP_DEBUG") != NULL) {
-        const float *draft_logits = r->mtp_logits.contents;
-        fprintf(stderr, "[mtp] j=%u pending=%u draft=%u (logit %.2f) "
-                "true=%u (main logit %.2f, draft's logit for it %.2f)\n",
-                j, pending, draft, draft_logits[draft], true_next,
-                logits2[true_next], draft_logits[true_next]);
-    }
+        fprintf(stderr, "[mtp-time] depth %u draft %.1f ms, "
+                "snapshot+verify %.1f ms\n", depth,
+                (phase1 - phase0) * 1000.0, (phase2 - phase1) * 1000.0);
 
-    if (true_next != draft) {
+    const float *logits = r->p_logits2.contents;
+    uint32_t true_next[8];
+    for (uint32_t i = 0; i <= depth; ++i)
+        true_next[i] = argmax_f32(
+            logits + (size_t)i * QWEN36_VOCAB_SIZE, QWEN36_VOCAB_SIZE);
+    uint32_t accepted_count = 0;
+    while (accepted_count < depth &&
+           tokens[accepted_count + 1] == true_next[accepted_count])
+        ++accepted_count;
+
+    uint32_t emit_count;
+    uint32_t next_pending;
+    if (accepted_count == depth) {
+        emit_count = depth + 1;
+        next_pending = true_next[depth];
+    } else {
+        /* Restore the pre-verify GDN state, then re-verify the accepted
+         * prefix plus the corrected token; that both repairs the layer
+         * state and advances it one position past the correction. The
+         * attention KV rows are simply overwritten. */
         gdn_state_copy(r, 1);
-        status = model_forward2(model, pending, true_next, j, 0,
-                                error_message,
-                                error_message_capacity);
+        uint32_t replay_tokens[8];
+        for (uint32_t i = 0; i <= accepted_count; ++i)
+            replay_tokens[i] = tokens[i];
+        replay_tokens[accepted_count + 1] = true_next[accepted_count];
+        status = model_forward_batch(model, replay_tokens,
+                                     accepted_count + 2, j, 0,
+                                     error_message,
+                                     error_message_capacity);
         if (status != 0) return status;
-        logits2 = r->p_logits2.contents;
+        logits = r->p_logits2.contents;
+        emit_count = accepted_count + 2;
+        next_pending = argmax_f32(
+            logits + (size_t)(accepted_count + 1) * QWEN36_VOCAB_SIZE,
+            QWEN36_VOCAB_SIZE);
     }
-    *accepted = true_next == draft;
+    *accepted = (int)accepted_count;
 
-    /* Advance the draft cache past the verified successor so the next
-     * step's draft can attend to it; its own prediction is discarded
-     * because the batched verification already produced the true token
-     * at that position. */
-    status = run_mtp_pass(model, 1, &true_next, j + 1,
+    emitted[0] = tokens[0];
+    for (uint32_t i = 1; i < emit_count; ++i)
+        emitted[i] = true_next[i - 1];
+    *emitted_count = emit_count;
+
+    /* Refresh the draft cache for every confirmed successor with the
+     * true post-final-norm hidden rows the last forward produced; the
+     * rows written speculatively during chained drafting are among the
+     * ones overwritten. */
+    status = run_mtp_pass(model, emit_count - 1, emitted + 1, j + 1,
                           r->p_post_normalized, 0, 0, 0, NULL,
                           error_message, error_message_capacity);
     if (status != 0) return status;
 
-    emitted[0] = pending;
-    emitted[1] = true_next;
-    *emitted_count = 2;
-    *current_token = argmax_f32(logits2 + QWEN36_VOCAB_SIZE,
-                                QWEN36_VOCAB_SIZE);
-    *position = j + 2;
-    model->mtp_hidden_source = 2;
+    *current_token = next_pending;
+    *position = j + emit_count;
+    model->mtp_hidden_source = (int)emit_count;
+    if (r->mtp_depth == 0)
+        for (uint32_t i = 0; i < depth; ++i)
+            model->mtp_accept_ema = 0.85f * model->mtp_accept_ema +
+                (i < accepted_count ? 0.15f : 0.0f);
     return 0;
 }
 

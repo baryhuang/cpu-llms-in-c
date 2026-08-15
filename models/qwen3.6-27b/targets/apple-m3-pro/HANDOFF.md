@@ -259,6 +259,19 @@ accepts 15/15 on code (8.26 -> 11.98 tok/s, 1.45x), 186/223 = 83 % on
 greedy; `QWEN36_MTP=0` disables. serve.py defaults are greedy, so the
 Chatbox path uses it.
 
+Multi-step drafting landed on top (same day): the single MTP layer runs
+recursively (chain hidden = previous step's post-norm MTP hidden, per
+the reference implementation), one batch-(depth+1) verify, partial
+accepts restore the GDN snapshot and re-verify the accepted prefix plus
+the correction. Depths measured on the battery (decode tok/s
+code/prose): off 8.4/8.4, depth1 11.93/9.60, depth2 14.18/8.83,
+depth3 15.40/8.10, adaptive default 13.49/9.49. Adaptive = per-draft
+acceptance EMA (alpha 0.15, thresholds 0.90/0.95), reset at prompt
+start; QWEN36_MTP_DEPTH fixes 1..3. Output token-identical to plain
+greedy at every depth. Two verify-kernel experiments measured and
+rejected (small-batch MMA tile; half-math GEMV at 196 vs 168 ms) — the
+exact float GEMV stays, keeping verify bitwise-anchored to decode.
+
 Hard-won fact, encoded in `tools/qwen36_mtp_pack.c`: the seven `mtp.*`
 norm vectors are HF delta weights (GemmaRMSNorm, effective multiplier
 1 + w) even though every main-model norm in the deployed conversion is a

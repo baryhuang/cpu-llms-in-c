@@ -586,7 +586,36 @@
       "single_token_forward_reference": 118.0,
       "note": "verify uses the exact decode GEMM kernels at batch<=2; the gap over a single forward sits in batch-2 attention/GDN kernels and is the next tuning target"
     },
-    "gating": "chat enables MTP only when both images exist and sampling is greedy (temperature<=0, top_k<=1); QWEN36_MTP=0 disables"
+    "gating": "chat enables MTP only when both images exist and sampling is greedy (temperature<=0, top_k<=1); QWEN36_MTP=0 disables",
+    "multi_step": {
+      "summary": "Draft depth 1..3 chains the single MTP layer (the reference implementation reuses it recursively; Qwen recommends num_speculative_tokens 3 for this family). One batch-(depth+1) verify; a partial accept restores the pre-verify GDN snapshot and re-verifies the accepted prefix plus the correction. Default depth is adaptive: a per-draft acceptance EMA (alpha 0.15, thresholds 0.90/0.95) picks 1..3 per step.",
+      "decode_tok_s": {
+        "code_30_tokens": {
+          "mtp_off": 8.4,
+          "depth1": 11.93,
+          "depth2": 14.18,
+          "depth3": 15.4,
+          "adaptive_default": 13.49
+        },
+        "prose_446_tokens": {
+          "mtp_off": 8.4,
+          "depth1": 9.6,
+          "depth2": 8.83,
+          "depth3": 8.1,
+          "adaptive_default": 9.49
+        }
+      },
+      "accept_per_draft": {
+        "code": "depth1 15/15, depth2 20/20, depth3 24/24",
+        "prose": "depth1 186/223 (83%), depth2 224/316 (71%), depth3 231/402 (57%)"
+      },
+      "output_parity": "every depth and the adaptive default produced token-identical output vs plain greedy on the 4-prompt battery",
+      "negative_results": [
+        "small-batch 8x8-MMA verify kernels: barrier/staging bound, slower than the exact float GEMV at batch <= 4",
+        "half-math GEMV verify kernels: 196 ms vs 168 ms at batch 2 (Metal scalar half not faster here); exact float GEMV kept at batch <= 8, preserving the bitwise verify anchor"
+      ],
+      "gating": "QWEN36_MTP_DEPTH: 0 adaptive (default), 1..3 fixed"
+    }
   },
   "bare_mlx_lm_baseline": {
     "measured_at": "2026-08-14T19:40:00+08:00",
