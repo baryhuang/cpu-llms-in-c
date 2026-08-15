@@ -206,8 +206,13 @@ int main(int argc, char **argv) {
                         "SHARD1_SHA256 SHARD3_SHA256\n", argv[0]);
         return 2;
     }
-    if (strcmp(argv[4], QWEN36_M3_EXPECTED_SOURCE_SHA256) != 0 ||
-        strcmp(argv[5], QWEN36_M3_EXPECTED_SOURCE_SHA256_3) != 0) {
+    int shard1_pinned =
+        strcmp(argv[4], QWEN36_M3_EXPECTED_SOURCE_SHA256) == 0 ||
+        strcmp(argv[4], QWEN38_M3_EXPECTED_SOURCE_SHA256) == 0;
+    int shard3_pinned =
+        strcmp(argv[5], QWEN36_M3_EXPECTED_SOURCE_SHA256_3) == 0 ||
+        strcmp(argv[5], QWEN38_M3_EXPECTED_SOURCE_SHA256_3) == 0;
+    if (!shard1_pinned || !shard3_pinned) {
         fprintf(stderr, "global tensors require pinned shard 1 and shard 3\n");
         return 2;
     }

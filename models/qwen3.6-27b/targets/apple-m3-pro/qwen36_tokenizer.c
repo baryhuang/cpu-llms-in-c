@@ -86,8 +86,10 @@ qwen36_tokenizer *qwen36_tokenizer_open(
         header->merge_count == QWEN36_TOKENIZER_MERGES &&
         header->token_entry_bytes ==
             sizeof(qwen36_token_directory_entry) &&
-        memcmp(header->source_sha256, QWEN36_TOKENIZER_SOURCE_SHA256,
-               64) == 0 &&
+        (memcmp(header->source_sha256, QWEN36_TOKENIZER_SOURCE_SHA256,
+                64) == 0 ||
+         memcmp(header->source_sha256, QWEN38_TOKENIZER_SOURCE_SHA256,
+                64) == 0) &&
         header->token_directory_bytes ==
             (uint64_t)QWEN36_TOKENIZER_VOCAB *
                 sizeof(qwen36_token_directory_entry) &&

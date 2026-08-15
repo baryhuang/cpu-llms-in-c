@@ -7,6 +7,12 @@
 #define QWEN36_TOKENIZER_SOURCE_SHA256 \
     "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4"
 
+/* mlx-community/Qwen3.8-27B-4bit tokenizer.json: identical base vocab
+ * and merges, plus seven added audio/TTS special tokens in the padded
+ * id space (248070-248076). */
+#define QWEN38_TOKENIZER_SOURCE_SHA256 \
+    "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
+
 enum {
     QWEN36_TOKENIZER_VERSION = 1,
     QWEN36_TOKENIZER_HEADER_BYTES = 4096,

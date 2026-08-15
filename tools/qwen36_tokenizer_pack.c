@@ -458,7 +458,8 @@ int main(int argc, char **argv) {
     for (size_t index = 0; index < 32; ++index)
         snprintf(actual + index * 2, 3, "%02x", digest[index]);
     actual[64] = '\0';
-    if (strcmp(actual, QWEN36_TOKENIZER_SOURCE_SHA256) != 0) {
+    if (strcmp(actual, QWEN36_TOKENIZER_SOURCE_SHA256) != 0 &&
+        strcmp(actual, QWEN38_TOKENIZER_SOURCE_SHA256) != 0) {
         fprintf(stderr, "tokenizer SHA-256 mismatch: %s\n", actual);
         free(json);
         return 4;

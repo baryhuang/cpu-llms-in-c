@@ -49,7 +49,11 @@ static int pwrite_exact(int file, const void *input, size_t length,
 static int pinned_sha(const char *sha) {
     return strcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256) == 0 ||
            strcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_2) == 0 ||
-           strcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_3) == 0;
+           strcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_3) == 0 ||
+           strcmp(sha, QWEN38_M3_EXPECTED_SOURCE_SHA256) == 0 ||
+           strcmp(sha, QWEN38_M3_EXPECTED_SOURCE_SHA256_2) == 0 ||
+           strcmp(sha, QWEN38_M3_EXPECTED_SOURCE_SHA256_3) == 0 ||
+           strcmp(sha, QWEN38_M3_EXPECTED_MTP_SHA256) == 0;
 }
 
 static int verify_sha256(int file, const char *expected) {
@@ -233,15 +237,22 @@ int main(int argc, char **argv) {
     errno = 0;
     unsigned long parsed = strtoul(argv[4], &end, 10);
     if (errno != 0 || end == argv[4] || *end != '\0' ||
-        parsed >= 64 || parsed % 4 != 3 || !pinned_sha(argv[3])) {
+        parsed > 64 || (parsed < 64 && parsed % 4 != 3) ||
+        !pinned_sha(argv[3])) {
         fprintf(stderr, "invalid pinned source, SHA-256 or attention layer\n");
         return 2;
     }
+    /* Layer 64 is the MTP draft layer packed from a standalone
+     * quantized MTP checkpoint, whose tensors sit at layers.0.*. */
     unsigned layer = (unsigned)parsed;
 #define MAKE_NAME(variable, suffix) \
     char variable##_storage[160]; \
-    snprintf(variable##_storage, sizeof(variable##_storage), \
-             "language_model.model.layers.%u.%s", layer, suffix); \
+    if (layer == 64) \
+        snprintf(variable##_storage, sizeof(variable##_storage), \
+                 "layers.0.%s", suffix); \
+    else \
+        snprintf(variable##_storage, sizeof(variable##_storage), \
+                 "language_model.model.layers.%u.%s", layer, suffix); \
     const char *const variable = variable##_storage
     MAKE_NAME(GATE_W, "mlp.gate_proj.weight");
     MAKE_NAME(GATE_S, "mlp.gate_proj.scales");

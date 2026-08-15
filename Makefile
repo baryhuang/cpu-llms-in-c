@@ -62,6 +62,7 @@ QWEN36_M3_ATTENTION_PACK := $(BUILD_DIR)/qwen36-m3-attention-pack
 QWEN36_M3_GLOBAL_PACK := $(BUILD_DIR)/qwen36-m3-global-pack
 QWEN36_M3_OMLX_EXPORT := $(BUILD_DIR)/qwen36-m3-export-omlx
 QWEN36_MTP_PACK := $(BUILD_DIR)/qwen36-mtp-pack
+QWEN38_MTP_PACK := $(BUILD_DIR)/qwen38-mtp-pack
 QWEN36_M3_DECODE_OBJECT := $(BUILD_DIR)/qwen36-m3-decode.o
 QWEN36_M3_DECODE_CLI_OBJECT := $(BUILD_DIR)/qwen36-m3-decode-cli.o
 QWEN36_M3_DECODE := $(BUILD_DIR)/qwen36-m3-decode
@@ -119,6 +120,8 @@ qwen36-m3-prefill-parity-test: $(QWEN36_M3_PREFILL_PARITY_TEST) \
 	$(QWEN36_M3_METALLIB)
 
 qwen36-mtp-pack: $(QWEN36_MTP_PACK)
+
+qwen38-mtp-pack: $(QWEN38_MTP_PACK)
 
 qwen36-tools: $(QWEN36_SAFETENSORS_INSPECT) $(QWEN36_M3_PACK) \
 	$(QWEN36_M3_ATTENTION_PACK) $(QWEN36_M3_GLOBAL_PACK) \
@@ -512,6 +515,18 @@ $(QWEN36_MTP_PACK): tools/qwen36_mtp_pack.c \
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN36_IMPORT) -I$(QWEN36_M3) \
 		tools/qwen36_mtp_pack.c \
+		$(QWEN36_IMPORT)/qwen36_sha256.c \
+		$(QWEN36_IMPORT)/qwen36_safetensors.c -o $@ -lm
+
+$(QWEN38_MTP_PACK): tools/qwen38_mtp_pack.c \
+	$(QWEN36_IMPORT)/qwen36_sha256.c $(QWEN36_IMPORT)/qwen36_sha256.h \
+	$(QWEN36_IMPORT)/qwen36_safetensors.c $(QWEN36_IMPORT)/qwen36_safetensors.h \
+	$(QWEN36_M3)/qwen36_m3.h $(QWEN36_M3)/qwen36_m3_image.h \
+	$(QWEN36_M3)/qwen36_m3_attention_image.h \
+	$(QWEN36_M3)/qwen36_m3_mtp_image.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN36_IMPORT) -I$(QWEN36_M3) \
+		tools/qwen38_mtp_pack.c \
 		$(QWEN36_IMPORT)/qwen36_sha256.c \
 		$(QWEN36_IMPORT)/qwen36_safetensors.c -o $@ -lm
 

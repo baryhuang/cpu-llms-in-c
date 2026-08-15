@@ -285,7 +285,11 @@ static int pinned_sha(const char *sha) {
     return memcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256, 64) == 0 ||
            memcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_2, 64) == 0 ||
            memcmp(sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_3, 64) == 0 ||
-           memcmp(sha, QWEN36_M3_EXPECTED_MTP_SHA256, 64) == 0;
+           memcmp(sha, QWEN36_M3_EXPECTED_MTP_SHA256, 64) == 0 ||
+           memcmp(sha, QWEN38_M3_EXPECTED_SOURCE_SHA256, 64) == 0 ||
+           memcmp(sha, QWEN38_M3_EXPECTED_SOURCE_SHA256_2, 64) == 0 ||
+           memcmp(sha, QWEN38_M3_EXPECTED_SOURCE_SHA256_3, 64) == 0 ||
+           memcmp(sha, QWEN38_M3_EXPECTED_MTP_SHA256, 64) == 0;
 }
 
 static id<MTLComputePipelineState>
@@ -376,10 +380,14 @@ static int validate_global_header(const qwen36_m3_global_image_header *h,
         h->vocab_size != QWEN36_VOCAB_SIZE ||
         h->hidden_size != 5120 || h->group_size != 64 ||
         h->constants_f32_count != 5120 ||
-        memcmp(h->embedding_source_sha256,
-               QWEN36_M3_EXPECTED_SOURCE_SHA256, 64) != 0 ||
-        memcmp(h->lm_head_source_sha256,
-               QWEN36_M3_EXPECTED_SOURCE_SHA256_3, 64) != 0)
+        (memcmp(h->embedding_source_sha256,
+                QWEN36_M3_EXPECTED_SOURCE_SHA256, 64) != 0 &&
+         memcmp(h->embedding_source_sha256,
+                QWEN38_M3_EXPECTED_SOURCE_SHA256, 64) != 0) ||
+        (memcmp(h->lm_head_source_sha256,
+                QWEN36_M3_EXPECTED_SOURCE_SHA256_3, 64) != 0 &&
+         memcmp(h->lm_head_source_sha256,
+                QWEN38_M3_EXPECTED_SOURCE_SHA256_3, 64) != 0))
         return -1;
     return h->constants_offset + h->constants_bytes == length ? 0 : -1;
 }
@@ -1906,8 +1914,10 @@ int qwen36_m3_model_mtp_open(
             h->hidden_size != 5120 || h->fc_rows != 5120 ||
             h->fc_groups_per_row != 160 || h->group_size != 64 ||
             h->constants_f32_count != 3 * 5120 ||
-            memcmp(h->source_sha256, QWEN36_M3_EXPECTED_MTP_SHA256,
-                   64) != 0 ||
+            (memcmp(h->source_sha256, QWEN36_M3_EXPECTED_MTP_SHA256,
+                    64) != 0 &&
+             memcmp(h->source_sha256, QWEN38_M3_EXPECTED_MTP_SHA256,
+                    64) != 0) ||
             h->constants_offset + h->constants_bytes != length) {
             munmap(mapping, length);
             close(file);

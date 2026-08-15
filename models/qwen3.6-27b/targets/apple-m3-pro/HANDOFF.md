@@ -283,6 +283,22 @@ tensors: BF16 assembly of shards 13+15, SHA-256 pinned in
 `qwen36_m3_image.h` (`713b0faf...`); images are generated artifacts, not
 committed.
 
+## Qwen3.8-27B rides this target
+
+Qwen3.8-27B (2026-08) is architecture-identical to Qwen3.6-27B
+(verified tensor-by-tensor against the raw HF files). The port lives in
+`models/qwen3.8-27b/` and consists of source pins
+(`QWEN38_M3_EXPECTED_*` in `qwen36_m3_image.h`,
+`QWEN38_TOKENIZER_SOURCE_SHA256`), `tools/qwen38_compile_text_image.sh`
+(the 3.6 script with new pins — the mlx conversions are
+layout-identical down to the shard split), attention-pack layer-64 mode
+plus `tools/qwen38_mtp_pack.c` for the standalone quantized MTP
+checkpoint (whose norms arrive already folded — no 1+w), and a
+tokenizer pin (+7 inert audio ids). Every runtime optimization applies
+unchanged; measured 8.13 -> 9.98 tok/s (1.23x adaptive MTP) on the
+same five-case battery. Remaining 3.8-specific work is template-layer
+only: reasoning_effort injections and preserve_thinking replay.
+
 ## Work not yet implemented
 
 - Per-dispatch profiling of the remaining 864 ms warm chunk (recurrence,

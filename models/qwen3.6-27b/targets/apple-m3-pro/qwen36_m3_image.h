@@ -15,6 +15,24 @@
 #define QWEN36_M3_EXPECTED_MTP_SHA256 \
     "713b0fafacc94c9e541925872de3bcc3507cf5af73abbce525298467b8b4b10f"
 
+/* Qwen3.8-27B: architecturally identical to Qwen3.6-27B (same 2,180
+ * tensor names, shapes and shard layout in the mlx-community affine-4bit
+ * conversions), so the same image format and runtime serve both. Source:
+ * mlx-community/Qwen3.8-27B-4bit revision
+ * 3e6447f082e89cc7f0bc6e5441afd38dfce760ff and
+ * mlx-community/Qwen3.8-27B-MTP-4bit revision
+ * b643c01b6d3b094e325edb6ebd832e16c486c575. Unlike the 3.6 BF16 mtp
+ * source, the 3.8 MTP norm vectors arrive already folded to direct
+ * multipliers. */
+#define QWEN38_M3_EXPECTED_SOURCE_SHA256 \
+    "6cc1508e96fb5d0865dfd5753a79f4ec60651bf3e2a82844a7e8ae9c60528c0d"
+#define QWEN38_M3_EXPECTED_SOURCE_SHA256_2 \
+    "83f2a20ca8058f486a3634a27faf99587f4cd3c156a83dee34fb99e6ac178670"
+#define QWEN38_M3_EXPECTED_SOURCE_SHA256_3 \
+    "31b8c91ef899f79efaaa69e3d2c096f6e2ebeb2ff20e29222abbd9ebc79e560a"
+#define QWEN38_M3_EXPECTED_MTP_SHA256 \
+    "76663c101e7e8ea9c0ae17bcb95183cd7f733ce424c912b8b264a7b1c48e4cc6"
+
 enum {
     QWEN36_M3_IMAGE_VERSION = 3,
     QWEN36_M3_MLP_ONLY_IMAGE_VERSION = 2,

@@ -520,12 +520,21 @@ int main(int argc, char **argv) {
     unsigned layer_index = (unsigned)parsed_layer;
     const char *mlp_path = argc == 7 ? argv[5] : argv[1];
     const char *mlp_sha = argc == 7 ? argv[6] : argv[3];
-    if ((strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256) != 0 &&
-        strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256_2) != 0 &&
-        strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256_3) != 0) ||
-        (strcmp(mlp_sha, QWEN36_M3_EXPECTED_SOURCE_SHA256) != 0 &&
-         strcmp(mlp_sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_2) != 0 &&
-         strcmp(mlp_sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_3) != 0)) {
+    int core_pinned =
+        strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256) == 0 ||
+        strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256_2) == 0 ||
+        strcmp(argv[3], QWEN36_M3_EXPECTED_SOURCE_SHA256_3) == 0 ||
+        strcmp(argv[3], QWEN38_M3_EXPECTED_SOURCE_SHA256) == 0 ||
+        strcmp(argv[3], QWEN38_M3_EXPECTED_SOURCE_SHA256_2) == 0 ||
+        strcmp(argv[3], QWEN38_M3_EXPECTED_SOURCE_SHA256_3) == 0;
+    int mlp_pinned =
+        strcmp(mlp_sha, QWEN36_M3_EXPECTED_SOURCE_SHA256) == 0 ||
+        strcmp(mlp_sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_2) == 0 ||
+        strcmp(mlp_sha, QWEN36_M3_EXPECTED_SOURCE_SHA256_3) == 0 ||
+        strcmp(mlp_sha, QWEN38_M3_EXPECTED_SOURCE_SHA256) == 0 ||
+        strcmp(mlp_sha, QWEN38_M3_EXPECTED_SOURCE_SHA256_2) == 0 ||
+        strcmp(mlp_sha, QWEN38_M3_EXPECTED_SOURCE_SHA256_3) == 0;
+    if (!core_pinned || !mlp_pinned) {
         fprintf(stderr, "source SHA-256 is not the compiled checkpoint pin\n");
         return 2;
     }
