@@ -1,10 +1,11 @@
 """Five-workload set through bare mlx-lm: resident model, one warmup,
 then the five requests with per-request wall and reply token counts."""
 import json
+from pathlib import Path
 import sys
 import time
 
-sys.path.insert(0, "/Users/buryhuang/git/cpullama/tools/compare")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from five_workloads import WORKLOADS, WARMUP, render
 
 from mlx_lm import load, stream_generate

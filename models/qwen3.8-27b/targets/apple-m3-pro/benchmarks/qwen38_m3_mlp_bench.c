@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
         first_number = 4;
     }
     if (argc < first_number || argc > first_number + 2) {
-        fprintf(stderr, "usage: %s [--image IMAGE.q38m3] METALLIB "
+        fprintf(stderr, "usage: %s [--image IMAGE.q38delta] METALLIB "
                         "[MEASURED_ITERATIONS] [WARMUP_ITERATIONS]\n", argv[0]);
         return 2;
     }

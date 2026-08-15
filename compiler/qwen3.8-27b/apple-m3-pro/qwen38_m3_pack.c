@@ -503,7 +503,7 @@ int main(int argc, char **argv) {
         strlen(argv[3]) != QWEN38_M3_SOURCE_SHA256_LENGTH ||
         (argc == 7 &&
          strlen(argv[6]) != QWEN38_M3_SOURCE_SHA256_LENGTH)) {
-        fprintf(stderr, "usage: %s SOURCE.safetensors OUTPUT.q38m3 "
+        fprintf(stderr, "usage: %s SOURCE.safetensors OUTPUT.q38delta "
                         "SOURCE_SHA256 LAYER_INDEX "
                         "[MLP_SOURCE.safetensors MLP_SOURCE_SHA256]\n",
                 argv[0]);

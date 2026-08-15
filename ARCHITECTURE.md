@@ -116,20 +116,25 @@ Smoke examples are recorded as smoke examples. They do not establish product qua
 A released artifact is one point in a cross product with two axes: one pinned model and one pinned CPU/SoC target. The classification order is fixed — model first, CPU/SoC target second:
 
 ```text
-tools/                            shared on-target tooling: hardware and memory-bandwidth probe
-                                  used to pin every target
-compiler/                         offline compiler and reference tools
+tools/                            commands users invoke directly: run, serve, monitor,
+                                  compare and probe hardware
+compiler/                         offline checkpoint inspection, packing and reference tools;
+                                  never required by the deployed runtime
 models/<model>/                   model axis: profile, pins, graph record, reference outputs
 models/<model>/targets/generic/   the model's C runtime with model-axis optimizations only,
                                   portable to any CPU
 models/<model>/targets/<soc>/     target axis: CPU/SoC and accelerator pin, specialized kernels,
                                   layouts, and results measured for this model x target pair
+  commands/                       command front ends compiled into build artifacts
+  benchmarks/                     target-specific performance harnesses
+  validation/                     numerical and low-level debugging programs
 tests/                            committed small fixtures and tests
 ```
 
 - The model directory holds everything independent of the target: input profile, checkpoint and tokenizer pins, graph constants, and reference outputs.
 - `targets/generic/` holds the model's runtime source carrying only model-axis optimizations; it is the portable CPU starting point every pinned target builds from.
 - Each `targets/<soc>/` directory holds everything specific to one model x target combination: CPU/SoC pin, optional accelerator boundary, kernel, layout and schedule choices, and benchmarks measured on that hardware.
+- `tools/` is a user interface, not a holding directory for target source. Offline packers belong under `compiler/`; command sources, benchmarks and validation programs live with the model or model-target they exercise.
 - Changing either axis creates a new combination that requires its own validation. Results never transfer between combinations.
 
 No Gemma 4 CPU target has been selected yet. The current Gemma 4 E2B results under `models/gemma-4-e2b/` were measured on an unpinned two-vCPU development machine; they move into the first pinned target directory when a target is selected.

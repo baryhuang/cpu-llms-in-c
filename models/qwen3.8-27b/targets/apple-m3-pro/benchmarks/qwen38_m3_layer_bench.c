@@ -19,7 +19,7 @@ static unsigned parse_iterations(const char *text) {
 int main(int argc, char **argv) {
     if (argc < 3 || argc > 5) {
         fprintf(stderr,
-                "usage: %s IMAGE.q38m3 METALLIB [MEASURED] [WARMUP]\n",
+                "usage: %s IMAGE.q38delta METALLIB [MEASURED] [WARMUP]\n",
                 argv[0]);
         return 2;
     }

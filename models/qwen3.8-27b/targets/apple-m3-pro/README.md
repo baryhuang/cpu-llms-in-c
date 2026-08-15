@@ -17,6 +17,16 @@ This target runs Qwen3.8-27B text generation end to end through a model-specific
 
 The target maps immutable layer images rather than loading a general model graph. Forty-eight DeltaNet layers use persistent recurrent/convolution state; sixteen full-attention layers use grouped-query KV cache. Metal kernels are specialized for the fixed matrix shapes, affine Q4 layout and prompt-length buckets used by this graph.
 
+## Source layout
+
+| Path | Contents |
+|---|---|
+| Target directory root | C/Objective-C runtime, image-format headers and Metal kernels |
+| [`commands/`](commands/) | Chat and one-shot generation front ends compiled into `build/` |
+| [`benchmarks/`](benchmarks/) | MLP, DeltaNet, complete-layer and attention microbenchmarks |
+| [`validation/`](validation/) | Token-ID decode, tokenizer and oMLX numerical-export programs |
+| [`compiler/qwen3.8-27b/apple-m3-pro/`](../../../../compiler/qwen3.8-27b/apple-m3-pro/) | Offline checkpoint inspection and runtime-image packers |
+
 ## Compiled image format
 
 | File | Contents |
@@ -43,7 +53,7 @@ make qwen38-m3-chat qwen38-tools qwen38-mtp-pack
 Download the exact revisions listed on the [model page](../../README.md), then compile the three weight shards and tokenizer:
 
 ```sh
-tools/qwen38_compile_text_image.sh \
+compiler/qwen3.8-27b/apple-m3-pro/qwen38_compile_runtime_images.sh \
   model-00001-of-00003.safetensors \
   model-00002-of-00003.safetensors \
   model-00003-of-00003.safetensors \

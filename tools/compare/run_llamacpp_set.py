@@ -1,11 +1,12 @@
 """Five-workload set against a resident llama-server (started by the
 caller): one warmup, then the five requests via /completion."""
 import json
+from pathlib import Path
 import sys
 import time
 import urllib.request
 
-sys.path.insert(0, "/Users/buryhuang/git/cpullama/tools/compare")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from five_workloads import WORKLOADS, WARMUP, render
 
 port, out_path = sys.argv[1], sys.argv[2]

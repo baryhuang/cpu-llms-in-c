@@ -120,7 +120,8 @@ if [ ! -d "/Applications/Chatbox.app" ]; then
     brew install --cask chatbox >&2
 fi
 
-if python3 "$repository/tools/qwen38_chatbox_config.py" "$base_url" >&2
+if python3 "$repository/tools/support/qwen38_chatbox_config.py" \
+    "$base_url" >&2
 then
     echo "Chatbox is opening, already connected to the local model." >&2
 else

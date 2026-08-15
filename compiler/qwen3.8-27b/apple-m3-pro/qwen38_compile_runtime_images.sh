@@ -17,7 +17,7 @@ sha2=83f2a20ca8058f486a3634a27faf99587f4cd3c156a83dee34fb99e6ac178670
 sha3=31b8c91ef899f79efaaa69e3d2c096f6e2ebeb2ff20e29222abbd9ebc79e560a
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repository=$(CDPATH= cd -- "$script_dir/.." && pwd)
+repository=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
 
 for source_file in "$shard1" "$shard2" "$shard3" "$tokenizer_json"; do
     if [ ! -f "$source_file" ]; then

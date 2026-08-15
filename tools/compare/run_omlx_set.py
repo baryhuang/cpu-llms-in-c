@@ -3,10 +3,11 @@ enable_thinking=False to match the no-think comparison, one warmup, then
 the five requests."""
 import asyncio
 import json
+from pathlib import Path
 import sys
 import time
 
-sys.path.insert(0, "/Users/buryhuang/git/cpullama/tools/compare")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from five_workloads import WORKLOADS, WARMUP
 
 from omlx.engine import BatchedEngine

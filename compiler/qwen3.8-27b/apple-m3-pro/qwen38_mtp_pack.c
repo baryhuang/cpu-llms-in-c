@@ -4,7 +4,7 @@
  * already in the affine Q4 group-64 layout the runtime consumes, and
  * the three norm vectors arrive already folded to direct multipliers —
  * unlike the official BF16 mtp.* tensors, whose Hugging Face delta
- * convention tools/qwen38_mtp_pack.c has to fold at pack time. The MTP
+ * convention this packer has to fold at pack time. The MTP
  * transformer layer itself is packed separately by
  * qwen38-m3-attention-pack with layer index 64. */
 

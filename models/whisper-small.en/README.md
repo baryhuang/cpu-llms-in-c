@@ -43,6 +43,16 @@ The target is a derived model optimized jointly with the C runtime. It is not re
 
 The full mixed image is 214,878,912 bytes. On A113X, the compact path processes the actual 11-second window in a median 45.046989 seconds across three runs: RTF 4.0952, 388% CPU, 251,396 KiB peak RSS and zero swap. This is 13.08x faster than the earlier fixed-30-second path. The encoder still consumes 85.33% of the median run. The result establishes a working C path and its current bottleneck; it does not establish the `<10%` relative-WER gate. Exact increments, input, transcript and raw duration/resource output are in the [A113X target record](targets/a113x/README.md).
 
+## Source layout
+
+| Path | Contents |
+|---|---|
+| [`commands/`](commands/) | WAV-to-text command front end |
+| [`benchmarks/`](benchmarks/) | Encoder performance harness |
+| [`validation/`](validation/) | Encoder and cached-decoder correctness programs |
+| [`targets/generic/`](targets/generic/) | Portable C runtime |
+| [`targets/a113x/`](targets/a113x/) | A113X-specific kernels and measured results |
+
 ## Build and test
 
 ```sh

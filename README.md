@@ -68,8 +68,8 @@ checkpoint + tokenizer + model rules + target profile
 | [`models/<model>/`](models/) | Source pins, architecture facts, model-level decisions and validation records |
 | `models/<model>/targets/generic/` | Portable model runtime before CPU-specific specialization, where available |
 | `models/<model>/targets/<target>/` | Target kernels, layouts, schedules, runtime code and measured results |
-| [`compiler/`](compiler/) | Offline packing and reference utilities shared across model work |
-| [`tools/`](tools/) | Image compilers, command-line runners, servers and hardware probes |
+| [`compiler/`](compiler/README.md) | Offline checkpoint inspection, packing, fixture generation and target image compilers |
+| [`tools/`](tools/README.md) | Commands users run directly: chat, serving, monitoring, comparison and hardware probing |
 | [`tests/`](tests/) | Import, hashing, packing, sampler, state-machine and numerical parity tests |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Artifact contract and validation rules |
 

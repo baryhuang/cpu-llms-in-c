@@ -17,7 +17,8 @@ QWEN35_LAYER_FIXTURE := tests/fixtures/qwen35_layer_v1.bin
 QWEN35_A113X := models/qwen3.5-0.8b/targets/a113x
 QWEN35_TASK := $(BUILD_DIR)/qwen35-task
 QWEN35_A113X_TASK := $(BUILD_DIR)/qwen35-task-a113x
-WHISPER_SMALL_GENERIC := models/whisper-small.en/targets/generic
+WHISPER_SMALL := models/whisper-small.en
+WHISPER_SMALL_GENERIC := $(WHISPER_SMALL)/targets/generic
 WHISPER_SMALL_LOG_MEL_TEST := $(BUILD_DIR)/whisper-small-log-mel-test
 WHISPER_SMALL_LOG_MEL_FIXTURE := tests/fixtures/whisper_log_mel_80_v1.bin
 WHISPER_ENCODER_STEM_TEST := $(BUILD_DIR)/whisper-encoder-stem-test
@@ -34,6 +35,7 @@ WHISPER_SMALL_A113X_DECODER_CHECK := $(BUILD_DIR)/whisper-small-decoder-check-a1
 WHISPER_SMALL_TRANSCRIBE := $(BUILD_DIR)/whisper-small-transcribe
 WHISPER_SMALL_A113X_TRANSCRIBE := $(BUILD_DIR)/whisper-small-transcribe-a113x
 QWEN38_M3 := models/qwen3.8-27b/targets/apple-m3-pro
+QWEN38_COMPILER := compiler/qwen3.8-27b/apple-m3-pro
 QWEN38_M3_AIR := $(BUILD_DIR)/qwen38-m3-q4.air
 QWEN38_M3_DELTANET_AIR := $(BUILD_DIR)/qwen38-m3-deltanet.air
 QWEN38_M3_LAYER_AIR := $(BUILD_DIR)/qwen38-m3-layer.air
@@ -206,55 +208,55 @@ $(WHISPER_ENCODER_BLOCK_TEST): tests/whisper_encoder_block_test.c \
 $(WHISPER_ENCODER_BLOCK_FIXTURE): compiler/generate_whisper_encoder_block_fixture.py
 	python3 $< --output $@
 
-$(WHISPER_SMALL_ENCODER_CHECK): tools/whisper_small_encoder_check.c \
+$(WHISPER_SMALL_ENCODER_CHECK): $(WHISPER_SMALL)/validation/whisper_small_encoder_check.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_encoder.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_check.c \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) $(WHISPER_SMALL)/validation/whisper_small_encoder_check.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c -o $@ $(LDFLAGS) -lm
 
-$(WHISPER_SMALL_ENCODER_BENCH): tools/whisper_small_encoder_bench.c \
+$(WHISPER_SMALL_ENCODER_BENCH): $(WHISPER_SMALL)/benchmarks/whisper_small_encoder_bench.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_encoder.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_bench.c \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) $(WHISPER_SMALL)/benchmarks/whisper_small_encoder_bench.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c -o $@ $(LDFLAGS) -lm
 
-$(WHISPER_SMALL_DECODER_CHECK): tools/whisper_small_decoder_check.c \
+$(WHISPER_SMALL_DECODER_CHECK): $(WHISPER_SMALL)/validation/whisper_small_decoder_check.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_encoder.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) tools/whisper_small_decoder_check.c \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) $(WHISPER_SMALL)/validation/whisper_small_decoder_check.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c -o $@ $(LDFLAGS) -lm
 
-$(WHISPER_SMALL_TRANSCRIBE): tools/whisper_small_transcribe.c \
+$(WHISPER_SMALL_TRANSCRIBE): $(WHISPER_SMALL)/commands/whisper_small_transcribe.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_encoder.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c $(WHISPER_SMALL_GENERIC)/whisper_small_frontend.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c $(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) tools/whisper_small_transcribe.c \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(WHISPER_SMALL_GENERIC) $(WHISPER_SMALL)/commands/whisper_small_transcribe.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.c -o $@ $(LDFLAGS) -lm
 
-$(WHISPER_SMALL_A113X_TRANSCRIBE): tools/whisper_small_transcribe.c \
+$(WHISPER_SMALL_A113X_TRANSCRIBE): $(WHISPER_SMALL)/commands/whisper_small_transcribe.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_A113X)/whisper_small_encoder.c $(WHISPER_SMALL_A113X)/whisper_small_a113x_kernels.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
@@ -263,13 +265,13 @@ $(WHISPER_SMALL_A113X_TRANSCRIBE): tools/whisper_small_transcribe.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
-		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_transcribe.c \
+		-I$(WHISPER_SMALL_GENERIC) $(WHISPER_SMALL)/commands/whisper_small_transcribe.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_encoder.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_decoder.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
-$(WHISPER_SMALL_A113X_DECODER_CHECK): tools/whisper_small_decoder_check.c \
+$(WHISPER_SMALL_A113X_DECODER_CHECK): $(WHISPER_SMALL)/validation/whisper_small_decoder_check.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
@@ -278,30 +280,30 @@ $(WHISPER_SMALL_A113X_DECODER_CHECK): tools/whisper_small_decoder_check.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_decoder.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
-		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_decoder_check.c \
+		-I$(WHISPER_SMALL_GENERIC) $(WHISPER_SMALL)/validation/whisper_small_decoder_check.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_decoder.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
-$(WHISPER_SMALL_A113X_BENCH): tools/whisper_small_encoder_bench.c \
+$(WHISPER_SMALL_A113X_BENCH): $(WHISPER_SMALL)/benchmarks/whisper_small_encoder_bench.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_A113X)/whisper_small_encoder.c $(WHISPER_SMALL_A113X)/whisper_small_a113x_kernels.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
-		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_bench.c \
+		-I$(WHISPER_SMALL_GENERIC) $(WHISPER_SMALL)/benchmarks/whisper_small_encoder_bench.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_encoder.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
-$(WHISPER_SMALL_A113X_CHECK): tools/whisper_small_encoder_check.c \
+$(WHISPER_SMALL_A113X_CHECK): $(WHISPER_SMALL)/validation/whisper_small_encoder_check.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_A113X)/whisper_small_encoder.c $(WHISPER_SMALL_A113X)/whisper_small_a113x_kernels.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
-		-I$(WHISPER_SMALL_GENERIC) tools/whisper_small_encoder_check.c \
+		-I$(WHISPER_SMALL_GENERIC) $(WHISPER_SMALL)/validation/whisper_small_encoder_check.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_image.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_encoder.c \
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
@@ -340,7 +342,7 @@ $(QWEN38_M3_RUNTIME_OBJECT): $(QWEN38_M3)/qwen38_m3.m $(QWEN38_M3)/qwen38_m3.h \
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O3 -std=c11 -Wall -Wextra -Wpedantic -fobjc-arc -I$(QWEN38_M3) -c $< -o $@
 
-$(QWEN38_M3_BENCH_OBJECT): tools/qwen38_m3_mlp_bench.c $(QWEN38_M3)/qwen38_m3.h
+$(QWEN38_M3_BENCH_OBJECT): $(QWEN38_M3)/benchmarks/qwen38_m3_mlp_bench.c $(QWEN38_M3)/qwen38_m3.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_M3) -c $< -o $@
 
@@ -352,7 +354,7 @@ $(QWEN38_M3_DELTANET_OBJECT): $(QWEN38_M3)/qwen38_m3_deltanet.m \
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O3 -std=c11 -Wall -Wextra -Wpedantic -fobjc-arc -I$(QWEN38_M3) -c $< -o $@
 
-$(QWEN38_M3_DELTANET_BENCH_OBJECT): tools/qwen38_m3_deltanet_bench.c \
+$(QWEN38_M3_DELTANET_BENCH_OBJECT): $(QWEN38_M3)/benchmarks/qwen38_m3_deltanet_bench.c \
 	$(QWEN38_M3)/qwen38_m3.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_M3) -c $< -o $@
@@ -367,7 +369,7 @@ $(QWEN38_M3_LAYER_OBJECT): $(QWEN38_M3)/qwen38_m3_layer.m \
 	$(CC) -O3 -std=c11 -Wall -Wextra -Wpedantic -fobjc-arc \
 		-I$(QWEN38_M3) -c $< -o $@
 
-$(QWEN38_M3_LAYER_BENCH_OBJECT): tools/qwen38_m3_layer_bench.c \
+$(QWEN38_M3_LAYER_BENCH_OBJECT): $(QWEN38_M3)/benchmarks/qwen38_m3_layer_bench.c \
 	$(QWEN38_M3)/qwen38_m3.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_M3) -c $< -o $@
@@ -383,7 +385,7 @@ $(QWEN38_M3_ATTENTION_OBJECT): $(QWEN38_M3)/qwen38_m3_attention.m \
 	$(CC) -O3 -std=c11 -Wall -Wextra -Wpedantic -fobjc-arc \
 		-I$(QWEN38_M3) -c $< -o $@
 
-$(QWEN38_M3_ATTENTION_BENCH_OBJECT): tools/qwen38_m3_attention_bench.c \
+$(QWEN38_M3_ATTENTION_BENCH_OBJECT): $(QWEN38_M3)/benchmarks/qwen38_m3_attention_bench.c \
 	$(QWEN38_M3)/qwen38_m3.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_M3) -c $< -o $@
@@ -401,7 +403,7 @@ $(QWEN38_M3_DECODE_OBJECT): $(QWEN38_M3)/qwen38_m3_decode.m \
 	$(CC) -O3 -std=c11 -Wall -Wextra -Wpedantic -fobjc-arc \
 		-I$(QWEN38_M3) -c $< -o $@
 
-$(QWEN38_M3_DECODE_CLI_OBJECT): tools/qwen38_m3_decode.c \
+$(QWEN38_M3_DECODE_CLI_OBJECT): $(QWEN38_M3)/validation/qwen38_m3_decode.c \
 	$(QWEN38_M3)/qwen38_m3_decode.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_M3) -c $< -o $@
@@ -415,7 +417,7 @@ $(QWEN38_TOKENIZER_OBJECT): $(QWEN38_M3)/qwen38_tokenizer.c \
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_M3) -c $< -o $@
 
-$(QWEN38_TOKENIZER_CLI_OBJECT): tools/qwen38_tokenizer.c \
+$(QWEN38_TOKENIZER_CLI_OBJECT): $(QWEN38_M3)/validation/qwen38_tokenizer.c \
 	$(QWEN38_M3)/qwen38_tokenizer.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_M3) -c $< -o $@
@@ -436,7 +438,7 @@ $(QWEN38_SAMPLER_TEST): tests/qwen38_sampler_test.c \
 		tests/qwen38_sampler_test.c $(QWEN38_M3)/qwen38_sampler.c \
 		-o $@ -lm
 
-$(QWEN38_M3_GENERATE_OBJECT): tools/qwen38_m3_generate.c \
+$(QWEN38_M3_GENERATE_OBJECT): $(QWEN38_M3)/commands/qwen38_m3_generate.c \
 	$(QWEN38_M3)/qwen38_m3_decode.h $(QWEN38_M3)/qwen38_tokenizer.h \
 	$(QWEN38_M3)/qwen38_sampler.h
 	mkdir -p $(BUILD_DIR)
@@ -448,7 +450,7 @@ $(QWEN38_M3_GENERATE): $(QWEN38_M3_DECODE_OBJECT) \
 	$(CC) $^ -o $@ -framework Foundation -framework Metal \
 		-framework CoreFoundation -licucore -lm
 
-$(QWEN38_M3_CHAT_OBJECT): tools/qwen38_m3_chat.c \
+$(QWEN38_M3_CHAT_OBJECT): $(QWEN38_M3)/commands/qwen38_m3_chat.c \
 	$(QWEN38_M3)/qwen38_m3_decode.h $(QWEN38_M3)/qwen38_tokenizer.h \
 	$(QWEN38_M3)/qwen38_sampler.h
 	mkdir -p $(BUILD_DIR)
@@ -476,10 +478,10 @@ $(QWEN38_M3_PREFILL_PARITY_TEST): tests/qwen38_m3_prefill_parity_test.c \
 		$(QWEN38_M3_DECODE_OBJECT) \
 		-o $@ -framework Foundation -framework Metal -lm
 
-$(QWEN38_SAFETENSORS_INSPECT): tools/qwen38_safetensors_inspect.c \
+$(QWEN38_SAFETENSORS_INSPECT): $(QWEN38_COMPILER)/qwen38_safetensors_inspect.c \
 	$(QWEN38_IMPORT)/qwen38_safetensors.c $(QWEN38_IMPORT)/qwen38_safetensors.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_IMPORT) tools/qwen38_safetensors_inspect.c \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_IMPORT) $(QWEN38_COMPILER)/qwen38_safetensors_inspect.c \
 		$(QWEN38_IMPORT)/qwen38_safetensors.c -o $@
 
 $(QWEN38_SAFETENSORS_TEST): tests/qwen38_safetensors_test.c \
@@ -494,16 +496,16 @@ $(QWEN38_SHA256_TEST): tests/qwen38_sha256_test.c \
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_IMPORT) tests/qwen38_sha256_test.c \
 		$(QWEN38_IMPORT)/qwen38_sha256.c -o $@
 
-$(QWEN38_M3_PACK): tools/qwen38_m3_pack.c \
+$(QWEN38_M3_PACK): $(QWEN38_COMPILER)/qwen38_m3_pack.c \
 	$(QWEN38_IMPORT)/qwen38_sha256.c $(QWEN38_IMPORT)/qwen38_sha256.h \
 	$(QWEN38_IMPORT)/qwen38_safetensors.c $(QWEN38_IMPORT)/qwen38_safetensors.h \
 	$(QWEN38_M3)/qwen38_m3.h $(QWEN38_M3)/qwen38_m3_image.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_IMPORT) -I$(QWEN38_M3) \
-		tools/qwen38_m3_pack.c $(QWEN38_IMPORT)/qwen38_sha256.c \
+		$(QWEN38_COMPILER)/qwen38_m3_pack.c $(QWEN38_IMPORT)/qwen38_sha256.c \
 		$(QWEN38_IMPORT)/qwen38_safetensors.c -o $@ -lm
 
-$(QWEN38_MTP_PACK): tools/qwen38_mtp_pack.c \
+$(QWEN38_MTP_PACK): $(QWEN38_COMPILER)/qwen38_mtp_pack.c \
 	$(QWEN38_IMPORT)/qwen38_sha256.c $(QWEN38_IMPORT)/qwen38_sha256.h \
 	$(QWEN38_IMPORT)/qwen38_safetensors.c $(QWEN38_IMPORT)/qwen38_safetensors.h \
 	$(QWEN38_M3)/qwen38_m3.h $(QWEN38_M3)/qwen38_m3_image.h \
@@ -511,43 +513,43 @@ $(QWEN38_MTP_PACK): tools/qwen38_mtp_pack.c \
 	$(QWEN38_M3)/qwen38_m3_mtp_image.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_IMPORT) -I$(QWEN38_M3) \
-		tools/qwen38_mtp_pack.c \
+		$(QWEN38_COMPILER)/qwen38_mtp_pack.c \
 		$(QWEN38_IMPORT)/qwen38_sha256.c \
 		$(QWEN38_IMPORT)/qwen38_safetensors.c -o $@ -lm
 
-$(QWEN38_M3_ATTENTION_PACK): tools/qwen38_m3_attention_pack.c \
+$(QWEN38_M3_ATTENTION_PACK): $(QWEN38_COMPILER)/qwen38_m3_attention_pack.c \
 	$(QWEN38_IMPORT)/qwen38_sha256.c $(QWEN38_IMPORT)/qwen38_sha256.h \
 	$(QWEN38_IMPORT)/qwen38_safetensors.c $(QWEN38_IMPORT)/qwen38_safetensors.h \
 	$(QWEN38_M3)/qwen38_m3.h $(QWEN38_M3)/qwen38_m3_image.h \
 	$(QWEN38_M3)/qwen38_m3_attention_image.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_IMPORT) -I$(QWEN38_M3) \
-		tools/qwen38_m3_attention_pack.c $(QWEN38_IMPORT)/qwen38_sha256.c \
+		$(QWEN38_COMPILER)/qwen38_m3_attention_pack.c $(QWEN38_IMPORT)/qwen38_sha256.c \
 		$(QWEN38_IMPORT)/qwen38_safetensors.c -o $@
 
-$(QWEN38_M3_GLOBAL_PACK): tools/qwen38_m3_global_pack.c \
+$(QWEN38_M3_GLOBAL_PACK): $(QWEN38_COMPILER)/qwen38_m3_global_pack.c \
 	$(QWEN38_IMPORT)/qwen38_sha256.c $(QWEN38_IMPORT)/qwen38_sha256.h \
 	$(QWEN38_IMPORT)/qwen38_safetensors.c $(QWEN38_IMPORT)/qwen38_safetensors.h \
 	$(QWEN38_M3)/qwen38_m3.h $(QWEN38_M3)/qwen38_m3_image.h \
 	$(QWEN38_M3)/qwen38_m3_global_image.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_IMPORT) -I$(QWEN38_M3) \
-		tools/qwen38_m3_global_pack.c $(QWEN38_IMPORT)/qwen38_sha256.c \
+		$(QWEN38_COMPILER)/qwen38_m3_global_pack.c $(QWEN38_IMPORT)/qwen38_sha256.c \
 		$(QWEN38_IMPORT)/qwen38_safetensors.c -o $@
 
-$(QWEN38_M3_OMLX_EXPORT): tools/qwen38_m3_export_omlx.c \
+$(QWEN38_M3_OMLX_EXPORT): $(QWEN38_M3)/validation/qwen38_m3_export_omlx.c \
 	$(QWEN38_M3)/qwen38_m3_image.h \
 	$(QWEN38_M3)/qwen38_m3_attention_image.h \
 	$(QWEN38_M3)/qwen38_m3_global_image.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_M3) $< -o $@
 
-$(QWEN38_TOKENIZER_PACK): tools/qwen38_tokenizer_pack.c \
+$(QWEN38_TOKENIZER_PACK): $(QWEN38_COMPILER)/qwen38_tokenizer_pack.c \
 	$(QWEN38_M3)/qwen38_tokenizer.h \
 	$(QWEN38_IMPORT)/qwen38_sha256.c $(QWEN38_IMPORT)/qwen38_sha256.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(QWEN38_IMPORT) -I$(QWEN38_M3) \
-		tools/qwen38_tokenizer_pack.c $(QWEN38_IMPORT)/qwen38_sha256.c \
+		$(QWEN38_COMPILER)/qwen38_tokenizer_pack.c $(QWEN38_IMPORT)/qwen38_sha256.c \
 		-o $@
 
 clean:
