@@ -1215,5 +1215,68 @@
     "strict_32_token_budget": "5/5",
     "strict_96_token_budget": "5/5",
     "note": "five-case generative smoke adaptation shared with the Qwen3.5-0.8B targets; not an official ARC-Easy score"
+  },
+  "llama_cpp_unsloth_comparison": {
+    "measured_at": "2026-08-15",
+    "stack": "llama.cpp build 10360 (48d22e295, Homebrew), Metal, flash attention on, llama-server resident, context 4096",
+    "weights": "unsloth/Qwen3.6-27B-GGUF Q4_K_M, revision 82d411acf4a06cfb8d9b073a5211bf410bfc29bf, file sha256 5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0, 16,817,244,384 bytes (15.65 GiB model tensors)",
+    "caveat": "a different Q4 quantization of the same model (k-quant mixed precision vs this runtime's affine group-64), so weight values differ; same machine, same rendered 36-token prompt, 30-token greedy completion; the reply text matched this runtime's on this prompt",
+    "method": "one warmup then four measured requests against the resident server; per-request timings from the server's own report plus client wall clock",
+    "rounds": [
+      {
+        "wall_s": 5.213,
+        "prompt_n": 36,
+        "prompt_ms": 1156.4,
+        "prompt_tps": 31.13,
+        "predicted_n": 30,
+        "predicted_ms": 4038.0,
+        "predicted_tps": 7.43
+      },
+      {
+        "wall_s": 4.951,
+        "prompt_n": 36,
+        "prompt_ms": 916.9,
+        "prompt_tps": 39.26,
+        "predicted_n": 30,
+        "predicted_ms": 4033.1,
+        "predicted_tps": 7.44
+      },
+      {
+        "wall_s": 4.946,
+        "prompt_n": 36,
+        "prompt_ms": 917.6,
+        "prompt_tps": 39.23,
+        "predicted_n": 30,
+        "predicted_ms": 4027.6,
+        "predicted_tps": 7.45
+      },
+      {
+        "wall_s": 4.944,
+        "prompt_n": 36,
+        "prompt_ms": 916.0,
+        "prompt_tps": 39.3,
+        "predicted_n": 30,
+        "predicted_ms": 4026.8,
+        "predicted_tps": 7.45
+      },
+      {
+        "wall_s": 4.966,
+        "prompt_n": 36,
+        "prompt_ms": 917.3,
+        "prompt_tps": 39.25,
+        "predicted_n": 30,
+        "predicted_ms": 4047.4,
+        "predicted_tps": 7.41
+      }
+    ],
+    "summary": {
+      "end_to_end_tok_s": 6.06,
+      "request_wall_mean_s": 4.952,
+      "prompt_tok_s_36": 39.3,
+      "decode_tok_s": 7.44,
+      "llama_bench_rates": "pp36 40.62\u00b10.05, pp512 73.04\u00b11.47, tg30 7.23\u00b10.08, tg128 7.16\u00b10.05 (4 repetitions)",
+      "versus_this_runtime_plain": "end-to-end 6.06 vs 6.08 tok/s (dead heat, 0.3%); prompt 39.3 vs 26.0 (llama.cpp 1.51x faster); decode 7.44 vs 8.48 (this runtime 1.14x faster)",
+      "versus_this_runtime_speculative_default": "on the same prompt with speculative decoding on, this runtime measures 7.59 tok/s end-to-end (3.95 s request wall) - 1.25x over llama.cpp, which has no equivalent mode for this architecture"
+    }
   }
 }

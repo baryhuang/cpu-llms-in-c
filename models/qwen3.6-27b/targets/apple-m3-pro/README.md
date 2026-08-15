@@ -186,6 +186,37 @@ one loss is cold start: the C ready phase carries the one-time 7 s weight
 wiring, which amortizes in a long-lived process. Raw data:
 `same_window_three_way` in [`results.json`](results.json).
 
+### llama.cpp with the Unsloth Q4_K_M file
+
+The same request measured against llama.cpp build 10360 (Metal, flash
+attention, `llama-server` resident, context 4096) running
+`unsloth/Qwen3.6-27B-GGUF` Q4_K_M — a different Q4 quantization of the
+same model (k-quant mixed precision, 15.65 GiB of tensors vs this
+runtime's 14.1 GiB), revision and file SHA-256 recorded in
+`results.json`. One warmup, then four measured requests; per-request
+timings from the server's own report. The reply text matched this
+runtime's on this prompt.
+
+| Metric, mean of 4 | C/Metal (this repo) | llama.cpp + Unsloth Q4_K_M |
+|---|---:|---:|
+| End-to-end, reply tokens / request time | 6.08 tok/s | 6.06 tok/s |
+| Request wall, model resident | 4.935 s | 4.952 s |
+| Prompt reading, 36 tokens | 26.0 tok/s | **39.3 tok/s** |
+| Prompt reading, 512 tokens (`llama-bench`) | ~52 tok/s | **73.0 tok/s** |
+| Generation | **8.48 tok/s** | 7.44 tok/s |
+| End-to-end with speculative decoding (this runtime's default) | **7.59 tok/s** | no equivalent mode |
+
+Without speculation the two runtimes tie end to end on this request
+from opposite strengths: llama.cpp's mature Metal GEMM path reads
+prompts about 1.5x faster (consistent with this runtime's documented
+prefill headroom), while this runtime generates 1.14x faster. With
+speculative decoding on — the default, output token-identical to plain
+decoding — this runtime finishes the same request 1.25x faster than
+llama.cpp. llama.cpp's numbers come from a different quantization of
+the weights, so this is a stack comparison at matched quality class,
+not a bit-identical one. Raw data: `llama_cpp_unsloth_comparison` in
+[`results.json`](results.json).
+
 ### Bare mlx-lm reference
 
 The published same-machine baseline above is the complete oMLX server
