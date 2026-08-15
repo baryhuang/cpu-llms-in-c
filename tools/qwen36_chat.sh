@@ -59,25 +59,56 @@ port=${QWEN36_PORT:-8199}
 base_url="http://127.0.0.1:$port/v1"
 log="$repository/tmp/qwen36-serve.log"
 
-if ! curl -sf --max-time 2 "http://127.0.0.1:$port/health" \
-        > /dev/null 2>&1; then
-    echo "Starting the model server (one-time weight wiring, ~10 s)..." >&2
-    nohup python3 "$repository/tools/qwen36_serve.py" --port "$port" \
-        >> "$log" 2>&1 &
+# Exactly one server, one engine and one client: stop whatever is
+# already running before starting fresh.
+if pgrep -f qwen36_serve.py > /dev/null 2>&1 ||
+   pgrep -x qwen36-m3-chat > /dev/null 2>&1; then
+    echo "Stopping the existing server..." >&2
+    pkill -f qwen36_serve.py 2>/dev/null || true
+    pkill -x qwen36-m3-chat 2>/dev/null || true
     waited=0
-    until curl -sf --max-time 2 "http://127.0.0.1:$port/health" \
-            > /dev/null 2>&1; do
+    while pgrep -f qwen36_serve.py > /dev/null 2>&1 ||
+          pgrep -x qwen36-m3-chat > /dev/null 2>&1; do
         sleep 1
         waited=$((waited + 1))
-        if [ "$waited" -ge 120 ]; then
-            echo "Server did not become ready; see $log" >&2
-            exit 3
+        if [ "$waited" -ge 15 ]; then
+            pkill -9 -f qwen36_serve.py 2>/dev/null || true
+            pkill -9 -x qwen36-m3-chat 2>/dev/null || true
+            sleep 1
+            break
         fi
     done
-    echo "Server ready at $base_url" >&2
-else
-    echo "Server already running at $base_url" >&2
 fi
+if pgrep -x Chatbox > /dev/null 2>&1; then
+    echo "Restarting the running Chatbox..." >&2
+    osascript -e 'quit app "Chatbox"' > /dev/null 2>&1 ||
+        pkill -x Chatbox 2>/dev/null || true
+    waited=0
+    while pgrep -x Chatbox > /dev/null 2>&1; do
+        sleep 1
+        waited=$((waited + 1))
+        if [ "$waited" -ge 10 ]; then
+            pkill -9 -x Chatbox 2>/dev/null || true
+            sleep 1
+            break
+        fi
+    done
+fi
+
+echo "Starting the model server (one-time weight wiring, ~10 s)..." >&2
+nohup python3 "$repository/tools/qwen36_serve.py" --port "$port" \
+    >> "$log" 2>&1 &
+waited=0
+until curl -sf --max-time 2 "http://127.0.0.1:$port/health" \
+        > /dev/null 2>&1; do
+    sleep 1
+    waited=$((waited + 1))
+    if [ "$waited" -ge 120 ]; then
+        echo "Server did not become ready; see $log" >&2
+        exit 3
+    fi
+done
+echo "Server ready at $base_url" >&2
 
 if [ ! -d "/Applications/Chatbox.app" ]; then
     if ! command -v brew > /dev/null 2>&1; then

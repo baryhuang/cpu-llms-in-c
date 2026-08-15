@@ -21,8 +21,10 @@ at startup, so every request runs at ready-state latency.
 """
 
 import argparse
+import atexit
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -270,6 +272,20 @@ def main():
     global ENGINE
     ENGINE = Engine(arguments)
     ENGINE.start()
+
+    # Take the resident engine down with the server: without this a
+    # killed server orphans a child process holding the wired model.
+    def shutdown(*_):
+        process = ENGINE.process if ENGINE else None
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+    atexit.register(shutdown)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     server = ThreadingHTTPServer((arguments.host, arguments.port),
                                  Handler)
     print(f"serving OpenAI-compatible API at "
