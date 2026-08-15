@@ -1,0 +1,39 @@
+{
+ "stack": "llama.cpp b10360 llama-server",
+ "port": "8760",
+ "cases": [
+  {
+   "case": "code short",
+   "reply_tokens": 31,
+   "wall_s": 5.228,
+   "e2e_tok_s": 5.93
+  },
+  {
+   "case": "prose",
+   "reply_tokens": 434,
+   "wall_s": 64.512,
+   "e2e_tok_s": 6.73
+  },
+  {
+   "case": "code long",
+   "reply_tokens": 1036,
+   "wall_s": 148.648,
+   "e2e_tok_s": 6.97
+  },
+  {
+   "case": "essay",
+   "reply_tokens": 1587,
+   "wall_s": 227.469,
+   "e2e_tok_s": 6.98
+  },
+  {
+   "case": "summary",
+   "reply_tokens": 129,
+   "wall_s": 22.142,
+   "e2e_tok_s": 5.83
+  }
+ ],
+ "total_reply_tokens": 3217,
+ "total_wall_s": 468.0,
+ "e2e_tok_s": 6.87
+}
