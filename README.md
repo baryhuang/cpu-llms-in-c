@@ -48,6 +48,8 @@ the same model. Raw record:
 | **End-to-end, speculative decoding (default)** | **8.83** | — | — | — |
 | Prompt reading | 36.4 | 39.3 | 13.9 | 11.6 |
 | Generation | 8.48 | 7.44 | 6.03 | 5.90 |
+| End-to-end, five-workload set, Qwen3.6 | **9.42** (7.91 plain) | — | — | — |
+| End-to-end, five-workload set, Qwen3.8 | **9.66** (7.94 plain) | — | — | — |
 
 | Seconds | This runtime | llama.cpp | mlx-lm | oMLX |
 |---|---:|---:|---:|---:|
@@ -57,19 +59,11 @@ the same model. Raw record:
 End-to-end = reply tokens / full request time, prompt reading and
 first token included. Speculative output is token-identical to plain
 decoding; the other stacks have no equivalent mode. Long prompts read
-at 63.6 tok/s (llama.cpp: 73.0).
-
-On a five-workload set (code and prose, 28 to 1,757 reply tokens per
-request), this runtime alone:
-
-| End-to-end tok/s, five-workload set | Speculative (default) | Plain |
-|---|---:|---:|
-| Qwen3.6-27B, 3,394 reply tokens | **9.42** | 7.91 |
-| Qwen3.8-27B, 3,305 reply tokens | **9.66** | 7.94 |
-
-Per-case records:
-[Qwen3.6](models/qwen3.6-27b/targets/apple-m3-pro/README.md) ·
-[Qwen3.8](models/qwen3.8-27b/targets/apple-m3-pro/README.md).
+at 63.6 tok/s (llama.cpp: 73.0). The five-workload rows cover code and
+prose, 28 to 1,757 reply tokens per request; per-case records in the
+[Qwen3.6](models/qwen3.6-27b/targets/apple-m3-pro/README.md) and
+[Qwen3.8](models/qwen3.8-27b/targets/apple-m3-pro/README.md) target
+files.
 
 ## Evaluation isolation
 
