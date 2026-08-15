@@ -6,7 +6,7 @@ Qwen3.6-27B target** — the port changed no graph, kernel or runtime
 logic, only source pins. Qwen3.8-27B is architecturally identical to
 Qwen3.6-27B (verified tensor-by-tensor; see the
 [model page](../../README.md)), so `build/qwen36-m3-chat`,
-`tools/qwen36_serve.py` and every optimization landed on the 3.6 target
+`tools/qwen36_serve.py` and every optimization built for the 3.6 target
 (half-tile MMA prefill with S64/S32/S16 buckets, FP16 KV cache,
 adaptive multi-step MTP speculative decoding, incremental detokenizer)
 apply to these images unchanged.
@@ -94,7 +94,7 @@ token budget). The default remains the no-thinking template.
 
 ## Measured throughput
 
-Five-case resident-chat matrix (the same prompts, procedure and greedy
+Five workloads through the resident chat (the same prompts, procedure and greedy
 seed as the Qwen3.6 matrix), one process per arm; output
 token-identical on 5/5 cases between plain greedy and adaptive MTP.
 The headline rate is end-to-end: completion tokens divided by the full
@@ -111,6 +111,6 @@ per-interval rates are the kernel-level detail.
 | **Aggregate, 3,305 tokens** | | **7.94** | **9.66** | **1.22x** | 8.13 -> 9.98 | 416.3 / 342.0 s |
 
 Qwen3.6-27B measured 7.91 → 9.42 tok/s end-to-end (1.19x) on the same
-battery with the same runtime, so the 3.8 weights run at the same base
-speed (identical graph) with slightly better draft acceptance. Raw
+workload set with the same runtime, so the 3.8 weights run at the same
+base speed (identical graph) with slightly better draft acceptance. Raw
 record: [`results.json`](results.json).

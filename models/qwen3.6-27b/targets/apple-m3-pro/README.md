@@ -137,8 +137,8 @@ The same-machine comparison uses the prompt above, the same 36 prompt IDs, greed
 | Model tensor memory | 15.139 GB file-mapped | 15.135 GB MLX active + 0.827 GB MLX cache | both exclude comparison-stack code pages |
 | Peak process physical footprint | 0.277 GB plus file-backed mapped pages | 16.376 GB | accounting models differ; see Memory |
 
-The table above is the published baseline record from before batched prefill
-landed; it ran the one-token graph 36 times. With the batched prefill,
+The table above is the original baseline record, taken before batched
+prefill existed; it ran the one-token graph 36 times. With the batched prefill,
 tiled-GEMM kernels and weight residency described below, time to first token
 after the model is ready measures 1,389.0 ms mean — 1.91x faster than the
 oMLX server's 2,655.8 ms on the same prompt — and the cold-start total is
@@ -373,7 +373,7 @@ bounds the half accumulation window. Measured chunk32 GPU time drops
 from 889 ms to 576 ms (1.54x; 3.53x over the first-generation batched
 kernels), warm time-to-first-token from 1.115 s to 0.806 s. Parity:
 state drift bounded by 0.249, argmax identical on every prefill-parity
-run, end-to-end token IDs and text identical on the full battery with
+run, end-to-end token IDs and text identical on the full test set with
 and without MTP. `QWEN36_PREFILL_MMA=1` restores the float MMA path,
 `=0` the exact decode-identical kernels.
 
@@ -412,7 +412,8 @@ verifies the pending token and the draft in one batch-2 forward through
 the main model. An accepted draft yields two tokens for roughly one
 main-model pass plus overhead; a rejected draft is replaced through a
 one-token re-verify, so emitted tokens are always bitwise identical to
-plain greedy decoding. That identity is the gate, checked per release.
+plain greedy decoding. That identity is the acceptance gate,
+re-checked after every change.
 
 | Piece | Implementation |
 |---|---:|
@@ -428,18 +429,18 @@ plain greedy decoding. That identity is the gate, checked per release.
 (assembled from ranged reads of official shards 13 and 15, pinned SHA-256
 `713b0faf…`) and emits `mtp-layer.q36att` (a standard attention image,
 209,436,672 bytes) plus `mtp.q36mtp` (fc and norms, 29,556,736 bytes) —
-238,993,408 bytes total, +1.6 % on the model. One convention trap cost a
-day and is now encoded in the packer: the seven `mtp.*` norm vectors are
+238,993,408 bytes total, +1.6 % on the model. The packer encodes one
+non-obvious conversion fact: the seven `mtp.*` norm vectors are
 Hugging Face delta weights (GemmaRMSNorm, effective multiplier `1 + w`),
 while every norm in the main checkpoint conversion is a direct
 multiplier. Packed as direct weights the drafts are garbage (0/40
-accepts); with `1 + w` folded at pack time the same battery accepts
+accepts); with `1 + w` folded at pack time the same test set accepts
 31/40. The finding was isolated with an independent MLX reference
 implementation before touching the C path.
 
 ### Measured effect
 
-Fresh-process A/B, same battery as the parity gate, greedy seed 42.
+Fresh-process A/B, same test set as the parity gate, greedy seed 42.
 `qwen36-m3-chat` enables MTP automatically when both images sit next to
 the model and sampling is greedy; `QWEN36_MTP=0` disables it. The decode
 rate is tokens divided by time after the first token.
@@ -464,7 +465,7 @@ up to three drafts, verifies pending plus all drafts in one
 batch-(depth+1) forward, and on a partial accept restores the
 pre-verify GDN snapshot and re-verifies the accepted prefix plus the
 corrected token — so output stays token-identical to plain greedy at
-every depth (verified on the full battery). Deeper chains trade verify
+every depth (verified on the full test set). Deeper chains trade verify
 rows and replays against acceptance:
 
 | Decode tok/s | MTP off | depth 1 | depth 2 | depth 3 | adaptive (default) |
@@ -568,7 +569,7 @@ Verification is outside the timed benchmark above.
 | Prefill state parity, exact path | S16 bitwise identical in all 256 layer-state buffers and logits; S32 argmax-identical with drift bounded by 0.0841 and zero NaN (`make qwen36-m3-prefill-parity-test`) |
 | Prefill state parity, tiled-GEMM path | argmax-identical on all five token runs, drift bounded by 0.108, zero NaN |
 | Prefill end-to-end token parity | identical IDs and text on 5/5 smoke prompts and 8/8 A/B runs, repeated after each kernel change |
-| MTP end-to-end token parity | MTP on vs off produced identical IDs and text on 4/4 battery prompts including a 446-token generation |
+| MTP end-to-end token parity | MTP on vs off produced identical IDs and text on 4/4 test prompts including a 446-token generation |
 | MTP draft correctness vs independent reference | fused embed+norm kernel bitwise vs CPU oracle; fc within Q4 quantization error; accept behavior matches an MLX reference implementation |
 
 The norm oracle uses the deployed checkpoint convention: standard RMSNorm and q/k norm tensors are direct multiplicative weights, not Hugging Face-style delta weights. Delta q/k normalization uses the exact 128-dimensional epsilon algebra.
