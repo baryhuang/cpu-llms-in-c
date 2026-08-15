@@ -250,6 +250,21 @@ int max2(int a, int b) {
   </table>
   <p>The draft images add 239 MB (+1.6%) and are packed by <code>tools/qwen36_mtp_pack.c</code> from SHA-pinned BF16 tensors. One convention fact is encoded there: the seven <code>mtp.*</code> norm vectors are Hugging Face delta weights (GemmaRMSNorm, effective multiplier 1&nbsp;+&nbsp;w) although every main-model norm in the deployed conversion is a direct multiplier; packed direct, drafts accept 0/40 — the bug was isolated with an independent MLX reference before touching the C path. <code>QWEN36_MTP=0</code> disables speculation; sampling other than greedy disables it automatically.</p>
 
+  <h3>Adaptive multi-step MTP, FP16 KV cache and the five-case matrix</h3>
+  <p>The MTP layer now drafts recursively up to depth 3 (adaptive: a per-draft acceptance EMA holds prose at depth 1 and lets code climb), the attention KV cache stores half precision (64 KiB per context token), prefill runs S64/S32/S16/S8/S4 buckets, and the engine continues conversations from the live token history or a prompt-boundary GDN checkpoint. Every step kept output token-identical to plain greedy on its battery. The five-case throughput matrix (one resident process per arm, greedy seed 42, 3,394 generated tokens):</p>
+  <table>
+    <thead><tr><th>Case</th><th class="num">Tokens</th><th class="num">Decode, MTP off</th><th class="num">Decode, adaptive MTP</th><th class="num">Speedup</th></tr></thead>
+    <tbody>
+      <tr><td>C <code>max2</code> function</td><td class="num">30</td><td class="num">8.30 tok/s</td><td class="num"><strong>12.06 tok/s</strong></td><td class="num">1.45x</td></tr>
+      <tr><td>Hash-table prose</td><td class="num">446</td><td class="num">8.24</td><td class="num">9.35</td><td class="num">1.13x</td></tr>
+      <tr><td>Python <code>LRUCache</code> class</td><td class="num">1,031</td><td class="num">7.92</td><td class="num">11.12</td><td class="num">1.40x</td></tr>
+      <tr><td>Virtual-memory essay</td><td class="num">1,757</td><td class="num">8.13</td><td class="num">9.08</td><td class="num">1.12x</td></tr>
+      <tr><td>Notes summary, 159-token prompt</td><td class="num">130</td><td class="num">8.42</td><td class="num">10.24</td><td class="num">1.22x</td></tr>
+      <tr><td><strong>Aggregate</strong></td><td class="num">3,394</td><td class="num"><strong>8.09</strong></td><td class="num"><strong>9.72</strong></td><td class="num"><strong>1.20x</strong></td></tr>
+    </tbody>
+  </table>
+  <p>Long context: 920/1,808/3,473-token document prompts prefill at ~52 tok/s throughout, decode declines 10.2 to 8.45 tok/s as the KV context grows, capacity 8192 verified, every answer correct. Multi-turn conversations continue instead of re-prefilling: four-turn TTFT 5.30&rarr;1.70 s, 8.79&rarr;1.45 s, 13.74&rarr;6.49 s (checkpoint fallback when a code reply does not survive the tokenize round trip), outputs token-identical. Per-request sampling (top-p, min-p, presence penalty) flows from the OpenAI API to the C sampler; greedy requests keep lossless speculation. Quality: 5/5 on the pinned ARC-Easy five-case smoke at both budgets.</p>
+
   <h2>4. Verification</h2>
   <p>This section is not included in any benchmark duration above.</p>
   <table>
@@ -289,13 +304,13 @@ build/qwen36-m3-generate MODEL_DIR build/qwen36-m3-q4.metallib \
   <table>
     <tr><th>Open item</th><th>Measured reason</th></tr>
     <tr><td>One-time weight wiring at open</td><td>6.5 s of MTLResidencySet wiring per process; amortizes in a long-lived process.</td></tr>
-    <tr><td>Remaining chunk tuning</td><td>The warm S32 chunk at 864 ms sits above the ~115 ms weight-streaming bound; remaining time is in the blocked recurrence and non-GEMM kernels.</td></tr>
-    <tr><td>MTP verify tuning</td><td>The batch-2 verify costs ~168 ms vs ~118 ms for a single forward; closing the gap raises the speculative speedup toward its accept-rate bound (1.83x at 83% accept).</td></tr>
+    <tr><td>Remaining chunk tuning</td><td>The warm S32 chunk sits at 576 ms GPU (half-tile MMA) against a ~415 ms compute+streaming bound; BK=128 staging measured slightly worse and was reverted.</td></tr>
+    <tr><td>MTP verify tuning</td><td>The batch-2 verify costs ~168 ms vs ~118 ms for a single forward; two small-batch kernel experiments (MMA tile, half GEMV) measured worse and were recorded as negative results.</td></tr>
     <tr><td>Message-array C API</td><td>Current CLI accepts arbitrary text but only as one user message.</td></tr>
-    <tr><td>FP16/Q8 KV cache</td><td>Current cache costs 128 KiB per context token.</td></tr>
+    <tr><td>Q8 KV cache</td><td>FP16 landed (64 KiB per context token); Q8 would halve it again if longer contexts are needed.</td></tr>
     <tr><td>Standardized quality suite</td><td>Five smoke cases are insufficient for a general quality claim.</td></tr>
     <tr><td>1K and 4K profiles</td><td>Short-prompt results do not establish long-context behavior.</td></tr>
-    <tr><td>Stateful incremental detokenizer</td><td>The stream decoder re-decodes the visible prefix each step, O(T^2) in generated length; measured at most 0.211 ms total at 30 tokens.</td></tr>
+    <tr><td>Message-array C API</td><td>Multi-turn state lives in the serving layer; the C API takes one rendered prompt and matches token prefixes.</td></tr>
   </table>
 </main>
 </body>

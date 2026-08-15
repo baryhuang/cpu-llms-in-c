@@ -89,5 +89,19 @@
       "prose_speedup": "1.11-1.19x"
     },
     "comparison_to_qwen36": "3.6 measured 8.09 -> 9.72 tok/s (1.20x) on the same battery; 3.8 drafts accept slightly better on the summary case (1.33x vs 1.22x)"
+  },
+  "thinking_mode": {
+    "implemented": "per-request reasoning_effort (low/medium/xhigh/none) with the verbatim template injections; reply opens at <think>; reasoning_content/content split in stream and plain paths; preserve_thinking replay",
+    "verified": {
+      "xhigh_stream": "301 chars reasoning + correct split answer (6 primes between 10 and 30)",
+      "none": "reproduces the pinned no-think behavior",
+      "low_with_small_budget": "400-token budget exhausted mid-think: truncated thinking in reasoning_content, empty content, finish_reason length"
+    }
+  },
+  "quality_arc_easy_5": {
+    "record": "../../benchmarks/arc-easy-5/results-macos-m3-pro.json",
+    "strict_32_token_budget": "3/5",
+    "strict_96_token_budget": "4/5",
+    "observation": "every miss states the correct answer's content in prose without the required 'Answer: X' line; under the pinned no-think template 3.8 drifts toward explanatory prose where 3.6 scores 5/5 on identical prompts"
   }
 }

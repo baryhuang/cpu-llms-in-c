@@ -320,11 +320,11 @@ is the new turn, not the whole history.
   (about 2 ms/token CPU encode today; deferred until it matters).
 - Batched kernel tuning: the warm S32 chunk spends about 1.4 s of compute
   on 32 tokens; profile GEMM tiling and the blocked recurrence.
-- Token ring buffer between tokenizer and prefill.
 - Decode sampling/argmax on GPU for the non-greedy path; the greedy
   speculative path already chains through a GPU argmax. CPU sampling
   measures well under 1 ms per token (sub-1%).
-- GPU-to-GPU token ID -> embedding chaining.
+- GPU-to-GPU token ID -> embedding chaining for plain decode (the
+  speculative path already chains drafts through a GPU argmax).
 - More than one in-flight command/workspace.
 - Multi-request decode-priority scheduler and continuous batching.
 
