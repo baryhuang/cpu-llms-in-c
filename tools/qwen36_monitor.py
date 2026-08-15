@@ -167,6 +167,9 @@ def memory_pressure():
 
 
 def gpu_utilization():
+    """Device-level GPU statistics. macOS exposes no per-GPU-core
+    counters (the 14 cores report as one device), but the driver splits
+    utilization into renderer and tiler engines."""
     try:
         output = subprocess.run(
             ["ioreg", "-r", "-d", "1", "-c", "IOAccelerator", "-a"],
@@ -174,13 +177,87 @@ def gpu_utilization():
         entries = plistlib.loads(output)
     except (subprocess.TimeoutExpired, plistlib.InvalidFileException,
             ValueError):
-        return None
+        return {}
     for entry in entries:
         statistics = entry.get("PerformanceStatistics", {})
-        value = statistics.get("Device Utilization %")
-        if value is not None:
-            return int(value)
-    return None
+        if "Device Utilization %" in statistics:
+            return {
+                "device": int(statistics["Device Utilization %"]),
+                "renderer": statistics.get("Renderer Utilization %"),
+                "tiler": statistics.get("Tiler Utilization %"),
+            }
+    return {}
+
+
+def cpu_topology():
+    """(efficiency_count, performance_count). On Apple Silicon the
+    efficiency cluster occupies the low processor indices; verified on
+    this M3 Pro by pinning background-QoS spinners to cpu0-5."""
+    def level(name):
+        try:
+            return int(subprocess.run(
+                ["sysctl", "-n", f"hw.{name}.logicalcpu"],
+                capture_output=True, text=True, timeout=5).stdout)
+        except (subprocess.TimeoutExpired, ValueError):
+            return 0
+    performance = efficiency = 0
+    try:
+        names = {index: subprocess.run(
+            ["sysctl", "-n", f"hw.perflevel{index}.name"],
+            capture_output=True, text=True, timeout=5).stdout.strip()
+            for index in (0, 1)}
+    except subprocess.TimeoutExpired:
+        names = {}
+    for index, name in names.items():
+        count = level(f"perflevel{index}")
+        if name == "Efficiency":
+            efficiency = count
+        else:
+            performance = count
+    return efficiency, performance
+
+
+PROCESSOR_CPU_LOAD_INFO = 2
+
+
+class CoreTicks:
+    """Per-core busy percentages from host_processor_info deltas."""
+
+    def __init__(self):
+        self.previous = None
+
+    def read(self):
+        host = _libc.mach_host_self()
+        count = ctypes.c_uint()
+        info = ctypes.POINTER(ctypes.c_uint32)()
+        info_count = ctypes.c_uint()
+        if _libc.host_processor_info(
+                host, PROCESSOR_CPU_LOAD_INFO, ctypes.byref(count),
+                ctypes.byref(info), ctypes.byref(info_count)) != 0:
+            return None
+        ticks = [(info[i * 4] + info[i * 4 + 1] + info[i * 4 + 3],
+                  info[i * 4 + 2]) for i in range(count.value)]
+        task = ctypes.c_uint.in_dll(_libc, "mach_task_self_")
+        _libc.vm_deallocate(task,
+                            ctypes.cast(info, ctypes.c_void_p).value,
+                            info_count.value * 4)
+        return ticks
+
+    def sample(self):
+        current = self.read()
+        if current is None:
+            return None
+        previous, self.previous = self.previous, current
+        if previous is None or len(previous) != len(current):
+            return None
+        percentages = []
+        for (busy_now, idle_now), (busy_then, idle_then) in zip(
+                current, previous):
+            busy = busy_now - busy_then
+            total = busy + idle_now - idle_then
+            percentages.append(
+                round(100.0 * busy / total, 1) if total > 0 else 0.0)
+        return percentages
 
 
 class Sampler:
@@ -194,6 +271,8 @@ class Sampler:
         self.previous_cpu_ns = None
         self.previous_wall = None
         self.events = []
+        self.cores = CoreTicks()
+        self.efficiency_cores, self.performance_cores = cpu_topology()
 
     def sample(self):
         if self.pid is None:
@@ -219,6 +298,7 @@ class Sampler:
                 self.previous_cpu_ns = cpu_ns
                 self.previous_wall = wall
         memory = system_memory()
+        gpu = gpu_utilization()
         return {
             "t": time.time(),
             "pid": self.pid,
@@ -226,7 +306,11 @@ class Sampler:
             "cpu": cpu,
             "rss": rss,
             "foot": footprint,
-            "gpu": gpu_utilization(),
+            "gpu": gpu.get("device"),
+            "gpu_renderer": gpu.get("renderer"),
+            "gpu_tiler": gpu.get("tiler"),
+            "cores": self.cores.sample(),
+            "ecores": self.efficiency_cores,
             "pressure": memory_pressure(),
             **memory,
         }
@@ -330,6 +414,17 @@ def run_dashboard(sampler, arguments, record_file):
                                 else f"{current:6.1f}")
                 frame.append(f"{label:>8s}  {line}  {current_text}"
                              f"  peak {maximum:6.1f}\x1b[K")
+            cores = sample.get("cores")
+            if cores:
+                efficiency = sample.get("ecores", 0)
+                def meter(values):
+                    return "".join(
+                        BLOCKS[min(8, max(0, int(round(v / 100 * 8))))]
+                        for v in values)
+                frame.append(
+                    f"{'cores':>8s}  E {meter(cores[:efficiency])}"
+                    f"  P {meter(cores[efficiency:])}"
+                    f"   (per-core now)\x1b[K")
             frame.append("\x1b[K")
             recording = (f"  recording {arguments.record}"
                          if arguments.record else "")
@@ -398,8 +493,11 @@ def polyline_segments(values, top, x_of, y_of):
 
 def render_panel(panel, seconds, pressure_spans=None):
     count = len(seconds)
-    plot_width = CHART_WIDTH - MARGIN_LEFT - MARGIN_RIGHT
-    plot_height = CHART_HEIGHT - MARGIN_TOP - MARGIN_BOTTOM
+    width = panel.get("width", CHART_WIDTH)
+    height = panel.get("height", CHART_HEIGHT)
+    tick_count = panel.get("ticks", 4)
+    plot_width = width - MARGIN_LEFT - MARGIN_RIGHT
+    plot_height = height - MARGIN_TOP - MARGIN_BOTTOM
     peak = 0.0
     for _, _, values in panel["series"]:
         peak = max([peak] + [v for v in values if v is not None])
@@ -418,13 +516,14 @@ def render_panel(panel, seconds, pressure_spans=None):
     legend = "".join(
         f'<span class="key"><i style="background:var({color})"></i>'
         f'{name}</span>'
-        for name, color, _ in panel["series"])
+        for name, color, _ in panel["series"]) if (
+        len(panel["series"]) > 1) else ""
     extra = panel.get("legend_extra", "")
     parts.append(f'<figcaption><span class="ptitle">{panel["title"]}'
                  f'</span><span class="legend">{legend}{extra}</span>'
                  f'</figcaption>')
     parts.append(
-        f'<svg viewBox="0 0 {CHART_WIDTH} {CHART_HEIGHT}" '
+        f'<svg viewBox="0 0 {width} {height}" '
         f'preserveAspectRatio="none" role="img" '
         f'aria-label="{panel["title"]}">')
     if pressure_spans:
@@ -436,24 +535,27 @@ def render_panel(panel, seconds, pressure_spans=None):
                 f'width="{x_of(end) - x_of(start):.1f}" '
                 f'height="{plot_height}" fill="{color}" '
                 f'opacity="0.13"/>')
-    tick_count = 4
     for tick in range(tick_count + 1):
         value = top * tick / tick_count
         y = y_of(value, top)
         parts.append(f'<line class="grid" x1="{MARGIN_LEFT}" '
-                     f'x2="{CHART_WIDTH - MARGIN_RIGHT}" '
+                     f'x2="{width - MARGIN_RIGHT}" '
                      f'y1="{y:.1f}" y2="{y:.1f}"/>')
         text = f"{value:g}"
         parts.append(f'<text class="tick" x="{MARGIN_LEFT - 6}" '
                      f'y="{y + 3.5:.1f}" text-anchor="end">{text}</text>')
     total = seconds[-1] if seconds else 0
-    for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
+    fractions = ((0.0, 1.0) if panel.get("mini")
+                 else (0.0, 0.25, 0.5, 0.75, 1.0))
+    for fraction in fractions:
         index = int(fraction * (count - 1)) if count > 1 else 0
         moment = seconds[index] if seconds else 0
         label = f"{int(moment // 60)}:{int(moment % 60):02d}"
+        anchor = ("start" if fraction == 0.0 else
+                  "end" if fraction == 1.0 else "middle")
         parts.append(
             f'<text class="tick" x="{x_of(index):.1f}" '
-            f'y="{CHART_HEIGHT - 6}" text-anchor="middle">{label}</text>')
+            f'y="{height - 6}" text-anchor="{anchor}">{label}</text>')
     labels = []
     for name, color, values in panel["series"]:
         for points in polyline_segments(values, top, x_of, y_of):
@@ -474,12 +576,18 @@ def render_panel(panel, seconds, pressure_spans=None):
         if labels[index][1] - labels[index - 1][1] < 13:
             labels[index][1] = labels[index - 1][1] + 13
     bottom = MARGIN_TOP + plot_height - 2
-    for x, y, name in labels:
-        y = min(y, bottom)
-        anchor = "end" if x > CHART_WIDTH - 90 else "start"
-        offset = -7 if anchor == "end" else 7
-        parts.append(f'<text class="dlabel" x="{x + offset:.1f}" '
-                     f'y="{y:.1f}" text-anchor="{anchor}">{name}</text>')
+    if labels and not panel.get("mini"):
+        # Keep the stack inside the plot: clamp the lowest label to the
+        # baseline, then walk upward so no pair collapses back together.
+        labels[-1][1] = min(labels[-1][1], bottom)
+        for index in range(len(labels) - 2, -1, -1):
+            labels[index][1] = min(labels[index][1],
+                                   labels[index + 1][1] - 13)
+        for x, y, name in labels:
+            anchor = "end" if x > width - 90 else "start"
+            offset = -7 if anchor == "end" else 7
+            parts.append(f'<text class="dlabel" x="{x + offset:.1f}" '
+                         f'y="{y:.1f}" text-anchor="{anchor}">{name}</text>')
     parts.append(f'<line class="cross" x1="0" x2="0" y1="{MARGIN_TOP}" '
                  f'y2="{MARGIN_TOP + plot_height}" opacity="0"/>')
     parts.append("</svg></figure>")
@@ -511,10 +619,39 @@ def render_html(samples, target, output_path):
         pressure_spans.append((open_span[0], len(samples) - 1,
                                open_span[2]))
 
+    efficiency = next((s.get("ecores", 0) for s in samples
+                       if s.get("ecores")), 0)
+    core_count = max((len(s["cores"]) for s in samples
+                      if s.get("cores")), default=0)
+
+    def core_series(index):
+        return [None if not s.get("cores") or index >= len(s["cores"])
+                else s["cores"][index] for s in samples]
+
+    core_panels = []
+    for index in range(core_count):
+        is_efficiency = index < efficiency
+        label = (f"E{index + 1}" if is_efficiency
+                 else f"P{index - efficiency + 1}")
+        kind = "efficiency" if is_efficiency else "performance"
+        core_panels.append({
+            "key": f"core{index}", "mini": True, "width": 470,
+            "height": 96, "ticks": 2, "floor_top": 100.0,
+            "title": f"{label} · {kind} core",
+            "series": [(label,
+                        "--s2" if is_efficiency else "--s1",
+                        core_series(index))]})
+
     panels = [
         {"key": "util", "title": "Utilization %", "floor_top": 100.0,
          "series": [("process cpu", "--s1", series("cpu", 1.0)),
                     ("gpu device", "--s2", series("gpu", 1.0))]},
+        {"key": "gpu", "title":
+            "GPU engines % (14-core device; macOS exposes no per-core "
+            "GPU counters)", "floor_top": 100.0,
+         "series": [("device", "--s1", series("gpu", 1.0)),
+                    ("renderer", "--s2", series("gpu_renderer", 1.0)),
+                    ("tiler", "--s3", series("gpu_tiler", 1.0))]},
         {"key": "proc", "title": "Process memory GB",
          "series": [("footprint", "--s1", series("foot", 1e-9)),
                     ("rss", "--s2", series("rss", 1e-9))]},
@@ -533,25 +670,41 @@ def render_html(samples, target, output_path):
         "seconds": [round(v, 2) for v in seconds],
         "panels": {
             panel["key"]: {
-                "unit": "%" if panel["key"] == "util" else "GB",
+                "unit": "GB" if panel["key"] in ("proc", "system")
+                        else "%",
+                "left": MARGIN_LEFT,
+                "width": panel.get("width", CHART_WIDTH),
+                "right": MARGIN_RIGHT,
                 "series": [(name, color, [
                     None if v is None else round(v, 2) for v in values])
                     for name, color, values in panel["series"]],
-            } for panel in panels
+            } for panel in panels + core_panels
         },
-        "left": MARGIN_LEFT,
-        "right": MARGIN_RIGHT,
-        "width": CHART_WIDTH,
     }
 
     started = time.strftime("%Y-%m-%d %H:%M:%S",
                             time.localtime(samples[0]["t"]))
     duration = seconds[-1] if seconds else 0
     names = sorted({s["name"] for s in samples if s.get("name")})
-    body = "\n".join(
-        render_panel(panel, seconds,
-                     pressure_spans if panel["key"] == "system" else None)
-        for panel in panels)
+    rendered = {panel["key"]: render_panel(
+        panel, seconds,
+        pressure_spans if panel["key"] == "system" else None)
+        for panel in panels}
+    core_grid = ""
+    if core_panels:
+        minis = "\n".join(render_panel(panel, seconds)
+                          for panel in core_panels)
+        core_grid = (
+            '<section class="coresec">'
+            '<div class="corehead"><span class="ptitle">CPU cores %'
+            f'</span><span class="legend">'
+            f'<span class="key"><i style="background:var(--s1)"></i>'
+            f'performance ({core_count - efficiency})</span>'
+            f'<span class="key"><i style="background:var(--s2)"></i>'
+            f'efficiency ({efficiency})</span></span></div>'
+            f'<div class="grid">{minis}</div></section>')
+    body = "\n".join([rendered["util"], core_grid, rendered["gpu"],
+                      rendered["proc"], rendered["system"]])
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -596,6 +749,15 @@ h1 {{ font-size: 19px; margin: 0 0 2px; }}
 .panel {{ margin: 0 0 18px; background: var(--surface);
   border: 1px solid var(--border); border-radius: 8px;
   padding: 12px 14px 8px; }}
+.coresec {{ margin: 0 0 18px; }}
+.corehead {{ display: flex; justify-content: space-between;
+  align-items: baseline; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 8px; }}
+.grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+.grid .panel {{ margin: 0; padding: 8px 10px 4px; }}
+.grid .ptitle {{ font-size: 12px; font-weight: 600;
+  color: var(--ink-2); }}
+@media (max-width: 700px) {{ .grid {{ grid-template-columns: 1fr; }} }}
 figcaption {{ display: flex; justify-content: space-between;
   align-items: baseline; gap: 12px; flex-wrap: wrap;
   margin-bottom: 6px; }}
@@ -649,11 +811,11 @@ for (const figure of document.querySelectorAll(".panel")) {{
   const count = DATA.seconds.length;
   svg.addEventListener("mousemove", (event) => {{
     const box = svg.getBoundingClientRect();
-    const viewX = (event.clientX - box.left) / box.width * DATA.width;
-    const plot = DATA.width - DATA.left - DATA.right;
-    let index = Math.round((viewX - DATA.left) / plot * (count - 1));
+    const viewX = (event.clientX - box.left) / box.width * panel.width;
+    const plot = panel.width - panel.left - panel.right;
+    let index = Math.round((viewX - panel.left) / plot * (count - 1));
     index = Math.max(0, Math.min(count - 1, index));
-    const x = DATA.left + plot * index / (count - 1 || 1);
+    const x = panel.left + plot * index / (count - 1 || 1);
     cross.setAttribute("x1", x); cross.setAttribute("x2", x);
     cross.setAttribute("opacity", 1);
     const moment = DATA.seconds[index];
