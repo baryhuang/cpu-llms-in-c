@@ -44,6 +44,55 @@ The `.m` files are thin Objective-C calls into the Apple Metal system API. Model
 
 All 65 local model-image hashes matched the remote compiled-artifact manifest. Images and checkpoint shards are generated artifacts and are not committed.
 
+## Deployment size and resident memory
+
+### Standalone install
+
+Measured on disk. The deployed path carries no Python, PyTorch,
+llama.cpp or ONNX Runtime; it links only the macOS system frameworks
+(Metal, Foundation, CoreFoundation, libicucore).
+
+| Component | Bytes |
+|---|---:|
+| Compiled model images, 65 files, Q4 group-64 | 15,138,643,968 |
+| Tokenizer image | 9,781,808 |
+| `qwen36-m3-q4.metallib` GPU kernels | 229,760 |
+| `qwen36-m3-chat` + `qwen36-m3-generate` binaries | 237,760 |
+| Serving, monitor and setup scripts | 56,127 |
+| **Total** | **15,148,949,423 (15.15 GB)** |
+
+Everything except the model images totals 10.3 MB.
+
+| Target machine requirement | Value |
+|---|---|
+| Hardware | Apple Silicon with Metal 3 |
+| OS | macOS 15+ for `MTLResidencySet` wiring at model open; older macOS skips it and pays wiring in the first prefill chunk instead |
+| Dependencies to install for the core runtime | none |
+| Optional tool dependencies | system `python3` (standard library) for `qwen36_serve.py` and `qwen36_monitor.py`; Chatbox client |
+| Resident memory while serving | 15.139 GB wired weights + 0.8 GB process footprint at context 4096 |
+| Practical machine memory | 24 GB minimum, 32 GB or more comfortable |
+| Performance claims | pinned to the M3 Pro target; results do not transfer to other chips |
+
+### Reading the monitor while the server is resident
+
+`tools/qwen36_monitor.py` attached to the resident engine on the 36 GB
+pin, model loaded, idle between requests:
+
+| Column | Typical reading | Meaning for this runtime |
+|---|---:|---|
+| foot | 0.8 GB | process-private memory: 0.54 GB FP32 KV cache at capacity 4096 + 0.16 GB GDN recurrent/conv state + workspace |
+| rss | near 0 | not meaningful here; the mapped weights are file-backed and never counted in RSS |
+| wired | ~20 GB | macOS baseline of roughly 4 GB plus the 15.14 GB weight residency; drops back the moment the server exits |
+| filebk | 2–3 GB | page cache for other files; wired weights are not in this column |
+| anon | varies | other applications' heap memory |
+| compr | varies | compressed inactive memory; grows when total demand exceeds machine memory |
+| free | 0–1 GB | macOS keeps free memory near zero by design; not a signal on its own |
+| pressure | normal / warn | warn near the boundary is expected with the model resident next to large applications |
+
+Attributable total while serving: about 16 GB, constant across
+requests. `pkill -f qwen36_serve.py` releases the wired weights
+immediately; the engine child exits with the server.
+
 ## End-to-end example
 
 Command:
