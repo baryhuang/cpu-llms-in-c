@@ -114,3 +114,24 @@ Qwen3.6-27B measured 7.91 → 9.42 tok/s end-to-end (1.19x) on the same
 workload set with the same runtime, so the 3.8 weights run at the same
 base speed (identical graph) with slightly better draft acceptance. Raw
 record: [`results.json`](results.json).
+
+## Versus llama.cpp with the Unsloth Qwen3.8 file
+
+The same request (36-token prompt, 28-token greedy reply, model
+resident, one warmup then four measured rounds per stack) against
+llama.cpp build 10360 running `unsloth/Qwen3.8-27B-GGUF` Q4_K_M — a
+different Q4 quantization of the same model; revision and file SHA-256
+in `results.json`. Both replies are correct; the texts differ slightly
+because the quantizations differ.
+
+| Metric, mean of 4, model resident | This runtime | llama.cpp + Unsloth Q4_K_M |
+|---|---:|---:|
+| End-to-end, reply tokens / request time | **6.29 tok/s** | 5.76 tok/s |
+| End-to-end with speculative decoding (default) | **9.01 tok/s** | no equivalent mode |
+| Request wall | **4.450 s** (3.109 s with speculation) | 4.864 s |
+| Generation | **~8.4 tok/s** | 7.11 tok/s |
+
+This runtime leads 1.09x end to end without speculation and 1.56x with
+it; speculative output is token-identical to plain decoding. The same
+measurement on Qwen3.6 with the matching Unsloth file is in the
+[Qwen3.6 target record](../../../qwen3.6-27b/targets/apple-m3-pro/README.md).

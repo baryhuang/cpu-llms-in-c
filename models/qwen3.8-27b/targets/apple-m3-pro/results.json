@@ -117,5 +117,63 @@
     "strict_32_token_budget": "3/5",
     "strict_96_token_budget": "4/5",
     "observation": "every miss states the correct answer's content in prose without the required 'Answer: X' line; under the pinned no-think template 3.8 drifts toward explanatory prose where 3.6 scores 5/5 on identical prompts"
+  },
+  "llama_cpp_unsloth_comparison": {
+    "measured_at": "2026-08-15",
+    "stack": "llama.cpp build 10360 (Metal, flash attention, llama-server resident, context 4096)",
+    "weights": "unsloth/Qwen3.8-27B-GGUF Q4_K_M, revision f1bfb127c64f7072bdd2cad55f258b9c8b2910fe, file sha256 7e78da5d7e3ae28d178121f58646953305f3e5bd3cb46f4a75584e8b6c6fe169, 17,106,775,008 bytes",
+    "method": "same rendered 36-token prompt, 28-token greedy completion (this model's natural reply length), one warmup then four measured requests per stack, model resident in both",
+    "rounds": [
+      {
+        "wall_s": 4.921,
+        "prompt_tps": 38.74,
+        "predicted_n": 28,
+        "predicted_tps": 7.06
+      },
+      {
+        "wall_s": 4.839,
+        "prompt_tps": 38.79,
+        "predicted_n": 28,
+        "predicted_tps": 7.16
+      },
+      {
+        "wall_s": 4.919,
+        "prompt_tps": 39.28,
+        "predicted_n": 28,
+        "predicted_tps": 7.0
+      },
+      {
+        "wall_s": 4.831,
+        "prompt_tps": 39.01,
+        "predicted_n": 28,
+        "predicted_tps": 7.17
+      },
+      {
+        "wall_s": 4.868,
+        "prompt_tps": 39.08,
+        "predicted_n": 28,
+        "predicted_tps": 7.1
+      }
+    ],
+    "results": {
+      "this_runtime_plain": {
+        "wall_s": 4.45,
+        "e2e_tok_s": 6.29,
+        "ttft_s": 1.023
+      },
+      "this_runtime_speculative_default": {
+        "wall_s": 3.109,
+        "e2e_tok_s": 9.01,
+        "ttft_s": 1.179
+      },
+      "llama_cpp": {
+        "wall_s": 4.864,
+        "e2e_tok_s": 5.76,
+        "prompt_tok_s": 39.0,
+        "decode_tok_s": 7.11
+      }
+    },
+    "summary": "this runtime leads 1.09x end to end without speculation and 1.56x with it (output token-identical to plain decoding); llama.cpp's reply is correct but differs textually - a different Q4 quantization of the same model",
+    "regression": "the runtime's replies match the recorded 3.8 outputs exactly after the wide-tile/S128 prefill changes, with and without speculation"
   }
 }
