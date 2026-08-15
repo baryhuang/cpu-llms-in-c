@@ -74,35 +74,6 @@ static char *render_chat(const char *prompt) {
     return chat;
 }
 
-static size_t complete_utf8_prefix(const unsigned char *bytes,
-                                   size_t length) {
-    size_t cursor = 0;
-    while (cursor < length) {
-        unsigned char first = bytes[cursor];
-        size_t width;
-        if (first < 0x80) width = 1;
-        else if ((first & 0xe0) == 0xc0) width = 2;
-        else if ((first & 0xf0) == 0xe0) width = 3;
-        else if ((first & 0xf8) == 0xf0) width = 4;
-        else {
-            ++cursor;
-            continue;
-        }
-        if (length - cursor < width) break;
-        size_t continuation = 1;
-        while (continuation < width &&
-               (bytes[cursor + continuation] & 0xc0) == 0x80)
-            ++continuation;
-        if (continuation != width) {
-            ++cursor;
-            continue;
-        }
-        cursor += width;
-    }
-    return cursor;
-}
-
-/* Write one JSON string (with quotes) to stdout. */
 static void put_json_string(const char *bytes, size_t length) {
     putchar('"');
     for (size_t index = 0; index < length; ++index) {
@@ -209,36 +180,85 @@ static char *decode_json_string(const char *line) {
 /* Decode the visible token prefix and print only the new complete UTF-8
  * suffix, so text appears as soon as each token completes. In machine
  * mode each delta goes out as a 'D "..."' protocol line. */
+/* Incremental stream decoder: each call decodes only the tokens added
+ * since the last one and appends their bytes, so a T-token generation
+ * costs O(T) total instead of re-decoding the visible prefix each step.
+ * Only the last, possibly incomplete UTF-8 character is held back. */
+typedef struct {
+    char *bytes;
+    size_t byte_count;
+    size_t byte_capacity;
+    size_t token_count;
+    size_t emitted;
+} stream_text;
+
+static void stream_text_reset(stream_text *stream) {
+    stream->byte_count = 0;
+    stream->token_count = 0;
+    stream->emitted = 0;
+}
+
+static size_t stream_complete_bytes(const stream_text *stream) {
+    const unsigned char *bytes = (const unsigned char *)stream->bytes;
+    size_t count = stream->byte_count;
+    size_t back = 0;
+    while (back < count && back < 3 &&
+           (bytes[count - 1 - back] & 0xc0) == 0x80)
+        ++back;
+    if (back >= count) return count;
+    unsigned char lead = bytes[count - 1 - back];
+    size_t need = (lead & 0x80) == 0 ? 1 :
+                  (lead & 0xe0) == 0xc0 ? 2 :
+                  (lead & 0xf0) == 0xe0 ? 3 :
+                  (lead & 0xf8) == 0xf0 ? 4 : 1;
+    if (back + 1 >= need) return count;
+    return count - back - 1;
+}
+
 static int emit_new_text(const qwen36_tokenizer *tokenizer,
                          const uint32_t *tokens, size_t token_count,
-                         size_t *emitted_bytes, int machine, char *error,
+                         stream_text *stream, int machine, char *error,
                          size_t error_capacity) {
-    size_t output_length = 0;
-    (void)qwen36_tokenizer_decode(tokenizer, tokens, token_count, NULL, 0,
-                                  &output_length, error, error_capacity);
-    char *output = malloc(output_length + 1);
-    if (output == NULL || qwen36_tokenizer_decode(
-            tokenizer, tokens, token_count, output, output_length + 1,
-            &output_length, error, error_capacity) != 0) {
-        free(output);
-        return -1;
+    if (token_count > stream->token_count) {
+        const uint32_t *fresh = tokens + stream->token_count;
+        size_t fresh_count = token_count - stream->token_count;
+        size_t fresh_length = 0;
+        (void)qwen36_tokenizer_decode(tokenizer, fresh, fresh_count, NULL,
+                                      0, &fresh_length, error,
+                                      error_capacity);
+        if (stream->byte_count + fresh_length + 1 >
+            stream->byte_capacity) {
+            size_t capacity =
+                (stream->byte_count + fresh_length + 1) * 2 + 256;
+            char *grown = realloc(stream->bytes, capacity);
+            if (grown == NULL) return -1;
+            stream->bytes = grown;
+            stream->byte_capacity = capacity;
+        }
+        size_t written = 0;
+        if (qwen36_tokenizer_decode(
+                tokenizer, fresh, fresh_count,
+                stream->bytes + stream->byte_count,
+                stream->byte_capacity - stream->byte_count, &written,
+                error, error_capacity) != 0)
+            return -1;
+        stream->byte_count += written;
+        stream->token_count = token_count;
     }
-    size_t complete = complete_utf8_prefix(
-        (const unsigned char *)output, output_length);
-    if (complete > *emitted_bytes) {
+    size_t complete = stream_complete_bytes(stream);
+    if (complete > stream->emitted) {
         if (machine) {
             fputs("D ", stdout);
-            put_json_string(output + *emitted_bytes,
-                            complete - *emitted_bytes);
+            put_json_string(stream->bytes + stream->emitted,
+                            complete - stream->emitted);
             putchar('\n');
         } else {
-            fwrite(output + *emitted_bytes, 1, complete - *emitted_bytes,
-                   stdout);
+            fwrite(stream->bytes + stream->emitted, 1,
+                   complete - stream->emitted, stdout);
         }
         fflush(stdout);
-        *emitted_bytes = complete;
+        stream->emitted = complete;
     }
-    free(output);
     return 0;
 }
 
@@ -313,6 +333,7 @@ int main(int argc, char **argv) {
 
     uint32_t *prompt_ids = malloc((size_t)capacity * sizeof(*prompt_ids));
     uint32_t *generated = malloc((size_t)maximum_new * sizeof(*generated));
+    stream_text stream = {NULL, 0, 0, 0, 0};
     char *line = NULL;
     size_t line_capacity = 0;
     if (prompt_ids == NULL || generated == NULL) {
@@ -425,7 +446,7 @@ int main(int argc, char **argv) {
         };
         uint32_t generated_count = 0;
         size_t visible_count = 0;
-        size_t emitted_bytes = 0;
+        stream_text_reset(&stream);
         double first_token_seconds = -1.0;
         size_t mtp_steps = 0;
         size_t mtp_accepts = 0;
@@ -479,7 +500,7 @@ int main(int argc, char **argv) {
                 if (first_token_seconds < 0.0 && visible_count != 0)
                     first_token_seconds = seconds_now() - prompt_start;
                 emit_new_text(tokenizer, generated, visible_count,
-                              &emitted_bytes, machine, error,
+                              &stream, machine, error,
                               sizeof(error));
             }
             visible_count = generated_count;
@@ -490,7 +511,7 @@ int main(int argc, char **argv) {
             if (first_token_seconds < 0.0 && visible_count != 0)
                 first_token_seconds = seconds_now() - prompt_start;
             emit_new_text(tokenizer, generated, visible_count,
-                          &emitted_bytes, machine, error, sizeof(error));
+                          &stream, machine, error, sizeof(error));
         } else
         for (uint32_t index = 0; index < budget; ++index) {
             uint32_t token;
@@ -511,7 +532,7 @@ int main(int argc, char **argv) {
                 first_token_seconds = seconds_now() - prompt_start;
             if (index + 1 == budget) {
                 emit_new_text(tokenizer, generated, visible_count,
-                              &emitted_bytes, machine, error,
+                              &stream, machine, error,
                               sizeof(error));
                 break;
             }
@@ -523,7 +544,7 @@ int main(int argc, char **argv) {
                 break;
             }
             emit_new_text(tokenizer, generated, visible_count,
-                          &emitted_bytes, machine, error, sizeof(error));
+                          &stream, machine, error, sizeof(error));
             if (qwen36_m3_model_forward_wait(
                     model, &result, &logits, &logit_count,
                     error, sizeof(error)) != 0) {
