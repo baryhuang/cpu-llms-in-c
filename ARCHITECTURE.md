@@ -1,6 +1,13 @@
 # Compiler and Runtime Architecture
 
-Status: the repository contains measured model-target implementations for Qwen3.8-27B, Qwen3.5-0.8B and Whisper small.en, plus an earlier restricted Gemma 4 E2B artifact. Packing and runtime code still use model adapters; a single declarative cross-model compiler is not complete.
+Status: the repository contains measured model-target implementations for
+Qwen3.8-27B, Qwen3.5-0.8B, Whisper small.en and MiniMax-H3, plus an earlier
+restricted Gemma 4 E2B artifact. MiniMax-H3 has portable C planners and a
+real-weight Apple M3 Pro runtime through tokenizer, 50-layer conditioner, H3,
+both VAEs and mux. Its corrected 864×480×124 Turbo-4 functional and visual
+smoke gates pass; official full-precision parity and the speed target remain
+open. Packing and runtime code still use model adapters; a single declarative
+cross-model compiler is not complete.
 
 ## Output
 
@@ -149,3 +156,4 @@ Current model records:
 | [Qwen3.5-0.8B](models/qwen3.5-0.8b/) | [Amlogic A113X](models/qwen3.5-0.8b/targets/a113x/) |
 | [Whisper small.en](models/whisper-small.en/) | [Amlogic A113X](models/whisper-small.en/targets/a113x/) |
 | [Gemma 4 E2B](models/gemma-4-e2b/) | unpinned legacy development machine |
+| [MiniMax-H3](models/minimax-h3/) | [Apple M3 Pro](models/minimax-h3/targets/apple-m3-pro/); corrected 864×480×124 N-to-N smoke gate passed, speed and official-parity gates open |

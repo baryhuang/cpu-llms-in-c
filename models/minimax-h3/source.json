@@ -1,0 +1,119 @@
+{
+  "model": "MiniMax-H3 Base FL2VA/T2VA",
+  "source_repository": "MiniMaxAI/MiniMax-H3",
+  "source_revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+  "upstream_code_repository": "MiniMax-AI/MiniMax-H3",
+  "upstream_code_revision": "d21241f0a4b3acbb34c97dae47fa417b7065e438",
+  "reference_repository": "huggingface/diffusers",
+  "reference_revision": "d5baa4fb548294f47dbca49890abd4b291204c60",
+  "workflow": "FL2VA",
+  "execution_artifact": {
+    "repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+    "revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+    "relationship": "third-party derived artifact; not an official MiniMax checkpoint",
+    "base_repository": "MiniMaxAI/MiniMax-H3",
+    "base_revision_declared_by_artifact": "ec19cc6daf5d8add9417c18e86b6b58cc6c55027",
+    "license_tag": "other",
+    "files": [
+      ["text_encoder.safetensors", 28222740739, "0d1aebb6c57e6da06dd40423f65c1cdd95a914dd2e9b3a5626ac9f1083c5dc2b"],
+      ["transformer.safetensors", 11333400438, "78bfdbe1e8250b0836c08aa9f9f80050a8d45eb5d60901520192e3ee4beb3172"],
+      ["adaln_cache.safetensors", 873820975, "96102848d29f7f6042c3c9a311ed021cb29b96d0a630df748b5a98b57d28ecc4"],
+      ["video_vae.safetensors", 5207806574, "1468f006f2238ed77e1160c2882d076cbc033fcb17fb3e19d6239bee152246ab"],
+      ["audio_vae.safetensors", 605253470, "9937423e272fb7c3c0954cb9b4c17cf7ca151d67b5c06d0aa10d8f5a7b3579ab"]
+    ]
+  },
+  "components": [
+    {
+      "path": "FL2VA/transformer",
+      "tensor_bytes": 66280430144,
+      "parameter_count": 33122992896,
+      "index_sha256": "fb457a26ffa6294660e249b0ddd03a337f2e5393f770b5c34c8b8f90a29a7efb",
+      "config_sha256": "f619093a231fcfbcc3d035bec26c50ad864e7331a500d5c519f5045dc1e50458",
+      "files": [
+        ["model-00001-of-00013.safetensors", 5227812968, "0b3386565e476bfdea287e9ea9f269d036e5c649ed14bb9b4afac1dc4661bd2a"],
+        ["model-00002-of-00013.safetensors", 5164578856, "9c98fd4579c9bc96d1b1bbf65c1243f9256df60bccd229570cecc61897773003"],
+        ["model-00003-of-00013.safetensors", 5164578872, "fa484c940d4170199fb69f5016739df2daf6ecd1150631b12a297e06e3964730"],
+        ["model-00004-of-00013.safetensors", 5164578896, "4a851df37cce2d14b39cb58df41def7b591b1f11b8520a32b421a5fa3e997c9f"],
+        ["model-00005-of-00013.safetensors", 5164578896, "3fe6ff94dc9d3107c6776a25277d2b72b5443f88cf0f4ed835fd5b65a94ea5d4"],
+        ["model-00006-of-00013.safetensors", 5164578896, "79b47e1b9ff03a2c6f06dd15a28972acf32c0867172ee34e5aa6e96b99494127"],
+        ["model-00007-of-00013.safetensors", 5164578896, "6ac4d6ce639786b722a8dd99843ed56dcab48a0d174a4b0f9b8cdcbe5160fb0f"],
+        ["model-00008-of-00013.safetensors", 5164578896, "03531812243fb0a333e01efa7e3d39750580bca8cbf2ba0529da419278eab736"],
+        ["model-00009-of-00013.safetensors", 5164578896, "7e82a80b0d0d267026eb841b81523069cc7b956c1ebd8a18c07e462ffb262487"],
+        ["model-00010-of-00013.safetensors", 5164578896, "ef0a1f6b65145232543dd2232d58d91a4d31f44b0da5084acf22cea123255481"],
+        ["model-00011-of-00013.safetensors", 5164578896, "bf885b8f2f078c5499b75fded21094a26bfe0e6e00bee276e499443ecd2f298d"],
+        ["model-00012-of-00013.safetensors", 5164578896, "dc717572d014ebf8527e35af815d10eb2f5a6bc87253b8a7d2f456965192db69"],
+        ["model-00013-of-00013.safetensors", 4242305176, "8bfd852d5817e9836de1d3ec8dbac1c5446b167568b717371f08282b22291aa2"]
+      ]
+    },
+    {
+      "path": "FL2VA/text_encoder",
+      "tensor_bytes": 66714780128,
+      "parameter_count": 33357390064,
+      "index_sha256": "06c952c569285870b811989b794b9766493e280fb77fbcb957fc4e5fcf25403a",
+      "config_sha256": "d2dd0c60d01b9e195d9447c52da61c7302d28828524914c044d9c6e1b81d0427",
+      "files": [
+        ["model-00001-of-00014.safetensors", 4932328944, "6b9dfbc930e505402ae9d7e5091a9d7d656cda5f34614f01cfe70bfb0cca27cb"],
+        ["model-00002-of-00014.safetensors", 4875990528, "d8bb44b4ff303fe76fe9e894022fb3dc71b15a2e716592790fe0e3c3e60478fa"],
+        ["model-00003-of-00014.safetensors", 4875990552, "54f22e8b3168f8dc962fac0d313607ebf52a12b433d4cf3098a0d82d9f042940"],
+        ["model-00004-of-00014.safetensors", 4875990584, "ad09c74d3c13ee29b5d0d84548fd8a3424a651564eaccd519946c296e59c557f"],
+        ["model-00005-of-00014.safetensors", 4875990584, "fc993c8a0e2a5b0570f383e1a95dc3a1281d1b224b6f3ee908f4827941e1dfc2"],
+        ["model-00006-of-00014.safetensors", 4875990584, "82f05620d1f718a90c362b221d6a184ff1a0f53301d706882d3df49695fa1974"],
+        ["model-00007-of-00014.safetensors", 4875990584, "fb91da8cb01ff4de3eef0eab1c3e769a734b3a1aafc61734068638a0d6c86934"],
+        ["model-00008-of-00014.safetensors", 4875990584, "431ca56535c8781944ce3801f5eb61c45531e853ecc5846d936ebaf4761b764f"],
+        ["model-00009-of-00014.safetensors", 4875990584, "3825e3f4302f4d2f7d76aa7430d2ce0864fde6b9e540a5806bf0d8e38e4d9f47"],
+        ["model-00010-of-00014.safetensors", 4875990584, "aded5a4d1d5e22dbd8b6f79266b6eb88c840411b09527c53917a1419ace22e2f"],
+        ["model-00011-of-00014.safetensors", 4875990584, "3820ffe8d8d6477f6fe8d614ef3c87abb264ee39accebf43a1507b970d80946f"],
+        ["model-00012-of-00014.safetensors", 4875990584, "05ad2d08ce71963121c9b03f1d9ec5d7641052f4b23c6c12b80d71065eb8e98e"],
+        ["model-00013-of-00014.safetensors", 4875990584, "b64f2289871261fdd1abbd3b78bcd66011b341de3dc8eeb2ed1a473ee7c8d95c"],
+        ["model-00014-of-00014.safetensors", 3270697008, "e45b6c9998c77ee5a6577f9f47bc76416c1d4d387169e50c4c9d3134ea51b13b"]
+      ]
+    },
+    {
+      "path": "FL2VA/video_vae/source/model.safetensors",
+      "checkpoint_bytes": 10415548320,
+      "parameter_count": 2603868984,
+      "sha256": "5f0c2e161d895a9fee7645ca32d4a7e3a22b90cacfcbeba62ec999cdbbefe0d3"
+    },
+    {
+      "path": "FL2VA/audio_vae/model.safetensors",
+      "checkpoint_bytes": 605429308,
+      "parameter_count": 151326585,
+      "sha256": "37dddc2f3e6d5d5139d823d5ea283bbf304dadcb885b1ccda818aa13dade5ea2"
+    }
+  ],
+  "turbo_benchmark": {
+    "source_repository": "larryvrh/MiniMax-H3-Turbo-Lora",
+    "source_revision": "43a74557ac3f6539db8e0f2a959d03feb7a81480",
+    "path": "minimax_h3_turbo_v4_step600_ema.safetensors",
+    "checkpoint_bytes": 779849816,
+    "sha256": "5f3a626cd72c93a8b9318d6760c510bc5092d2ab13aaba1f932c5bab07a416d3"
+  },
+  "external_benchmark_peer": {
+    "repository": "EvolvingLMMs-Lab/MacOS-H3-Speedrun",
+    "revision_checked": "c8e0f732fe82b00704738feff769cff621a4f7b2",
+    "revision_checked_at": "2026-08-16",
+    "solattn_repository": "yshenaw/ComfyUI-SolAttn-MPS",
+    "solattn_revision": "886f4b9b8598b2d17445eef659a8ef28cf04d0d4",
+    "published_attention_workload": {
+      "width": 864,
+      "height": 480,
+      "frames": 124,
+      "packed_rows": 15485,
+      "device": "Apple M3 Ultra",
+      "precision": "BF16",
+      "tau": 1.3,
+      "native_mps_sdpa_ms": 308.36,
+      "solattn_ms": 59.53
+    },
+    "published_teaser": {
+      "width": 832,
+      "height": 480,
+      "frames": 124,
+      "fps": 24,
+      "media_duration_seconds": 5.175,
+      "claimed_generation_seconds": 192,
+      "backend_and_memory_tier": "not identified for this individual teaser"
+    },
+    "comparison_limit": "The attention table and teaser are separate records. The peer uses a different device, prompt, route and precision profile; no direct quality-adjusted speed ratio is implied."
+  }
+}

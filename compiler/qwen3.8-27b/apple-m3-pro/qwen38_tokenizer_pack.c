@@ -290,20 +290,42 @@ static int parse_merges(const char *json, const uint32_t *hash_table,
             ++cursor;
             skip_space(&cursor);
         }
-        if (*cursor++ != '[') return -1;
         token_string left = {0};
         token_string right = {0};
-        if (parse_json_string(&cursor, &left) != 0) return -1;
-        skip_space(&cursor);
-        if (*cursor++ != ',' ||
-            parse_json_string(&cursor, &right) != 0) {
-            free(left.data);
-            return -1;
-        }
-        skip_space(&cursor);
-        if (*cursor++ != ']') {
-            free(left.data); free(right.data);
-            return -1;
+        if (*cursor == '[') {
+            ++cursor;
+            if (parse_json_string(&cursor, &left) != 0) return -1;
+            skip_space(&cursor);
+            if (*cursor++ != ',' ||
+                parse_json_string(&cursor, &right) != 0) {
+                free(left.data);
+                return -1;
+            }
+            skip_space(&cursor);
+            if (*cursor++ != ']') {
+                free(left.data); free(right.data);
+                return -1;
+            }
+        } else {
+            token_string pair = {0};
+            if (parse_json_string(&cursor, &pair) != 0) return -1;
+            unsigned char *separator = memchr(pair.data, ' ', pair.length);
+            if (separator == NULL || separator == pair.data ||
+                separator + 1 == pair.data + pair.length) {
+                free(pair.data);
+                return -1;
+            }
+            left.length = (uint32_t)(separator - pair.data);
+            right.length = pair.length - left.length - 1u;
+            left.data = malloc(left.length);
+            right.data = malloc(right.length);
+            if (left.data == NULL || right.data == NULL) {
+                free(left.data); free(right.data); free(pair.data);
+                return -1;
+            }
+            memcpy(left.data, pair.data, left.length);
+            memcpy(right.data, separator + 1, right.length);
+            free(pair.data);
         }
         uint32_t left_id, right_id, result_id;
         size_t combined_length = (size_t)left.length + right.length;

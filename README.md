@@ -22,11 +22,15 @@ Every performance claim belongs to one exact model revision and one exact target
 | Model | CPU / SoC | Execution path | Measured result | Evidence |
 |---|---|---|---|---|
 | Qwen3.8-27B | Apple M3 Pro, 36 GB unified memory | C runtime + Metal kernels, affine Q4, FP16 KV, adaptive MTP | **9.66 end-to-end tok/s** over 3,305 output tokens; 7.94 tok/s without MTP | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [raw results](models/qwen3.8-27b/targets/apple-m3-pro/results.json) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) |
+| MiniMax-H3 | Apple M3 Pro, 36 GB unified memory | C/Metal tokenizer, streamed Q8 conditioner, affine-Q4/BF16 H3, Video/Audio VAEs | 864×480×124 Turbo-4 in **9,294.87 s**, 4.125 GiB peak physical footprint, zero swap; four prompt-aligned shots | [model](models/minimax-h3/README.md) · [target](models/minimax-h3/targets/apple-m3-pro/README.md) · [raw results](models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/benchmark.json) · [review](models/minimax-h3/targets/apple-m3-pro/REVIEW.html) |
 | Qwen3.5-0.8B | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, model-specialized DeltaNet state | **3.64 prompt tok/s**, **2.60 decode tok/s**, 488 MiB generation RSS, zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [raw results](models/qwen3.5-0.8b/targets/a113x/results.json) |
 | Whisper small.en | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, mixed Q4/Q8 encoder and cached decoder | 11 s audio in **45.0 s**, 251 MiB RSS, zero swap; 0/22 word errors on the pinned JFK sample | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [raw results](models/whisper-small.en/targets/a113x/results.json) |
 | Gemma 4 E2B | Unpinned two-vCPU x86-64 development machine | Legacy restricted C artifact | 0.598 token/s, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [raw results](models/gemma-4-e2b/results.json) |
 
-Gemma is the early restricted artifact and accepts only its compiled test inputs. Qwen3.5, Qwen3.8 and Whisper execute their full model paths; task behavior is selected by input or prompt rather than compiled labels.
+Gemma is the early restricted artifact and accepts only its compiled test
+inputs. Qwen3.5, Qwen3.8, Whisper and MiniMax-H3 execute their full model
+paths; task behavior is selected by input or prompt rather than compiled
+labels.
 
 ## Qwen3.8-27B on Apple M3 Pro
 
@@ -124,6 +128,7 @@ Model execution stays in the resident C/Metal process. The Python server is an o
 
 | Area | Concrete work |
 |---|---|
+| MiniMax-H3 / Apple Silicon | batch same-shaped Video VAE tiles; validate tree attention and sparse projections against the corrected 480p dense trajectory |
 | Qwen3.8 / Apple Silicon | fused batched prefill, DeltaNet scheduling, attention kernels, sampling and streaming overlap |
 | Low-cost Arm CPUs | NEON kernels, recurrent-state layout, cache-aware thread partitioning and memory probes |
 | New model support | add a model directory, independent numerical oracle, packed format and generic C runtime |

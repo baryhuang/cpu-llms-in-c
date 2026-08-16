@@ -1,0 +1,320 @@
+{
+  "schema": 1,
+  "date": "2026-08-16",
+  "device": {
+    "model": "MacBook Pro Mac15,6",
+    "soc": "Apple M3 Pro",
+    "gpu_cores": 14,
+    "unified_memory_bytes": 38654705664
+  },
+  "workload": {
+    "sequence_rows": 15485,
+    "heads": 56,
+    "head_dimension": 128,
+    "dtype": "fp16 Q/K/V and output; fp32 softmax state",
+    "input": "deterministic synthetic exact-shape tensors",
+    "excluded": [
+      "QKV projection",
+      "output projection",
+      "real H3 weights",
+      "denoising trajectory",
+      "VAE"
+    ]
+  },
+  "external_peer": {
+    "repository_commit": "EvolvingLMMs-Lab/MacOS-H3-Speedrun@db22d300423e04d44f217bd3858147964c7b8c5c",
+    "dependency_commit": "yshenaw/ComfyUI-SolAttn-MPS@886f4b9b8598b2d17445eef659a8ef28cf04d0d4",
+    "device": "Apple M3 Ultra",
+    "attention_ms": 59.53
+  },
+  "experiments": [
+    {
+      "name": "scalar-simdgroup-flat-query",
+      "route": "500 exact conditioning rows; two temporal groups, two frames and two leaves expanded",
+      "query_tile_rows": 1,
+      "measured_iterations": 1,
+      "attention_gpu_ms": 2568.762667,
+      "summary_gpu_ms": 3.392750,
+      "max_abs_error_first_head": 2.57603824e-6
+    },
+    {
+      "name": "mma-8-row",
+      "route": "same conservative route",
+      "query_tile_rows": 8,
+      "measured_iterations": 1,
+      "attention_gpu_ms": 2965.231000,
+      "summary_gpu_ms": 3.593500,
+      "max_abs_error_first_head": 3.41422856e-6
+    },
+    {
+      "name": "mma-64-tree-major",
+      "route": "same conservative route; tree-major physical row layout",
+      "query_tile_rows": 64,
+      "measured_iterations": 1,
+      "attention_gpu_ms": 405.675125,
+      "summary_gpu_ms": 3.547375,
+      "max_abs_error_first_head": 1.08644366e-4
+    },
+    {
+      "name": "mma-64-h3-native-audio-summary",
+      "route": "86 exact text rows; 13 audio summaries; one video leaf expanded",
+      "query_tile_rows": 64,
+      "measured_iterations": 3,
+      "maximum_route_entries": 95,
+      "attention_gpu_ms": 70.902375,
+      "summary_gpu_ms": 3.451847,
+      "max_abs_error_first_head": 3.80142592e-6
+    },
+    {
+      "name": "mma-64-compiled-conditioning-summary",
+      "route": "11 text seed summaries; 13 audio summaries; one video leaf expanded",
+      "query_tile_rows": 64,
+      "warmup_iterations": 2,
+      "measured_iterations": 5,
+      "tree_nodes": 366,
+      "route_entries": 27369,
+      "maximum_route_entries": 106,
+      "summary_gpu_ms": 3.870908,
+      "summary_wall_ms": 4.009350,
+      "attention_gpu_ms": 45.020433,
+      "attention_wall_ms": 45.214592,
+      "qkv_bytes": 665978880,
+      "summary_bytes": 10493952,
+      "output_bytes": 221992960,
+      "metal_owned_buffer_bytes": 898599392,
+      "footprint_before_bytes": 1737536,
+      "footprint_peak_bytes": 1028113984,
+      "max_abs_error_first_head": 9.47213266e-7,
+      "speedup_vs_first_kernel": 57.057707,
+      "speedup_vs_external_peer_time": 1.322288,
+      "quality_status": "not validated against dense H3 trajectory"
+    },
+    {
+      "name": "mma-64-compiled-conditioning-summary-with-lse",
+      "route": "same compiled-conditioning seed; emits one FP32 LSE per row/head for later token selection",
+      "query_tile_rows": 64,
+      "warmup_iterations": 2,
+      "measured_iterations": 5,
+      "tree_nodes": 366,
+      "route_entries": 27369,
+      "maximum_route_entries": 106,
+      "summary_gpu_ms": 4.236458,
+      "summary_wall_ms": 4.412750,
+      "attention_gpu_ms": 49.893167,
+      "attention_wall_ms": 50.125100,
+      "qkv_bytes": 665978880,
+      "summary_bytes": 10493952,
+      "output_bytes": 221992960,
+      "lse_bytes": 3468640,
+      "metal_owned_buffer_bytes": 902068032,
+      "footprint_before_bytes": 1721088,
+      "footprint_peak_bytes": 1031505280,
+      "max_abs_error_first_head": 9.47213266e-7,
+      "speedup_vs_first_kernel": 51.485260,
+      "speedup_vs_external_peer_time": 1.193149,
+      "quality_status": "not validated against dense H3 trajectory"
+    }
+  ],
+  "projection_experiments": {
+    "scope": "one synthetic W4 5376-to-14336 projection; not a complete H3 block",
+    "weight_format": "affine W4 group-64 with FP16 scale and bias",
+    "accumulation": "FP16 8x8 MMA; every 64-column partial is accumulated into FP32",
+    "equivalent_projections_per_dense_block": 5,
+    "runs": [
+      {
+        "name": "mma-32-output-rows",
+        "batch_rows": 15485,
+        "warmup_iterations": 1,
+        "measured_iterations": 3,
+        "gpu_ms": 662.155750,
+        "effective_tflops": 3.604693
+      },
+      {
+        "name": "mma-64-output-rows-precise",
+        "batch_rows": 4646,
+        "warmup_iterations": 2,
+        "measured_iterations": 5,
+        "gpu_ms": 194.601567,
+        "wall_ms": 194.844700,
+        "effective_tflops": 3.680020,
+        "metal_owned_buffer_bytes": 227541008,
+        "footprint_peak_bytes": 305988992,
+        "max_abs_error_first_8": 0.0025806427
+      },
+      {
+        "name": "mma-64-output-rows-precise",
+        "batch_rows": 15485,
+        "warmup_iterations": 2,
+        "measured_iterations": 5,
+        "gpu_ms": 618.205008,
+        "wall_ms": 618.406817,
+        "effective_tflops": 3.860966,
+        "weight_bytes": 38535168,
+        "metadata_bytes": 4816896,
+        "input_bytes": 166526976,
+        "output_bytes": 444071936,
+        "metal_owned_buffer_bytes": 653950992,
+        "footprint_peak_bytes": 731366656,
+        "max_abs_error_first_8": 0.0025806427,
+        "speedup_vs_32_output_rows": 1.071094
+      }
+    ],
+    "sparse_seed_central_band": [
+      {
+        "evaluation": 0,
+        "query_rows": 15485,
+        "kv_projection_rows": 15485,
+        "mlp_rows": 15485,
+        "projection_macs_fraction_of_dense": 1.0,
+        "reason": "no prior branch cache"
+      },
+      {
+        "evaluation": 1,
+        "query_rows": 3054,
+        "kv_projection_rows": 3420,
+        "mlp_rows": 2583,
+        "projection_macs_fraction_of_dense": 0.183700
+      },
+      {
+        "evaluation": 2,
+        "query_rows": 4914,
+        "kv_projection_rows": 5280,
+        "mlp_rows": 4144,
+        "projection_macs_fraction_of_dense": 0.292231
+      },
+      {
+        "evaluation": 3,
+        "query_rows": 7993,
+        "kv_projection_rows": 8359,
+        "mlp_rows": 7203,
+        "projection_macs_fraction_of_dense": 0.490294
+      }
+    ],
+    "real_weight_boundary": {
+      "tensor": "transformer_blocks.0.mlp.fc1",
+      "batch_rows": 11,
+      "activation_dtype": "BF16",
+      "output_dtype": "BF16",
+      "gpu_ms": 5.322375,
+      "reference": "scalar C with FP32 accumulation and BF16 output rounding",
+      "max_abs_error_first_8": 0.00282287598,
+      "status": "passed"
+    },
+    "summary_projection_identity": "For bias-free H3 K/V, W*mean(normalized hidden) equals mean(W*normalized hidden).",
+    "quality_status": "one real Q4/BF16 projection boundary passes; complete block and trajectory gates remain open"
+  },
+  "real_weight_runs": [
+    {
+      "name": "downstream-bf16-component-gate",
+      "status": "passed",
+      "n_to_n": false,
+      "conditioner": "fixed one-row state; tokenizer and Qwen conditioner bypassed",
+      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+      "geometry": {"width": 32, "height": 32, "frames": 22, "fps": 24},
+      "seed": 42,
+      "sequence_rows": 82,
+      "durations_seconds": {
+        "transformer_download": 1607.877462,
+        "denoise": 232.054895,
+        "video_download": 684.208929,
+        "video_decode": 2.245662,
+        "audio_download": 79.394022,
+        "audio_decode": 2.541665,
+        "mux": 0.709436,
+        "total": 2612.518197
+      },
+      "process_cpu_seconds": {"user": 248.063532, "system": 333.892360},
+      "peak_footprint_bytes": 147950592,
+      "result": "real-weight H3, Video VAE, Audio VAE and mux completed; playable MP4",
+      "quality_status": "structural component gate only; no prompt or reference-media parity claim"
+    },
+    {
+      "name": "free-prompt-n-to-n-gate",
+      "status": "passed-with-quality-limit",
+      "n_to_n": true,
+      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from a user-supplied prompt",
+      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+      "prompt": "a jeweled hummingbird hovering beside a red orchid, cinematic natural light",
+      "geometry": {"width": 128, "height": 128, "frames": 22, "fps": 24},
+      "seed": 314159,
+      "prompt_tokens": 15,
+      "sequence_rows": 201,
+      "durations_seconds": {
+        "tokenizer": 0.008322,
+        "text_download": 7.132294,
+        "text_encode": 2.258068,
+        "transformer_download": 1597.824761,
+        "denoise": 287.148395,
+        "video_download": 684.234126,
+        "video_decode": 20.094570,
+        "audio_download": 79.463098,
+        "audio_decode": 2.478901,
+        "mux": 0.490161,
+        "total": 2700.482112
+      },
+      "stage_sum_excluding_h3_weight_downloads_seconds": 319.610711,
+      "total_excluding_h3_weight_downloads_seconds": 338.960127,
+      "process_cpu_seconds": {"user": 213.405619, "system": 299.468569},
+      "peak_footprint_bytes": 173843520,
+      "output": {
+        "path": "artifacts/hummingbird-128x128-euler30/minimax-h3.mp4",
+        "sha256": "576737d39aa5d2f5b24dd2e189cd7ee8dcc3544c9f78ca61ce28458a39c04225",
+        "video_frames": 22,
+        "audio_sample_rate_hz": 32000,
+        "audio_channels": 2
+      },
+      "post_run_mux_correction": "removed -shortest after it truncated the generated 22-frame stream to 20 frames at the AAC boundary; corrected remux took 0.06 s and is excluded from generation timing",
+      "quality_status": "coarse prompt correspondence at 128x128; red flower, green background and a moving dark/white subject are visible, but the subject is not sharply identifiable and reference parity is not established"
+    },
+    {
+      "name": "corrected-480p-turbo4-n-to-n",
+      "status": "passed-with-reference-parity-open",
+      "n_to_n": true,
+      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
+      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+      "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
+      "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
+      "geometry": {"width": 864, "height": 480, "frames": 124, "fps": 24},
+      "seed": 42,
+      "sampling": {"profile": "turbo-v4-step600-ema", "evaluations": 4},
+      "prompt_tokens": 240,
+      "sequence_rows": 15639,
+      "durations_seconds": {
+        "tokenizer": 0.009321,
+        "text_download": 4.784617,
+        "text_encode": 4.713666,
+        "transformer_download": 0.0,
+        "turbo_compile": 0.865239,
+        "denoise": 1881.824388,
+        "video_download": 0.0,
+        "video_decode": 7387.292038,
+        "audio_download": 0.0,
+        "audio_decode": 13.531083,
+        "mux": 0.600629,
+        "total": 9294.869743
+      },
+      "process_cpu_seconds": {"user": 12.160168, "system": 40.497675},
+      "peak_footprint_bytes": 4429110144,
+      "maximum_resident_set_bytes": 1714831360,
+      "swaps": 0,
+      "output": {
+        "path": "artifacts/anime-room-864x480-turbo4/minimax-h3.mp4",
+        "sha256": "5736387060ef3d7e0541609320fe591f04f6c4e03fe4c5cb67c2b95fd5fa7acc",
+        "video_frames_declared": 124,
+        "video_frames_decoded": 124,
+        "audio_sample_rate_hz": 32000,
+        "audio_channels": 2
+      },
+      "quality_status": "visual prompt response passed with four distinct shots and zero flat frames; sampled spatial-tile and temporal-chunk boundaries are coherent; same-prompt official full-precision parity and audio semantic listening remain open"
+    }
+  ],
+  "commands": {
+    "attention": "make build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib 5 2",
+    "projection": "make build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib 15485 5 2",
+    "n_to_n": "MINIMAX_H3_TEXT_ENCODER_URL=file://$PWD/tmp/minimax-h3-text-encoder.safetensors build/minimax-h3-m3-e2e 'a jeweled hummingbird hovering beside a red orchid, cinematic natural light' models/minimax-h3/targets/apple-m3-pro/artifacts/hummingbird-128x128-euler30 128 128 22 314159",
+    "corrected_480p": "MINIMAX_H3_TEXT_ENCODER_URL=file://$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors build/minimax-h3-m3-e2e \"$(cat models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt)\" models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4 864 480 124 42"
+  }
+}

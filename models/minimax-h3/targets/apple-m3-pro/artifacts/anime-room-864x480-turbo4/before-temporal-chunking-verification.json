@@ -1,0 +1,27 @@
+{
+  "status": "structural-pass-quality-fail",
+  "run": "anime-864x480-124-seed42-turbo4-run2",
+  "video": {
+    "width": 864,
+    "height": 480,
+    "fps": 24,
+    "frames": 124,
+    "duration_seconds": 5.166667,
+    "sha256": "998e58c284cc0a4d2944fa91a2c9b32c94e92bf283c3aa5049a20f7ca4cc4eb4"
+  },
+  "audio": {
+    "sample_rate_hz": 32000,
+    "channels": 2,
+    "duration_seconds": 5.167,
+    "peak_dbfs": -5.166,
+    "rms_dbfs": -35.298
+  },
+  "frame_signal": {
+    "non_flat_frames": 38,
+    "flat_frames": 86,
+    "first_flat_frame": 38,
+    "flat_luma": 117
+  },
+  "visual_review": "Frames 0-37 contain a dark room-like scene but are severely distorted. Frames 38-123 are exactly flat gray. The output is not usable.",
+  "cause": "The C Video VAE decoded all 37 latent frames as one sequence and applied fixed raw-frame skips. The released decoder requires overlapping seven-latent-frame temporal tasks with a five-latent stride."
+}

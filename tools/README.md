@@ -12,6 +12,25 @@
 
 `support/qwen38_chatbox_config.py` is an implementation detail called by `qwen38_chat.sh`; it is separated because users do not invoke it directly.
 
+## MiniMax-H3
+
+| Command | Direct use |
+|---|---|
+| `minimax_h3_generate.sh` | Read or accept one prompt and produce synchronized video + stereo audio with the Apple Silicon C/Metal runtime |
+
+The verified default is 128×128, 22 frames at 24 fps. Override it with
+`MINIMAX_H3_WIDTH`, `MINIMAX_H3_HEIGHT`, `MINIMAX_H3_FRAMES` and
+`MINIMAX_H3_SEED`. Valid frame counts follow H3's `17n+5` alignment. Set
+`MINIMAX_H3_TEXT_ENCODER` to a local `text_encoder.safetensors`. Generation is
+strictly offline: the command exits if the 28.22 GB conditioner or any local
+H3/VAE cache is missing. Network access belongs to a separate explicit weight
+installation step, not inference.
+
+The default sampler executes 30 Euler intervals. To select the verified
+four-evaluation profile, set `MINIMAX_H3_TURBO_ADAPTER` to an absolute
+`file://` path for the pinned v4-600 EMA adapter. The command validates its
+size and SHA-256 before starting inference.
+
 ## Hardware and comparison
 
 | Path | Direct use |

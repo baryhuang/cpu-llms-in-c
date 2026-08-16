@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "date": "2026-08-16",
+  "status": "passed",
+  "timing_scope": "post-run verification; excluded from generation timing",
+  "output": {
+    "path": "minimax-h3.mp4",
+    "sha256": "5736387060ef3d7e0541609320fe591f04f6c4e03fe4c5cb67c2b95fd5fa7acc",
+    "bytes": 868388,
+    "duration_seconds": 5.167
+  },
+  "video": {
+    "codec": "H.264",
+    "width": 864,
+    "height": 480,
+    "fps": 24,
+    "declared_frames": 124,
+    "decoded_frames": 124,
+    "duration_seconds": 5.166667,
+    "complete_decode": "passed",
+    "flat_frames": 0,
+    "minimum_luma_range": 181,
+    "mean_luma_range": 206.258,
+    "maximum_luma_range": 233,
+    "adjacent_frame_differences": 123,
+    "adjacent_difference_yavg_min": 0.023510,
+    "adjacent_difference_yavg_mean": 4.495795,
+    "adjacent_difference_yavg_max": 87.777400
+  },
+  "scene_changes": {
+    "threshold": 0.25,
+    "count": 3,
+    "times_seconds": [1.541667, 2.583333, 3.916667],
+    "interpretation": "three detected cuts form four temporal shots"
+  },
+  "audio": {
+    "codec": "AAC LC in final MP4",
+    "source_path": "audio.wav",
+    "source_sha256": "37dff2b1ead54637d402ffaf1fee4f7a4077dcccf3d2f02a5efbda9942439d73",
+    "sample_rate_hz": 32000,
+    "channels": 2,
+    "samples_per_channel": 165333,
+    "duration_seconds": 5.167,
+    "peak_dbfs": -6.205188,
+    "rms_dbfs": -29.355226,
+    "dc_offset": 0.000015,
+    "non_silent": true,
+    "semantic_listening_review": "not performed"
+  },
+  "visual_review": {
+    "status": "passed",
+    "prompt_correspondence": "four distinct shots show an ice-blue twin-tail anime girl in a dark room: overhead at a low table with laptop, bottle and cup food; distressed face close-up; side view collapsed on the table; final front close-up with hand near her hair",
+    "spatial_tile_seams": "not observed in full-resolution sampled frames",
+    "temporal_chunk_breaks": "not observed across sampled 17-frame boundaries",
+    "limitations": "no same-prompt official full-precision reference; audio semantics were not reviewed by listening"
+  },
+  "review_artifacts": {
+    "contact_sheet": "contact-sheet.png",
+    "temporal_boundaries": "temporal-boundaries.png",
+    "audio_spectrum": "audio-spectrum.png"
+  },
+  "pre_fix_comparison": {
+    "record": "before-temporal-chunking-verification.json",
+    "status": "quality failed",
+    "flat_frames": 86,
+    "first_flat_frame": 38,
+    "corrected_result": "0 flat frames and four visually coherent shots"
+  }
+}

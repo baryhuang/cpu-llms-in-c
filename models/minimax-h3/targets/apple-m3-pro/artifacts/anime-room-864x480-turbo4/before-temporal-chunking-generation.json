@@ -1,0 +1,15 @@
+{
+  "status": "passed",
+  "prompt": "日系二次元动漫风格，四镜头连贯视频：\n【镜头1】：全景俯视，深夜昏暗简陋的房间里，冰蓝色双马尾少女坐在榻榻米上，无精打采地仰头打哈欠叹气，面前桌上放着发光的笔记本电脑和吃剩的杯面，影院级暗调光影。\n【镜头2】：镜头快速切至面部极特写，少女眼含泪水，金黄色眼睛，脸颊红晕，咬着牙表现出委屈又倔强的神情，双手趴在桌上，剧烈的破防动态画面。\n【镜头3】：侧面中景，疲惫的蓝发少女无精打采地趴在木桌上，身旁是发光的电脑屏幕、水瓶和杯面，阴暗沉重的室内环境，极微弱的呼吸动作。\n【镜头4】：正面特写，少女慢慢抬起头，抬手将鬓角头发撩到耳后，眼神空洞地注视前方，脸颊挂着一滴汗珠，屏幕冷光照亮面部，细腻的手部与面部动作。\n画幅 16:9，高清细节，影院级光影",
+  "geometry": {"width": 864, "height": 480, "frames": 124, "fps": 24},
+  "seed": 42,
+  "sampling": {"profile": "turbo-v4-step600-ema", "steps": 4, "turbo_adapter": true},
+  "prompt_tokens": 240,
+  "sequence_rows": 15639,
+  "durations_seconds": {"tokenizer": 0.008433, "text_download": 3.286475, "text_encode": 4.551811, "transformer_download": 0.000000, "turbo_compile": 0.912032, "denoise": 1883.276765, "video_download": 0.000000, "video_decode": 5342.025806, "audio_download": 0.000000, "audio_decode": 13.507818, "mux": 0.732620, "total": 7249.519077},
+  "process_cpu_seconds": {"user": 10.273051, "system": 25.016633},
+  "peak_footprint_bytes": 6733682496,
+  "video_path": "not retained in Git",
+  "audio_path": "not retained in Git",
+  "output_path": "not retained in Git"
+}

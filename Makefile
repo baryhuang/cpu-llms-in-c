@@ -79,8 +79,39 @@ QWEN38_M3_CHAT := $(BUILD_DIR)/qwen38-m3-chat
 QWEN38_SAMPLER_TEST := $(BUILD_DIR)/qwen38-sampler-test
 QWEN38_M3_API_STATE_TEST := $(BUILD_DIR)/qwen38-m3-api-state-test
 QWEN38_M3_PREFILL_PARITY_TEST := $(BUILD_DIR)/qwen38-m3-prefill-parity-test
+MINIMAX_H3_GENERIC := models/minimax-h3/targets/generic
+MINIMAX_H3_COMPILER := compiler/minimax-h3/apple-m3-pro
+MINIMAX_H3_TEST := $(BUILD_DIR)/minimax-h3-test
+MINIMAX_H3_REMOTE_INSPECT := $(BUILD_DIR)/minimax-h3-remote-inspect
+MINIMAX_H3_Q4_LAYER_INSPECT := $(BUILD_DIR)/minimax-h3-q4-layer-inspect
+MINIMAX_H3_TOKENIZER_PACK := $(BUILD_DIR)/minimax-h3-tokenizer-pack
+MINIMAX_H3_TOKENIZER_OBJECT := $(BUILD_DIR)/minimax-h3-tokenizer.o
+MINIMAX_H3_TOKENIZER_CLI_OBJECT := $(BUILD_DIR)/minimax-h3-tokenizer-cli.o
+MINIMAX_H3_TOKENIZER_CLI := $(BUILD_DIR)/minimax-h3-tokenizer
+MINIMAX_H3_TOKENIZER_IMAGE := $(BUILD_DIR)/minimax-h3-tokenizer.h3tok
+MINIMAX_H3_M3 := models/minimax-h3/targets/apple-m3-pro
+MINIMAX_H3_M3_AOT_TEST := $(BUILD_DIR)/minimax-h3-m3-aot-test
+MINIMAX_H3_M3_TREE_TEST := $(BUILD_DIR)/minimax-h3-m3-tree-test
+MINIMAX_H3_M3_CACHE_TEST := $(BUILD_DIR)/minimax-h3-m3-cache-test
+MINIMAX_H3_M3_SPARSE_TEST := $(BUILD_DIR)/minimax-h3-m3-sparse-test
+MINIMAX_H3_M3_SELECTOR_TEST := $(BUILD_DIR)/minimax-h3-m3-selector-test
+MINIMAX_H3_M3_ATTENTION_AIR := $(BUILD_DIR)/minimax-h3-m3-attention.air
+MINIMAX_H3_M3_ATTENTION_METALLIB := $(BUILD_DIR)/minimax-h3-m3-attention.metallib
+MINIMAX_H3_M3_ATTENTION_OBJECT := $(BUILD_DIR)/minimax-h3-m3-attention.o
+MINIMAX_H3_M3_ATTENTION_BENCH_OBJECT := $(BUILD_DIR)/minimax-h3-m3-attention-bench.o
+MINIMAX_H3_M3_ATTENTION_BENCH := $(BUILD_DIR)/minimax-h3-m3-attention-bench
+MINIMAX_H3_M3_GEMM_OBJECT := $(BUILD_DIR)/minimax-h3-m3-gemm.o
+MINIMAX_H3_M3_GEMM_BENCH_OBJECT := $(BUILD_DIR)/minimax-h3-m3-gemm-bench.o
+MINIMAX_H3_M3_GEMM_BENCH := $(BUILD_DIR)/minimax-h3-m3-gemm-bench
+MINIMAX_H3_M3_Q8_GEMM_BENCH_OBJECT := $(BUILD_DIR)/minimax-h3-m3-q8-gemm-bench.o
+MINIMAX_H3_M3_Q8_GEMM_BENCH := $(BUILD_DIR)/minimax-h3-m3-q8-gemm-bench
+MINIMAX_H3_M3_REAL_GEMM_OBJECT := $(BUILD_DIR)/minimax-h3-m3-real-gemm.o
+MINIMAX_H3_M3_REAL_GEMM := $(BUILD_DIR)/minimax-h3-m3-real-gemm
+MINIMAX_H3_M3_E2E_OBJECT := $(BUILD_DIR)/minimax-h3-m3-e2e.o
+MINIMAX_H3_M3_E2E_CLI_OBJECT := $(BUILD_DIR)/minimax-h3-m3-e2e-cli.o
+MINIMAX_H3_M3_E2E := $(BUILD_DIR)/minimax-h3-m3-e2e
 
-.PHONY: all a113x clean fixture linux-tools qwen38-m3-bench qwen38-m3-deltanet-bench qwen38-m3-layer-bench qwen38-m3-attention-bench qwen38-m3-decode qwen38-m3-generate qwen38-m3-chat qwen38-m3-api-state-test qwen38-m3-prefill-parity-test qwen38-tools test whisper-small-tools
+.PHONY: all a113x clean fixture linux-tools minimax-h3-m3-attention-bench minimax-h3-m3-gemm-bench minimax-h3-m3-q8-gemm-bench minimax-h3-m3-e2e minimax-h3-tools qwen38-m3-bench qwen38-m3-deltanet-bench qwen38-m3-layer-bench qwen38-m3-attention-bench qwen38-m3-decode qwen38-m3-generate qwen38-m3-chat qwen38-m3-api-state-test qwen38-m3-prefill-parity-test qwen38-tools test whisper-small-tools
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
@@ -110,6 +141,24 @@ qwen38-m3-generate: $(QWEN38_M3_GENERATE) $(QWEN38_M3_METALLIB)
 
 qwen38-m3-chat: $(QWEN38_M3_CHAT) $(QWEN38_M3_METALLIB)
 
+minimax-h3-m3-attention-bench: $(MINIMAX_H3_M3_ATTENTION_BENCH) \
+	$(MINIMAX_H3_M3_ATTENTION_METALLIB)
+	$(MINIMAX_H3_M3_ATTENTION_BENCH) $(MINIMAX_H3_M3_ATTENTION_METALLIB)
+
+minimax-h3-m3-gemm-bench: $(MINIMAX_H3_M3_GEMM_BENCH) \
+	$(MINIMAX_H3_M3_ATTENTION_METALLIB)
+	$(MINIMAX_H3_M3_GEMM_BENCH) $(MINIMAX_H3_M3_ATTENTION_METALLIB)
+
+minimax-h3-m3-q8-gemm-bench: $(MINIMAX_H3_M3_Q8_GEMM_BENCH) \
+	$(MINIMAX_H3_M3_ATTENTION_METALLIB)
+
+minimax-h3-m3-e2e: $(MINIMAX_H3_M3_E2E) \
+	$(MINIMAX_H3_M3_ATTENTION_METALLIB) $(MINIMAX_H3_TOKENIZER_PACK)
+
+minimax-h3-tools: $(MINIMAX_H3_REMOTE_INSPECT) \
+	$(MINIMAX_H3_Q4_LAYER_INSPECT) $(MINIMAX_H3_TOKENIZER_PACK) \
+	$(MINIMAX_H3_TOKENIZER_CLI)
+
 # Needs the packed model directory and metallib, so it is not part of the
 # fixture-only `test` target. Run it manually:
 #   build/qwen38-m3-api-state-test <model-directory> <metallib>
@@ -134,7 +183,9 @@ test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35
 	$(WHISPER_ENCODER_STEM_TEST) $(WHISPER_ENCODER_STEM_FIXTURE) \
 	$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_ENCODER_BLOCK_FIXTURE) \
 	$(QWEN38_SAFETENSORS_TEST) $(QWEN38_SHA256_TEST) \
-	$(QWEN38_SAMPLER_TEST)
+	$(QWEN38_SAMPLER_TEST) $(MINIMAX_H3_TEST) $(MINIMAX_H3_M3_AOT_TEST) \
+	$(MINIMAX_H3_M3_TREE_TEST) $(MINIMAX_H3_M3_CACHE_TEST) \
+	$(MINIMAX_H3_M3_SPARSE_TEST) $(MINIMAX_H3_M3_SELECTOR_TEST)
 	python3 -m unittest discover -s tests -p 'test_*.py'
 	$(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE)
 	$(QWEN35_LAYER_TEST) $(QWEN35_LAYER_FIXTURE)
@@ -144,6 +195,231 @@ test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35
 	$(QWEN38_SAFETENSORS_TEST)
 	$(QWEN38_SHA256_TEST)
 	$(QWEN38_SAMPLER_TEST)
+	$(MINIMAX_H3_TEST)
+	$(MINIMAX_H3_M3_AOT_TEST)
+	$(MINIMAX_H3_M3_TREE_TEST)
+	$(MINIMAX_H3_M3_CACHE_TEST)
+	$(MINIMAX_H3_M3_SPARSE_TEST)
+	$(MINIMAX_H3_M3_SELECTOR_TEST)
+
+$(MINIMAX_H3_TEST): tests/minimax_h3_test.c \
+	$(MINIMAX_H3_GENERIC)/minimax_h3.c $(MINIMAX_H3_GENERIC)/minimax_h3.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_GENERIC) \
+		tests/minimax_h3_test.c $(MINIMAX_H3_GENERIC)/minimax_h3.c \
+		-o $@ $(LDFLAGS) -lm
+
+$(MINIMAX_H3_REMOTE_INSPECT): \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_inspect.c \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_COMPILER) \
+		$(MINIMAX_H3_COMPILER)/minimax_h3_remote_inspect.c \
+		$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c \
+		-o $@ $(LDFLAGS) -lcurl
+
+$(MINIMAX_H3_Q4_LAYER_INSPECT): \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_q4_layer_inspect.c \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_q4_layer.c \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_q4_layer.h \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_COMPILER) \
+		$(MINIMAX_H3_COMPILER)/minimax_h3_q4_layer_inspect.c \
+		$(MINIMAX_H3_COMPILER)/minimax_h3_q4_layer.c \
+		$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c \
+		-o $@ $(LDFLAGS) -lcurl
+
+$(MINIMAX_H3_TOKENIZER_PACK): $(QWEN38_COMPILER)/qwen38_tokenizer_pack.c \
+	$(QWEN38_M3)/qwen38_tokenizer.h \
+	$(QWEN38_IMPORT)/qwen38_sha256.c $(QWEN38_IMPORT)/qwen38_sha256.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DMINIMAX_H3_TOKENIZER_PROFILE \
+		-I$(QWEN38_IMPORT) -I$(QWEN38_M3) \
+		$(QWEN38_COMPILER)/qwen38_tokenizer_pack.c \
+		$(QWEN38_IMPORT)/qwen38_sha256.c -o $@
+
+$(MINIMAX_H3_TOKENIZER_OBJECT): $(QWEN38_M3)/qwen38_tokenizer.c \
+	$(QWEN38_M3)/qwen38_tokenizer.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DMINIMAX_H3_TOKENIZER_PROFILE \
+		-I$(QWEN38_M3) -c $< -o $@
+
+$(MINIMAX_H3_TOKENIZER_CLI_OBJECT): \
+	$(QWEN38_M3)/validation/qwen38_tokenizer.c \
+	$(QWEN38_M3)/qwen38_tokenizer.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DMINIMAX_H3_TOKENIZER_PROFILE \
+		-I$(QWEN38_M3) -c $< -o $@
+
+$(MINIMAX_H3_TOKENIZER_CLI): $(MINIMAX_H3_TOKENIZER_OBJECT) \
+	$(MINIMAX_H3_TOKENIZER_CLI_OBJECT)
+	$(CC) $^ -o $@ -framework CoreFoundation -licucore
+
+$(MINIMAX_H3_M3_AOT_TEST): tests/minimax_h3_m3_aot_test.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_aot.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_aot.h \
+	$(MINIMAX_H3_GENERIC)/minimax_h3.c $(MINIMAX_H3_GENERIC)/minimax_h3.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_GENERIC) -I$(MINIMAX_H3_M3) \
+		tests/minimax_h3_m3_aot_test.c $(MINIMAX_H3_M3)/minimax_h3_m3_aot.c \
+		$(MINIMAX_H3_GENERIC)/minimax_h3.c -o $@ $(LDFLAGS) -lm
+
+$(MINIMAX_H3_M3_TREE_TEST): tests/minimax_h3_m3_tree_test.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_tree.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_tree.h \
+	$(MINIMAX_H3_GENERIC)/minimax_h3.c $(MINIMAX_H3_GENERIC)/minimax_h3.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_GENERIC) -I$(MINIMAX_H3_M3) \
+		tests/minimax_h3_m3_tree_test.c $(MINIMAX_H3_M3)/minimax_h3_m3_tree.c \
+		$(MINIMAX_H3_GENERIC)/minimax_h3.c -o $@ $(LDFLAGS) -lm
+
+$(MINIMAX_H3_M3_CACHE_TEST): tests/minimax_h3_m3_cache_test.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_cache.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_cache.h \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_aot.h $(MINIMAX_H3_GENERIC)/minimax_h3.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_GENERIC) -I$(MINIMAX_H3_M3) \
+		tests/minimax_h3_m3_cache_test.c $(MINIMAX_H3_M3)/minimax_h3_m3_cache.c \
+		-o $@ $(LDFLAGS)
+
+$(MINIMAX_H3_M3_SPARSE_TEST): tests/minimax_h3_m3_sparse_test.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_sparse.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_sparse.h \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_cache.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_cache.h \
+	$(MINIMAX_H3_GENERIC)/minimax_h3.c $(MINIMAX_H3_GENERIC)/minimax_h3.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_GENERIC) -I$(MINIMAX_H3_M3) \
+		tests/minimax_h3_m3_sparse_test.c \
+		$(MINIMAX_H3_M3)/minimax_h3_m3_sparse.c \
+		$(MINIMAX_H3_M3)/minimax_h3_m3_cache.c \
+		$(MINIMAX_H3_GENERIC)/minimax_h3.c -o $@ $(LDFLAGS) -lm
+
+$(MINIMAX_H3_M3_SELECTOR_TEST): tests/minimax_h3_m3_selector_test.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_selector.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_selector.h \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_tree.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_tree.h \
+	$(MINIMAX_H3_GENERIC)/minimax_h3.c $(MINIMAX_H3_GENERIC)/minimax_h3.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_GENERIC) -I$(MINIMAX_H3_M3) \
+		tests/minimax_h3_m3_selector_test.c \
+		$(MINIMAX_H3_M3)/minimax_h3_m3_selector.c \
+		$(MINIMAX_H3_M3)/minimax_h3_m3_tree.c \
+		$(MINIMAX_H3_GENERIC)/minimax_h3.c -o $@ $(LDFLAGS) -lm
+
+$(MINIMAX_H3_M3_ATTENTION_AIR): $(MINIMAX_H3_M3)/minimax_h3_attention.metal
+	mkdir -p $(BUILD_DIR)
+	xcrun -sdk macosx metal -c $< -o $@
+
+$(MINIMAX_H3_M3_ATTENTION_METALLIB): $(MINIMAX_H3_M3_ATTENTION_AIR)
+	xcrun -sdk macosx metallib $< -o $@
+
+$(MINIMAX_H3_M3_ATTENTION_OBJECT): \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_attention.m \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_attention.h \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_tree.h $(MINIMAX_H3_GENERIC)/minimax_h3.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O3 -std=c11 -Wall -Wextra -Wpedantic -fobjc-arc \
+		-I$(MINIMAX_H3_GENERIC) -I$(MINIMAX_H3_M3) -c $< -o $@
+
+$(MINIMAX_H3_M3_ATTENTION_BENCH_OBJECT): \
+	$(MINIMAX_H3_M3)/benchmarks/minimax_h3_m3_attention_bench.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_attention.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_M3) -c $< -o $@
+
+$(MINIMAX_H3_M3_ATTENTION_BENCH): $(MINIMAX_H3_M3_ATTENTION_OBJECT) \
+	$(MINIMAX_H3_M3_ATTENTION_BENCH_OBJECT) \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_tree.c $(MINIMAX_H3_GENERIC)/minimax_h3.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_GENERIC) -I$(MINIMAX_H3_M3) \
+		$(MINIMAX_H3_M3_ATTENTION_OBJECT) \
+		$(MINIMAX_H3_M3_ATTENTION_BENCH_OBJECT) \
+		$(MINIMAX_H3_M3)/minimax_h3_m3_tree.c \
+		$(MINIMAX_H3_GENERIC)/minimax_h3.c -o $@ \
+		-framework Foundation -framework Metal -lm
+
+$(MINIMAX_H3_M3_GEMM_OBJECT): \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_gemm.m \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_gemm.h \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_q4_layer.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O3 -std=c11 -Wall -Wextra -Wpedantic -fobjc-arc \
+		-I$(MINIMAX_H3_M3) -I$(MINIMAX_H3_COMPILER) -c $< -o $@
+
+$(MINIMAX_H3_M3_GEMM_BENCH_OBJECT): \
+	$(MINIMAX_H3_M3)/benchmarks/minimax_h3_m3_gemm_bench.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_gemm.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_M3) -c $< -o $@
+
+$(MINIMAX_H3_M3_GEMM_BENCH): $(MINIMAX_H3_M3_GEMM_OBJECT) \
+	$(MINIMAX_H3_M3_GEMM_BENCH_OBJECT)
+	$(CC) $(MINIMAX_H3_M3_GEMM_OBJECT) \
+		$(MINIMAX_H3_M3_GEMM_BENCH_OBJECT) -o $@ \
+		-framework Foundation -framework Metal -lm
+
+$(MINIMAX_H3_M3_Q8_GEMM_BENCH_OBJECT): \
+	$(MINIMAX_H3_M3)/benchmarks/minimax_h3_m3_q8_gemm_bench.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_gemm.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_M3) -c $< -o $@
+
+$(MINIMAX_H3_M3_Q8_GEMM_BENCH): $(MINIMAX_H3_M3_GEMM_OBJECT) \
+	$(MINIMAX_H3_M3_Q8_GEMM_BENCH_OBJECT)
+	$(CC) $(MINIMAX_H3_M3_GEMM_OBJECT) \
+		$(MINIMAX_H3_M3_Q8_GEMM_BENCH_OBJECT) -o $@ \
+		-framework Foundation -framework Metal -lm
+
+$(MINIMAX_H3_M3_REAL_GEMM_OBJECT): \
+	$(MINIMAX_H3_M3)/benchmarks/minimax_h3_m3_real_gemm.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_gemm.h \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_q4_layer.h \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_M3) \
+		-I$(MINIMAX_H3_COMPILER) -c $< -o $@
+
+$(MINIMAX_H3_M3_REAL_GEMM): $(MINIMAX_H3_M3_GEMM_OBJECT) \
+	$(MINIMAX_H3_M3_REAL_GEMM_OBJECT) \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_q4_layer.c \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_COMPILER) \
+		$(MINIMAX_H3_M3_GEMM_OBJECT) \
+		$(MINIMAX_H3_M3_REAL_GEMM_OBJECT) \
+		$(MINIMAX_H3_COMPILER)/minimax_h3_q4_layer.c \
+		$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c \
+		-o $@ -framework Foundation -framework Metal -lcurl -lm
+
+$(MINIMAX_H3_M3_E2E_OBJECT): $(MINIMAX_H3_M3)/minimax_h3_m3_e2e.m \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_e2e.h \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.h \
+	$(QWEN38_M3)/qwen38_tokenizer.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O3 -std=c17 -Wall -Wextra -Wpedantic -fobjc-arc \
+		-DMINIMAX_H3_TOKENIZER_PROFILE -I$(MINIMAX_H3_COMPILER) \
+		-I$(QWEN38_M3) -I$(MINIMAX_H3_M3) -c $< -o $@
+
+$(MINIMAX_H3_M3_E2E_CLI_OBJECT): \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_e2e_cli.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_e2e.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMAX_H3_M3) -c $< -o $@
+
+$(MINIMAX_H3_M3_E2E): $(MINIMAX_H3_M3_E2E_OBJECT) \
+	$(MINIMAX_H3_M3_E2E_CLI_OBJECT) $(MINIMAX_H3_TOKENIZER_OBJECT) \
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DMINIMAX_H3_TOKENIZER_PROFILE \
+		-DMINIMAX_H3_LOCAL_ONLY \
+		-I$(MINIMAX_H3_COMPILER) -I$(QWEN38_M3) \
+		$(MINIMAX_H3_M3_E2E_OBJECT) $(MINIMAX_H3_M3_E2E_CLI_OBJECT) \
+		$(MINIMAX_H3_TOKENIZER_OBJECT) \
+		$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c \
+		-o $@ -framework Foundation -framework Metal \
+		-framework CoreFoundation -licucore -lm
 
 $(TARGET_PROBE): tools/target_probe.c
 	mkdir -p $(BUILD_DIR)
@@ -581,3 +857,21 @@ clean:
 		$(QWEN38_TOKENIZER_PACK) $(QWEN38_TOKENIZER_OBJECT) \
 		$(QWEN38_TOKENIZER_CLI_OBJECT) $(QWEN38_TOKENIZER_CLI) \
 		$(QWEN38_SAMPLER_OBJECT) $(QWEN38_SAMPLER_TEST)
+	rm -f $(MINIMAX_H3_TEST) $(MINIMAX_H3_M3_AOT_TEST) \
+		$(MINIMAX_H3_M3_TREE_TEST) $(MINIMAX_H3_M3_CACHE_TEST) \
+		$(MINIMAX_H3_M3_SPARSE_TEST) $(MINIMAX_H3_M3_SELECTOR_TEST) \
+		$(MINIMAX_H3_M3_ATTENTION_AIR) \
+		$(MINIMAX_H3_M3_ATTENTION_METALLIB) \
+		$(MINIMAX_H3_M3_ATTENTION_OBJECT) \
+		$(MINIMAX_H3_M3_ATTENTION_BENCH_OBJECT) \
+		$(MINIMAX_H3_M3_ATTENTION_BENCH) \
+		$(MINIMAX_H3_M3_GEMM_OBJECT) $(MINIMAX_H3_M3_GEMM_BENCH_OBJECT) \
+		$(MINIMAX_H3_M3_GEMM_BENCH) \
+		$(MINIMAX_H3_M3_Q8_GEMM_BENCH_OBJECT) \
+		$(MINIMAX_H3_M3_Q8_GEMM_BENCH) $(MINIMAX_H3_M3_REAL_GEMM_OBJECT) \
+		$(MINIMAX_H3_M3_REAL_GEMM) $(MINIMAX_H3_M3_E2E_OBJECT) \
+		$(MINIMAX_H3_M3_E2E_CLI_OBJECT) $(MINIMAX_H3_M3_E2E) \
+		$(MINIMAX_H3_REMOTE_INSPECT) $(MINIMAX_H3_Q4_LAYER_INSPECT) \
+		$(MINIMAX_H3_TOKENIZER_PACK) $(MINIMAX_H3_TOKENIZER_OBJECT) \
+		$(MINIMAX_H3_TOKENIZER_CLI_OBJECT) $(MINIMAX_H3_TOKENIZER_CLI) \
+		$(MINIMAX_H3_TOKENIZER_IMAGE)

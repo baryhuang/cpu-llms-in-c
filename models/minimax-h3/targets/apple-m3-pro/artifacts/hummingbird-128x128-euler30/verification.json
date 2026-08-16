@@ -1,0 +1,49 @@
+{
+  "date": "2026-08-16",
+  "scope": "post-run media verification; excluded from generation timing",
+  "mux_correction": {
+    "reason": "the original -shortest mux truncated a verified 22-frame video stream to 20 frames at the AAC boundary",
+    "change": "removed -shortest and remuxed the generated video.mp4 and audio.wav without re-running inference",
+    "wall_seconds": 0.06
+  },
+  "output": {
+    "path": "artifacts/hummingbird-128x128-euler30/minimax-h3.mp4",
+    "bytes": 36534,
+    "sha256": "576737d39aa5d2f5b24dd2e189cd7ee8dcc3544c9f78ca61ce28458a39c04225",
+    "duration_seconds": 0.917,
+    "video": {
+      "codec": "h264",
+      "width": 128,
+      "height": 128,
+      "fps": 24,
+      "frames_declared": 22,
+      "frames_read": 22,
+      "duration_seconds": 0.916667,
+      "mean_frame_luma_min": 67.6146,
+      "mean_frame_luma_max": 97.6219,
+      "mean_frame_luma_mean": 83.738673,
+      "adjacent_difference_luma_mean": 17.389979
+    },
+    "audio": {
+      "codec": "aac",
+      "sample_rate_hz": 32000,
+      "channels": 2,
+      "duration_seconds": 0.917,
+      "wav_samples_per_channel": 29333,
+      "wav_peak_dbfs": -16.785840,
+      "wav_rms_dbfs": -33.373166,
+      "wav_dc_offset": 0.000016,
+      "non_silent": true
+    }
+  },
+  "quality": {
+    "visual_review": "The six-frame contact sheet contains a red flower-like region, green background, and a moving dark/white subject beside the flower. This is coarse prompt correspondence. At 128x128 the subject is not sharply identifiable as a jeweled hummingbird.",
+    "audio_review": "The waveform is non-silent and the spectrum contains time-varying energy. No semantic audio-reference comparison was run.",
+    "reference_parity": "not established",
+    "release_quality": "not established"
+  },
+  "system_context": {
+    "swap_snapshot": "system-wide vm.swapusage after verification: 14336.00 MiB total, 12746.31 MiB used",
+    "attribution": "The snapshot includes unrelated processes and is not attributed to the completed MiniMax-H3 process. Per-process swap was not captured."
+  }
+}

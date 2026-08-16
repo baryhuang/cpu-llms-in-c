@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MiniMax-H3 480p C/Metal Review</title>
+  <style>
+    :root { color-scheme:light; --ink:#17202a; --muted:#5b6573; --line:#d7dde5; --panel:#f6f8fa; --pass:#126b3a; --fail:#9d251b; --open:#8a4d00; }
+    body { max-width:1180px; margin:32px auto; padding:0 24px 64px; color:var(--ink); font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    h1 { margin-bottom:6px; } h2 { margin-top:36px; border-bottom:2px solid var(--ink); padding-bottom:8px; }
+    h3 { margin-top:26px; } p { max-width:100ch; } .muted { color:var(--muted); }
+    .status { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin:20px 0; }
+    .card { border:1px solid var(--line); border-radius:8px; padding:14px 16px; background:var(--panel); }
+    .pass { color:var(--pass); font-weight:700; } .fail { color:var(--fail); font-weight:700; } .open { color:var(--open); font-weight:700; }
+    table { border-collapse:collapse; width:100%; margin:14px 0 22px; }
+    th,td { border:1px solid var(--line); padding:9px 11px; text-align:left; vertical-align:top; }
+    th { background:#eef1f5; } td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    pre { padding:14px; overflow:auto; background:#0f1720; color:#e8edf2; border-radius:6px; white-space:pre-wrap; }
+    video,img { max-width:100%; border:1px solid var(--line); background:#000; }
+    .media { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:18px; align-items:start; }
+    .media figure { margin:0; } figcaption { color:var(--muted); margin-top:6px; }
+  </style>
+</head>
+<body>
+  <h1>MiniMax-H3 480p N-to-N review</h1>
+  <p class="muted">Apple M3 Pro · C graph/runtime with Metal kernels · 864×480 · 124 frames · Turbo 4 · 2026-08-16</p>
+
+  <div class="status">
+    <div class="card"><div class="pass">FUNCTIONAL N-TO-N: PASS</div>Original prompt reached tokenizer, 50-layer conditioner, H3, both VAEs and final MP4.</div>
+    <div class="card"><div class="pass">MEDIA STRUCTURE: PASS</div>124/124 H.264 frames decode; 32 kHz stereo AAC is non-silent.</div>
+    <div class="card"><div class="pass">VISUAL PROMPT RESPONSE: PASS</div>Four distinct prompt-aligned shots are visible with no flat tail.</div>
+    <div class="card"><div class="fail">SPEED TARGET: FAIL</div>9,294.870 s on M3 Pro; the peer front-page sample reports 192 s under a different record.</div>
+  </div>
+
+  <h2>1. Exact input and output</h2>
+  <table>
+    <tr><th>Field</th><th>Exact value</th></tr>
+    <tr><td>Prompt source</td><td><a href="artifacts/anime-room-864x480-turbo4/prompt.txt">prompt.txt</a> · 942 bytes · SHA-256 <code>6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0</code></td></tr>
+    <tr><td>Prompt tokens</td><td>240</td></tr>
+    <tr><td>Geometry</td><td>864×480, 124 frames, 24 fps; 5.166667 s video</td></tr>
+    <tr><td>Seed / sampler</td><td><code>42</code> · Turbo v4-600 EMA · four model evaluations</td></tr>
+    <tr><td>H3 packed sequence</td><td>15,639 rows: 240 text + 414 audio + 14,985 video</td></tr>
+    <tr><td>Execution artifact</td><td><code>Sawfwair/MiniMax-H3-FL2VA-MLX-4bit@e1244ad93d60c737c7e0f065a1c9372f3de7caf8</code>, third-party derived from MiniMax-H3 Base</td></tr>
+    <tr><td>Precision</td><td>Q8 group-64 conditioner; affine-Q4 group-64 H3; BF16 residual state; FP32 accumulation; F16 Video VAE with FP32 boundaries; F32 Audio VAE</td></tr>
+    <tr><td>Final output</td><td><a href="artifacts/anime-room-864x480-turbo4/minimax-h3.mp4">minimax-h3.mp4</a> · 868,388 bytes · SHA-256 <code>5736387060ef3d7e0541609320fe591f04f6c4e03fe4c5cb67c2b95fd5fa7acc</code></td></tr>
+    <tr><td>Raw records</td><td><a href="artifacts/anime-room-864x480-turbo4/generation.json">runtime JSON</a> · <a href="artifacts/anime-room-864x480-turbo4/benchmark.json">benchmark JSON</a> · <a href="artifacts/anime-room-864x480-turbo4/verification.json">verification JSON</a></td></tr>
+  </table>
+
+  <pre lang="zh">日系二次元动漫风格，四镜头连贯视频：
+【镜头1】：全景俯视，深夜昏暗简陋的房间里，冰蓝色双马尾少女坐在榻榻米上，无精打采地仰头打哈欠叹气，面前桌上放着发光的笔记本电脑和吃剩的杯面，影院级暗调光影。
+【镜头2】：镜头快速切至面部极特写，少女眼含泪水，金黄色眼睛，脸颊红晕，咬着牙表现出委屈又倔强的神情，双手趴在桌上，剧烈的破防动态画面。
+【镜头3】：侧面中景，疲惫的蓝发少女无精打采地趴在木桌上，身旁是发光的电脑屏幕、水瓶和杯面，阴暗沉重的室内环境，极微弱的呼吸动作。
+【镜头4】：正面特写，少女慢慢抬起头，抬手将鬓角头发撩到耳后，眼神空洞地注视前方，脸颊挂着一滴汗珠，屏幕冷光照亮面部，细腻的手部与面部动作。
+画幅 16:9，高清细节，影院级光影</pre>
+
+  <video controls loop preload="metadata" src="artifacts/anime-room-864x480-turbo4/minimax-h3.mp4"></video>
+
+  <h2>2. Timed benchmark</h2>
+  <p>All model images were local cache hits. Inference performed no network access. Timing ends at the original mux. Section 3 probing, full decode, hashes, statistics and image generation are excluded.</p>
+  <table>
+    <thead><tr><th>Stage</th><th class="num">Seconds</th><th class="num">Runtime share</th><th>Boundary</th></tr></thead>
+    <tbody>
+      <tr><td>Tokenizer</td><td class="num">0.009321</td><td class="num">&lt;0.001%</td><td>Original UTF-8 prompt → 240 IDs</td></tr>
+      <tr><td>Text image access</td><td class="num">4.784617</td><td class="num">0.051%</td><td>Complete local 28.22 GB safetensors image</td></tr>
+      <tr><td>50-layer text conditioner</td><td class="num">4.713666</td><td class="num">0.051%</td><td>Streamed affine-Q8 layers</td></tr>
+      <tr><td>Turbo AdaLN compile</td><td class="num">0.865239</td><td class="num">0.009%</td><td>Four fixed evaluations</td></tr>
+      <tr><td>H3 denoise</td><td class="num"><strong>1,881.824388</strong></td><td class="num"><strong>20.246%</strong></td><td>50 blocks × four exact dense evaluations</td></tr>
+      <tr><td>Video VAE decode</td><td class="num"><strong>7,387.292038</strong></td><td class="num"><strong>79.477%</strong></td><td>7 temporal chunks × 15 serial spatial tiles × 36 layers</td></tr>
+      <tr><td>Audio VAE decode</td><td class="num">13.531083</td><td class="num">0.146%</td><td>165,333 samples/channel</td></tr>
+      <tr><td>H.264/AAC mux</td><td class="num">0.600629</td><td class="num">0.006%</td><td>Final synchronized MP4</td></tr>
+      <tr><td>Other measured runtime</td><td class="num">1.248762</td><td class="num">0.013%</td><td>Allocation, Euler updates and stage transitions</td></tr>
+      <tr><td><strong>Runtime total</strong></td><td class="num"><strong>9,294.869743</strong></td><td class="num"><strong>100%</strong></td><td>2 h 34 min 54.870 s</td></tr>
+      <tr><td>Outer <code>/usr/bin/time</code> wall</td><td class="num">9,295.01</td><td class="num">—</td><td>Wrapper precision is 0.01 s</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Denoise layer subtotal</h3>
+  <table>
+    <thead><tr><th>Kernel group</th><th class="num">200-call subtotal</th><th class="num">Mean per layer/evaluation</th></tr></thead>
+    <tbody>
+      <tr><td>QKV and output projections</td><td class="num">248.612050 s</td><td class="num">1,243.060 ms</td></tr>
+      <tr><td>Exact dense attention</td><td class="num">1,126.361167 s</td><td class="num">5,631.806 ms</td></tr>
+      <tr><td>MLP</td><td class="num">495.999489 s</td><td class="num">2,479.997 ms</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Resource record</h3>
+  <table>
+    <tr><th>Metric</th><th class="num">Measured value</th><th>Scope</th></tr>
+    <tr><td>Runtime CPU user / system</td><td class="num">12.160168 / 40.497675 s</td><td>C/Metal process; GPU execution is not counted as CPU time</td></tr>
+    <tr><td>Outer process-tree CPU user / system</td><td class="num">14.49 / 40.67 s</td><td>Includes media child processes</td></tr>
+    <tr><td>Runtime peak physical footprint</td><td class="num">4,429,110,144 bytes</td><td>4.125 GiB, measured in process</td></tr>
+    <tr><td>Outer peak physical footprint</td><td class="num">4,479,572,864 bytes</td><td>4.172 GiB, reported by <code>/usr/bin/time -lp</code></td></tr>
+    <tr><td>Maximum resident set</td><td class="num">1,714,831,360 bytes</td><td>1.597 GiB; does not replace physical-footprint accounting</td></tr>
+    <tr><td>Page faults / swaps</td><td class="num">1,059,931 / 0</td><td>System swap sampled after the run was also 0 bytes</td></tr>
+    <tr><td>Thermal / performance warning</td><td class="num">none / none</td><td><code>pmset -g therm</code> after the run</td></tr>
+  </table>
+
+  <h2>3. Verification — excluded from benchmark timing</h2>
+  <table>
+    <tr><th>Check</th><th>Observed result</th><th>Status</th></tr>
+    <tr><td>Complete media decode</td><td>Final MP4 decoded without ffmpeg errors</td><td class="pass">PASS</td></tr>
+    <tr><td>Video stream</td><td>H.264, 864×480, 24 fps, 124 declared and 124 decoded frames, 5.166667 s</td><td class="pass">PASS</td></tr>
+    <tr><td>Flat-frame check</td><td>0/124 flat; per-frame luma range 181–233</td><td class="pass">PASS</td></tr>
+    <tr><td>Motion</td><td>123 adjacent differences; mean luma difference 4.495795</td><td class="pass">NON-STATIC</td></tr>
+    <tr><td>Four-shot structure</td><td>Scene changes at 1.541667, 2.583333 and 3.916667 s</td><td class="pass">PASS</td></tr>
+    <tr><td>Spatial tiles</td><td>No seam observed in full-resolution sampled frames</td><td class="pass">PASS</td></tr>
+    <tr><td>Temporal chunks</td><td>No break observed across sampled 17-frame boundaries</td><td class="pass">PASS</td></tr>
+    <tr><td>Audio</td><td>32 kHz stereo; 165,333 samples/channel; peak −6.205 dBFS; RMS −29.355 dBFS; non-silent</td><td class="pass">STRUCTURAL PASS</td></tr>
+    <tr><td>Visual prompt response</td><td>Blue twin-tail girl, dark room, low table, laptop, bottle/cup food, distressed close-up, collapsed side view and final front close-up are visible</td><td class="pass">PASS</td></tr>
+    <tr><td>Audio semantic review</td><td>No listening review was performed</td><td class="open">OPEN</td></tr>
+    <tr><td>Official full-precision parity</td><td>No same-prompt official reference was generated</td><td class="open">OPEN</td></tr>
+  </table>
+
+  <div class="media">
+    <figure><img src="artifacts/anime-room-864x480-turbo4/contact-sheet.png" alt="Six frames from the corrected output"><figcaption>Frames 0, 24, 48, 72, 96 and 123 from the final MP4.</figcaption></figure>
+    <figure><img src="artifacts/anime-room-864x480-turbo4/temporal-boundaries.png" alt="Frames around temporal chunk boundaries"><figcaption>Four-frame windows around six temporal blend boundaries.</figcaption></figure>
+    <figure><img src="artifacts/anime-room-864x480-turbo4/audio-spectrum.png" alt="Generated audio spectrum"><figcaption>Generated 32 kHz stereo source WAV. Non-silence is established; semantics remain open.</figcaption></figure>
+  </div>
+
+  <h2>4. Correctness increment</h2>
+  <p>The first 480p attempt decoded all 37 video latents as one sequence. It produced 38 non-flat frames followed by 86 flat gray frames. The corrected path follows the released decoder's seven-latent temporal tasks, five-latent stride and five-frame overlap.</p>
+  <table>
+    <thead><tr><th>Run</th><th class="num">Total</th><th class="num">Video VAE</th><th class="num">Peak footprint</th><th>Output</th></tr></thead>
+    <tbody>
+      <tr><td>Before temporal chunking</td><td class="num">7,249.519 s</td><td class="num">5,342.026 s</td><td class="num">6,733,682,496 bytes</td><td class="fail">86 flat frames; quality fail</td></tr>
+      <tr><td>Correct seven-chunk path</td><td class="num">9,294.870 s</td><td class="num">7,387.292 s</td><td class="num">4,429,110,144 bytes</td><td class="pass">0 flat frames; four coherent shots</td></tr>
+    </tbody>
+  </table>
+  <figure><img src="artifacts/anime-room-864x480-turbo4/before-temporal-chunking-contact-sheet.png" alt="Failed output before temporal chunking"><figcaption>Pre-fix output: content ends after frame 37 and the remaining timeline is flat gray.</figcaption></figure>
+
+  <h2>5. Peer comparison boundary</h2>
+  <table>
+    <thead><tr><th>Record</th><th>Device / precision</th><th>Workload</th><th class="num">Time</th><th>Conclusion</th></tr></thead>
+    <tbody>
+      <tr><td>This corrected C/Metal run</td><td>M3 Pro; Q8/Q4 mixed precision</td><td>864×480×124; 240 text rows; 15,639 packed rows</td><td class="num">9,294.870 s</td><td class="fail">Speed target not met</td></tr>
+      <tr><td>MacOS-H3-Speedrun front-page sample</td><td>Per-file device/peak-memory record not attached</td><td>832×480×124; different prompt; Turbo v4 + SolAttn + staged</td><td class="num">192 s</td><td>This run is 48.411× slower; not an equivalent-run quality ratio</td></tr>
+      <tr><td>MacOS-H3-Speedrun attention record</td><td>M3 Ultra; BF16</td><td>864×480×124; 15,485 packed rows; kernel only</td><td class="num">59.53 ms/call</td><td>This dense baseline averages 5,631.806 ms/call; device, rows and algorithm differ</td></tr>
+    </tbody>
+  </table>
+  <p>The repository's 49.893 ms tree-attention primitive is a synthetic approximate-route result. It was not enabled in this run because real-weight trajectory quality is still open.</p>
+
+  <h2>6. Next measured work</h2>
+  <table>
+    <thead><tr><th>Order</th><th>Change</th><th>Reason from this run</th><th>Required gate</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Batch same-shaped Video VAE tiles</td><td>Serial Video VAE is 79.477% of runtime</td><td>Pixel/frame differential plus the same seam and temporal-boundary review</td></tr>
+      <tr><td>2</td><td>Integrate tree attention behind a dense fallback</td><td>Dense attention is 1,126.361 s across 200 calls</td><td>Per-layer error, fixed-seed trajectory and final media comparison</td></tr>
+      <tr><td>3</td><td>Validate sparse projection/MLP schedules</td><td>Dense QKV/output + MLP consume 744.612 s</td><td>Real-weight layer and four-evaluation trajectory quality</td></tr>
+    </tbody>
+  </table>
+
+  <h2>7. Exact reproduction</h2>
+  <pre>make minimax-h3-m3-e2e
+
+h3_prompt_text=$(cat models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt)
+
+MINIMAX_H3_TEXT_ENCODER_URL="file://$PWD/tmp/minimax-h3-text-encoder.safetensors" \
+MINIMAX_H3_TURBO_ADAPTER="file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors" \
+/usr/bin/time -lp build/minimax-h3-m3-e2e "$h3_prompt_text" \
+  models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4 \
+  864 480 124 42</pre>
+  <p>The deployed inference binary is compiled without libcurl and does not launch Python, PyTorch, MLX, GGML, llama.cpp, ONNX Runtime or ComfyUI. It uses ffmpeg only for final H.264/AAC output.</p>
+</body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "prompt": "a jeweled hummingbird hovering beside a red orchid, cinematic natural light",
+  "geometry": {"width": 128, "height": 128, "frames": 22, "fps": 24},
+  "seed": 314159,
+  "prompt_tokens": 15,
+  "sequence_rows": 201,
+  "durations_seconds": {
+    "tokenizer": 0.008322,
+    "text_download": 7.132294,
+    "text_encode": 2.258068,
+    "transformer_download": 1597.824761,
+    "denoise": 287.148395,
+    "video_download": 684.234126,
+    "video_decode": 20.094570,
+    "audio_download": 79.463098,
+    "audio_decode": 2.478901,
+    "mux": 0.490161,
+    "total": 2700.482112
+  },
+  "process_cpu_seconds": {"user": 213.405619, "system": 299.468569},
+  "peak_footprint_bytes": 173843520,
+  "video_path": "not retained in Git",
+  "audio_path": "not retained in Git",
+  "output_path": "artifacts/hummingbird-128x128-euler30/minimax-h3.mp4"
+}

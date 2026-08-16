@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "date": "2026-08-16",
+  "status": "completed",
+  "timing_scope": "generation only; post-run verification is excluded",
+  "device": {
+    "model": "MacBook Pro Mac15,6",
+    "soc": "Apple M3 Pro",
+    "cpu_cores": 11,
+    "gpu_cores": 14,
+    "unified_memory_bytes": 38654705664
+  },
+  "execution_artifact": {
+    "repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+    "revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+    "relationship": "third-party artifact derived from MiniMax-H3 Base; not an official full-precision checkpoint",
+    "conditioner": "affine Q8 group 64",
+    "transformer": "affine Q4 group 64 with BF16 residual state and FP32 accumulation",
+    "video_vae": "F16 weights with FP32 input/output boundaries",
+    "audio_vae": "F32 weights"
+  },
+  "input": {
+    "prompt_path": "prompt.txt",
+    "prompt_bytes": 942,
+    "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
+    "prompt_tokens": 240,
+    "width": 864,
+    "height": 480,
+    "frames": 124,
+    "fps": 24,
+    "seed": 42,
+    "sampler": "Turbo v4-600 EMA",
+    "evaluations": 4,
+    "packed_rows": 15639
+  },
+  "cache_state": {
+    "transformer": "hit",
+    "adaln": "hit",
+    "video_vae": "hit",
+    "audio_vae": "hit",
+    "network_access_during_inference": false
+  },
+  "durations_seconds": {
+    "tokenizer": 0.009321,
+    "text_image_access": 4.784617,
+    "text_encode": 4.713666,
+    "transformer_image_access": 0.0,
+    "turbo_compile": 0.865239,
+    "denoise": 1881.824388,
+    "video_vae_image_access": 0.0,
+    "video_decode": 7387.292038,
+    "audio_vae_image_access": 0.0,
+    "audio_decode": 13.531083,
+    "mux": 0.600629,
+    "runtime_total": 9294.869743,
+    "outer_wall": 9295.01
+  },
+  "denoise_layer_subtotal_seconds": {
+    "qkv_and_output_projections": 248.612050,
+    "dense_attention": 1126.361167,
+    "mlp": 495.999489,
+    "sum": 1870.972706,
+    "calls_per_category": 200
+  },
+  "derived": {
+    "denoise_percent_of_runtime": 20.245839,
+    "video_decode_percent_of_runtime": 79.477091,
+    "other_percent_of_runtime": 0.277070,
+    "frames_per_wall_second": 0.013341,
+    "media_seconds_per_wall_second": 0.000556
+  },
+  "resources": {
+    "runtime_process_cpu_seconds": {
+      "user": 12.160168,
+      "system": 40.497675
+    },
+    "outer_process_tree_cpu_seconds": {
+      "user": 14.49,
+      "system": 40.67
+    },
+    "runtime_peak_physical_footprint_bytes": 4429110144,
+    "outer_peak_physical_footprint_bytes": 4479572864,
+    "maximum_resident_set_bytes": 1714831360,
+    "page_faults": 1059931,
+    "swaps": 0,
+    "voluntary_context_switches": 2911,
+    "involuntary_context_switches": 244263,
+    "system_swap_sample_after_run_bytes": 0,
+    "thermal_warning_recorded": false,
+    "performance_warning_recorded": false
+  },
+  "external_peer": {
+    "repository": "EvolvingLMMs-Lab/MacOS-H3-Speedrun",
+    "revision": "c8e0f732fe82b00704738feff769cff621a4f7b2",
+    "front_page_sample": {
+      "width": 832,
+      "height": 480,
+      "frames": 124,
+      "generation_seconds": 192,
+      "this_run_wall_ratio": 48.410780,
+      "comparison_limit": "different width, prompt, precision and incomplete per-file hardware/resource record"
+    },
+    "attention_record": {
+      "device": "Apple M3 Ultra",
+      "precision": "BF16",
+      "width": 864,
+      "height": 480,
+      "frames": 124,
+      "packed_rows": 15485,
+      "solattn_milliseconds": 59.53,
+      "this_run_packed_rows": 15639,
+      "this_run_dense_attention_mean_milliseconds": 5631.806,
+      "comparison_limit": "different device, row count, precision and attention algorithm; kernel-only record"
+    }
+  },
+  "raw_generation_record": "generation.json",
+  "verification_record": "verification.json"
+}
