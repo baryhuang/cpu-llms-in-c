@@ -8,6 +8,20 @@ runtime peak physical footprint and zero swaps. All 124 frames decode and four
 prompt-aligned shots are visible. Functional and visual smoke gates pass;
 official full-precision parity and the speed target remain open.
 
+| N-to-N milestone | 480p seconds | Evidence |
+|---|---:|---|
+| Correct seven-chunk baseline | **9,294.869743** | measured complete run |
+| Exact buffer/binding/RoPE/command cleanup | 9,112.577745 | projected from 68.619048 s per VAE task |
+| + 32-row simdgroup-matrix GEMM | 2,624.139600 | projected from 6.824399 s/task |
+| + eight-query exact tiled attention | 2,567.102130 | projected from 6.281185 s/task |
+| + 32-row shared-weight GEMM | 2,544.817665 | projected from 6.068952 s/task |
+| + 64-row shared-weight GEMM | 2,435.747655 | projected from 5.030190 s/task |
+| Current full validation | **2,418.708237** | measured complete run; **3.843×** over baseline |
+
+Projected rows use the baseline's measured non-VAE time plus 105 real-weight
+VAE tasks; they are not presented as full runs. Reasons, deltas and quality
+gates are in the [target optimization ledger](targets/apple-m3-pro/README.md#optimization-ledger).
+
 ## Pinned sources
 
 | Item | Revision |

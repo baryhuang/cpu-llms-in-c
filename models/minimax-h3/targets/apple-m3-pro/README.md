@@ -8,6 +8,25 @@ VAE and MP4 mux. The corrected 864×480×124 Turbo-4 path completed in
 tail or sampled tile/chunk break is visible. Functional and visual smoke gates
 pass; official full-precision parity and the speed target remain open.
 
+## N-to-N optimization timeline
+
+| Runtime milestone | 480p N-to-N seconds | Change from previous | Speedup vs valid baseline | Evidence |
+|---|---:|---:|---:|---|
+| Correct seven-chunk baseline | **9,294.869743** | — | 1.000× | measured complete N-to-N |
+| Whole-image buffers + static bindings + RoPE + four-layer command grouping | 9,112.577745 | −182.291998 | 1.020× | projected from 68.619048 s/task; exact setup bundle was not timed per subchange |
+| + 32-row simdgroup-matrix GEMM | 2,624.139600 | −6,488.438145 | 3.542× | projected from 6.824399 s/task |
+| + eight-query exact tiled attention | 2,567.102130 | −57.037470 | 3.621× | projected from 6.281185 s/task |
+| + 32-row shared-weight GEMM | 2,544.817665 | −22.284465 | 3.652× | projected from 6.068952 s/task |
+| + 64-row shared-weight GEMM | 2,435.747655 | −109.070010 | 3.816× | projected from 5.030190 s/task |
+| Full current N-to-N validation | **2,418.708237** | −17.039418 vs projection | **3.843×** | measured complete N-to-N |
+
+Intermediate N-to-N values are projections, not hidden full runs. Each uses
+the valid baseline's measured 1,907.577705 seconds outside Video VAE plus 105
+times the corresponding real-weight 256×256×22 VAE task. The first and last
+rows are complete measurements. The earlier 7,249.519-second one-sequence run
+is excluded because 86/124 output frames were flat; it is a failed correctness
+run, not a faster baseline.
+
 ## Target
 
 | Property | Pinned value |

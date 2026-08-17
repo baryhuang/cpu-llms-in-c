@@ -33,6 +33,21 @@
     <div class="card"><div class="fail">SPEED TARGET: FAIL</div>2,418.708 s on M3 Pro, 3.843× over the prior C/Metal run; the peer front-page sample reports 192 s under a different record.</div>
   </div>
 
+  <h2>N-to-N optimization timeline</h2>
+  <table>
+    <thead><tr><th>Runtime milestone</th><th class="num">480p N-to-N seconds</th><th class="num">Change</th><th class="num">Vs baseline</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Correct seven-chunk baseline</td><td class="num"><strong>9,294.869743</strong></td><td class="num">—</td><td class="num">1.000×</td><td>measured complete N-to-N</td></tr>
+      <tr><td>Whole-image buffers + static bindings + RoPE + four-layer command grouping</td><td class="num">9,112.577745</td><td class="num">−182.291998</td><td class="num">1.020×</td><td>projected from 68.619048 s/task; exact setup bundle not isolated</td></tr>
+      <tr><td>+ 32-row simdgroup-matrix GEMM</td><td class="num">2,624.139600</td><td class="num">−6,488.438145</td><td class="num">3.542×</td><td>projected from 6.824399 s/task</td></tr>
+      <tr><td>+ eight-query exact tiled attention</td><td class="num">2,567.102130</td><td class="num">−57.037470</td><td class="num">3.621×</td><td>projected from 6.281185 s/task</td></tr>
+      <tr><td>+ 32-row shared-weight GEMM</td><td class="num">2,544.817665</td><td class="num">−22.284465</td><td class="num">3.652×</td><td>projected from 6.068952 s/task</td></tr>
+      <tr><td>+ 64-row shared-weight GEMM</td><td class="num">2,435.747655</td><td class="num">−109.070010</td><td class="num">3.816×</td><td>projected from 5.030190 s/task</td></tr>
+      <tr><td>Full current N-to-N validation</td><td class="num"><strong>2,418.708237</strong></td><td class="num">−17.039418 vs projection</td><td class="num"><strong>3.843×</strong></td><td>measured complete N-to-N</td></tr>
+    </tbody>
+  </table>
+  <p>Projected rows use the measured 1,907.577705 seconds outside Video VAE plus 105 times the corresponding real-weight 256×256×22 task. Only the first and last rows are complete runs. The 7,249.519-second one-sequence attempt is excluded because 86/124 frames were flat.</p>
+
   <h2>1. Exact input and output</h2>
   <table>
     <tr><th>Field</th><th>Exact value</th></tr>

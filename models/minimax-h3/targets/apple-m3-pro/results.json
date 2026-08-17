@@ -229,6 +229,20 @@
       "64 activation rows and 64 output channels per FP16 simdgroup-matrix tile",
       "32 K/V rows shared by eight attention queries in threadgroup memory"
     ],
+    "n_to_n_timeline": {
+      "workload": "864x480x124, 240 prompt tokens, Turbo-4, seed 42, exact 256-pixel Video VAE tiles",
+      "projection_formula": "1907.577705 measured baseline seconds outside Video VAE + 105 * measured 256x256x22 Video VAE task seconds",
+      "invalid_fast_run_excluded": {"total_seconds": 7249.519, "reason": "86 of 124 frames were flat"},
+      "milestones": [
+        {"name": "correct seven-chunk baseline", "n_to_n_seconds": 9294.869743, "delta_seconds": null, "speedup_vs_baseline": 1.0, "evidence": "measured complete N-to-N"},
+        {"name": "whole-image buffers, static bindings, RoPE and four-layer command grouping", "n_to_n_seconds": 9112.577745, "delta_seconds": -182.291998, "speedup_vs_baseline": 1.020004, "component_seconds": 68.619048, "evidence": "projected; exact setup bundle not timed per subchange"},
+        {"name": "32-row simdgroup-matrix GEMM", "n_to_n_seconds": 2624.139600, "delta_seconds": -6488.438145, "speedup_vs_baseline": 3.542064, "component_seconds": 6.824399, "evidence": "projected"},
+        {"name": "eight-query exact tiled attention", "n_to_n_seconds": 2567.102130, "delta_seconds": -57.037470, "speedup_vs_baseline": 3.620764, "component_seconds": 6.281185, "evidence": "projected"},
+        {"name": "32-row shared-weight GEMM", "n_to_n_seconds": 2544.817665, "delta_seconds": -22.284465, "speedup_vs_baseline": 3.652470, "component_seconds": 6.068952, "evidence": "projected"},
+        {"name": "64-row shared-weight GEMM", "n_to_n_seconds": 2435.747655, "delta_seconds": -109.070010, "speedup_vs_baseline": 3.816023, "component_seconds": 5.030190, "evidence": "projected"},
+        {"name": "full current validation", "n_to_n_seconds": 2418.708237, "delta_seconds_vs_projection": -17.039418, "speedup_vs_baseline": 3.842907, "evidence": "measured complete N-to-N"}
+      ]
+    },
     "optimization_ledger": [
       {
         "step": 0,
