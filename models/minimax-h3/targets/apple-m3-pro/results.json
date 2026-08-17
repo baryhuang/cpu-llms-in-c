@@ -229,6 +229,123 @@
       "64 activation rows and 64 output channels per FP16 simdgroup-matrix tile",
       "32 K/V rows shared by eight attention queries in threadgroup memory"
     ],
+    "optimization_ledger": [
+      {
+        "step": 0,
+        "kind": "correctness baseline",
+        "observation": "one-sequence decode produced 86 flat frames",
+        "change": "released seven-latent temporal tasks with five-latent stride and five-frame overlap",
+        "reason": "performance is not valid until the released temporal decoder contract is preserved",
+        "before": {"total_seconds": 7249.519, "video_vae_seconds": 5342.026, "flat_frames": 86},
+        "after": {"total_seconds": 9294.869743, "video_vae_seconds": 7387.292038, "flat_frames": 0},
+        "gate": "124/124 frames and four prompt-aligned shots"
+      },
+      {
+        "step": 1,
+        "kind": "profile",
+        "observation": "Video VAE consumed 79.477091 percent of the valid 480p runtime",
+        "change": "prioritize Video VAE before H3",
+        "reason": "largest measured Amdahl term",
+        "measurement": {"total_seconds": 9294.869743, "video_vae_seconds": 7387.292038, "denoise_seconds": 1881.824388},
+        "gate": "same prompt, seed, Turbo-4 schedule and exact 256-pixel tiles fixed for comparisons"
+      },
+      {
+        "step": 2,
+        "kind": "exact resource binding",
+        "observation": "tensor-backed Metal resources were recreated inside repeated graph execution",
+        "change": "one no-copy Metal buffer per complete mapped checkpoint with tensor offsets reused",
+        "reason": "fixed model resources do not belong in the inner execution loop",
+        "measurement": {"workload": "32x32 Turbo-4 denoise smoke", "before_seconds": 17.122752, "after_seconds": 7.571732},
+        "isolated_full_vae_timing": null,
+        "gate": "final smoke frames and audio unchanged"
+      },
+      {
+        "step": 3,
+        "kind": "exact graph precompute",
+        "observation": "438 tensor bindings, RoPE and per-layer synchronization repeat for every same-shaped tile",
+        "change": "resolve bindings once, precompute 24 complex RoPE coefficients per row, encode four layers per command buffer",
+        "reason": "weight graph and tile geometry are compile-time invariants",
+        "isolated_timing": null,
+        "combined_scalar_reference_seconds": 68.619048,
+        "gate": "binding, RoPE and command grouping regressions exact"
+      },
+      {
+        "step": 4,
+        "kind": "Metal GEMM",
+        "observation": "scalar dense projections dominate; real w1 is 932.992583 ms while scalar-query attention is 63.254375 ms",
+        "change": "32-row FP16 simdgroup-matrix GEMM with FP32 accumulation",
+        "reason": "map dense linear layers to M3 matrix hardware without changing the FP16 public boundary",
+        "before_seconds": 68.619048,
+        "after_seconds": 6.824399,
+        "speedup": 10.055,
+        "gate": {"psnr_db": 66.821340, "ssim": 0.999875}
+      },
+      {
+        "step": 5,
+        "kind": "exact tiled attention",
+        "observation": "scalar queries repeatedly load the same keys and values",
+        "change": "eight queries share 32 K/V rows while retaining original key order",
+        "reason": "reuse K/V in threadgroup memory without changing softmax traversal",
+        "before_seconds": 6.824399,
+        "after_seconds": 6.281185,
+        "speedup": 1.086,
+        "kernel_before_ms": 63.254375,
+        "kernel_after_ms": 45.424225,
+        "gate": {"differing_fp16_values": 0, "compared_values": 3680256, "frames_bit_identical": 22}
+      },
+      {
+        "step": 6,
+        "kind": "shared-weight GEMM",
+        "observation": "neighboring activation rows reload the same weight tiles",
+        "change": "share staged weight tiles across 32 activation rows",
+        "reason": "amortize weight traffic across simdgroups",
+        "before_seconds": 6.281185,
+        "after_seconds": 6.068952,
+        "speedup": 1.035,
+        "gate": "22/22 frames bit identical to prior step"
+      },
+      {
+        "step": 7,
+        "kind": "larger shared-weight GEMM",
+        "observation": "a staged 64x32 weight tile can serve more activation rows",
+        "change": "64 activation rows and 64 output channels per dispatch",
+        "reason": "amortize each staged tile over twice as many activation rows",
+        "before_seconds": 6.068952,
+        "after_seconds": 5.030190,
+        "speedup": 1.207,
+        "w1_scalar_ms": 932.992583,
+        "w1_selected_ms": 37.685250,
+        "gate": "bit identical to 32-row MMA; final component PSNR 66.821340 dB and SSIM 0.999875 versus scalar"
+      },
+      {
+        "step": 8,
+        "kind": "full N-to-N validation",
+        "observation": "one-tile scaling is a projection and cannot establish cache, thermal or media behavior",
+        "change": "run the complete prompt-to-media graph",
+        "reason": "replace projection with measured 480p evidence",
+        "projected_video_vae_seconds": 528.169950,
+        "measured_video_vae_seconds": 487.273811,
+        "video_vae_speedup_vs_valid_baseline": 15.160454,
+        "measured_total_seconds": 2418.708237,
+        "total_speedup_vs_valid_baseline": 3.842907,
+        "executed_work": {"conditioner_layers": 50, "h3_layer_calls": 200, "video_vae_block_calls": 3780, "audio_upsample_stages": 7},
+        "gate": {"video_frames": 124, "flat_frames": 0, "encoded_video_psnr_db": 43.720170, "encoded_video_ssim": 0.984754, "audio_bit_identical": true}
+      }
+    ],
+    "timing_semantics": {
+      "model_runtime_seconds": 2418.708237,
+      "shell_wall_seconds": 2484.38,
+      "shell_only_work": "preflight SHA-256 of the 28.22 GB text encoder and 780 MB Turbo adapter plus shell overhead",
+      "cache_hits_skip": ["network transfer", "offline checkpoint import", "offline packing"],
+      "cache_hits_do_not_skip": ["conditioner", "H3 denoise", "Video VAE", "Audio VAE", "mux"],
+      "post_run_verification_included": false
+    },
+    "rejected_or_deferred": [
+      {"candidate": "16-query attention", "measurement_ms": 62.300242, "selected_8_query_ms": 45.424225, "decision": "rejected", "reason": "occupancy loss exceeds additional K/V reuse"},
+      {"candidate": "MTLBinaryArchive default loading", "with_archive_setup_ms": 36.619, "without_archive_setup_ms": 32.106, "decision": "rejected as default", "reason": "measured startup increased"},
+      {"candidate": "272x272 spatial tile", "reference_seconds": 14.152762, "candidate_seconds": 10.268616, "psnr_db": 46.319993, "ssim": 0.993609, "decision": "research only", "reason": "complete-run quality gate remains open"},
+      {"candidate": "indirect command buffer", "decision": "deferred", "reason": "CPU encoding is negligible after four-layer grouping and setBytes constants must first become persistent buffers"}
+    ],
     "one_256_tile_22_frame_component": {
       "command": "build/minimax-h3-m3-e2e --video-vae-smoke OUTPUT_DIR 256 256 22",
       "scalar_gemm_and_scalar_attention_seconds": 68.619048,

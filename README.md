@@ -33,6 +33,11 @@ same 480p N-to-N workload fell from 9,294.870 to 2,418.708 seconds (3.843×);
 Video VAE decode fell from 7,387.292 to 487.274 seconds (15.160×). The
 [target record](models/minimax-h3/targets/apple-m3-pro/README.md#video-vae-structure-and-optimization)
 separates measured end-to-end results, component gates and projections.
+Its [optimization ledger](models/minimax-h3/targets/apple-m3-pro/README.md#optimization-ledger)
+records each observation, reason, isolated or combined timing, correctness
+boundary and rejected branch. The optimized run recomputed all 200 H3 layer
+calls and all 3,780 Video VAE block calls; local cache hits skipped weight
+download/import, not inference.
 
 Gemma is the early restricted artifact and accepts only its compiled test
 inputs. Qwen3.5, Qwen3.8, Whisper and MiniMax-H3 execute their full model

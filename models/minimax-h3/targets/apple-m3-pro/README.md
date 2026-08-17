@@ -130,6 +130,41 @@ denoise fell from 17.122752 to 7.571732 seconds because the runtime stopped
 creating thousands of repeated tensor-backed Metal resources. This is a
 resource-binding reduction, not a model approximation.
 
+### Optimization ledger
+
+This ledger keeps the decision chain, not only the winning endpoint. A row
+without an isolated timing says so explicitly; combined measurements are not
+retroactively assigned to individual changes.
+
+| Step | Observation | Change and reason | Measured effect | Correctness boundary |
+|---:|---|---|---:|---|
+| 0 | Decoding all 37 video latents as one sequence left 86/124 flat frames | Adopt the released seven-latent task, five-latent stride and five-frame overlap; speed is irrelevant until the temporal graph is valid | 7,249.519 s invalid run → 9,294.870 s valid baseline; Video VAE 5,342.026 → 7,387.292 s | 124/124 frames, 0 flat frames, four shots |
+| 1 | In the valid baseline, Video VAE used 7,387.292 s, 79.477% of 9,294.870 s | Optimize Video VAE before H3; this is the largest Amdahl term | Profiling decision; no runtime change | Same prompt, seed, Turbo-4 schedule and exact 256-pixel tiling fixed for later comparison |
+| 2 | Tensor-backed Metal resources were recreated inside repeated graph execution | Map each complete checkpoint once and reuse tensor offsets; object creation and mapping do not belong in a fixed graph's inner loop | 32×32 Turbo-4 denoise 17.122752 → 7.571732 s; full-size VAE contribution not isolated | Exact resource-binding change; smoke frames and audio unchanged |
+| 3 | The same 438 VAE tensor bindings, position grid and synchronization pattern recur for every tile | Resolve bindings once, precompute 24 complex RoPE coefficients per row, and encode four layers per command buffer; fixed geometry makes all three reusable | No trustworthy isolated timing; the combined prebound scalar reference is 68.619048 s per 256×256×22 task | Static bindings exact; RoPE/frame regression exact; grouping changes submission only |
+| 4 | Scalar dense projections dominate the prebound graph; one real `w1` is 932.993 ms while scalar-query attention is 63.254 ms | Replace scalar projection loops with 32-row FP16 simdgroup-matrix tiles and FP32 accumulation | Component 68.619048 → 6.824399 s, 10.055× | PSNR 66.821 dB, SSIM 0.999875 versus scalar; FP16 public boundary retained |
+| 5 | Each scalar query reloads the same keys and values | Let eight queries share 32 K/V rows in threadgroup memory while preserving key order | Component 6.824399 → 6.281185 s, 1.086×; attention 63.254 → 45.424 ms | 0/3,680,256 FP16 attention outputs differ; 22/22 frames bit identical to step 4 |
+| 6 | The 32-row GEMM still reloads weight tiles across neighboring activation rows | Share each 32-row weight tile across the simdgroups consuming it | Component 6.281185 → 6.068952 s, 1.035× | 22/22 frames bit identical to step 5 |
+| 7 | More activation rows can amortize each staged 64×32 weight tile | Process 64 activation rows and 64 output channels per dispatch | Component 6.068952 → 5.030190 s, 1.207×; real `w1` scalar 932.993 → 37.685 ms | Bit identical to the 32-row MMA boundary; final component remains PSNR 66.821 dB, SSIM 0.999875 versus scalar |
+| 8 | A one-tile projection predicted 528.170 s for 105 exact full-size tasks | Run the complete graph instead of claiming the projection | Video VAE 487.273811 s, 7.743% below projection and 15.160× over the valid baseline; total 2,418.708237 s, 3.843× overall | Full prompt-to-media path passed; PSNR 43.720 dB and SSIM 0.984754 versus the pre-optimization encoded video; audio bit identical |
+
+The final run did not reuse an earlier latent or media output. It executed 50
+conditioner layers, 200 H3 layer/evaluation calls, 3,780 Video VAE block calls,
+seven Audio VAE upsampling stages and a new mux. Local packed-image cache hits
+skipped network transfer and offline import only. The model runtime was
+2,418.708237 seconds; the shell wall was 2,484.38 seconds because it also
+included SHA-256 checks of the 28.22 GB conditioner and 780 MB Turbo adapter.
+Post-run media verification is excluded from both numbers.
+
+Rejected and deferred branches remain part of the record:
+
+| Candidate | Evidence | Decision and reason |
+|---|---:|---|
+| 16-query attention tile | 62.300 ms versus 45.424 ms for eight queries | rejected; lower occupancy costs more than the additional K/V reuse saves |
+| `MTLBinaryArchive` in the default runtime | 36.619 ms setup versus 32.106 ms without | rejected as a default; it increased measured startup |
+| 272×272 spatial tile | 14.153 → 10.269 s on 256×480×22; PSNR 46.320 dB, SSIM 0.993609 | retained as approximate research; full-run quality gate is open |
+| Indirect command buffers | CPU encoding is negligible after four-layer grouping | deferred; persistent constant buffers must replace `setBytes` before ICB can remove useful work |
+
 ### Measured component increments
 
 Command:

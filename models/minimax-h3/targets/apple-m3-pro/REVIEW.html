@@ -135,16 +135,17 @@
 
   <h2>5. Video VAE optimization</h2>
   <p class="pass">The exact 7×15 256-tile graph has now completed N-to-N: 487.273811 s for Video VAE and 2,418.708237 s total.</p>
+  <p>The full run recomputed 50 conditioner layers, 200 H3 layer/evaluation calls, 3,780 Video VAE blocks and seven Audio VAE upsampling stages. Packed-image cache hits removed network/import work only. Shell wall was 2,484.38 s because preflight SHA-256 checks are outside the 2,418.708237-second model runtime.</p>
   <p>The component command sends deterministic latent data through the real 2.604B-parameter, 36-layer Video VAE. One 256×256×22 task contains 1,797 transformer rows. Verification time is separate from the duration column.</p>
   <table>
-    <thead><tr><th>Increment</th><th class="num">Video VAE seconds</th><th class="num">Increment</th><th>Verification</th></tr></thead>
+    <thead><tr><th>Increment</th><th>Reason</th><th class="num">Video VAE seconds</th><th class="num">Increment</th><th>Verification</th></tr></thead>
     <tbody>
-      <tr><td>Scalar GEMM + scalar-query attention on the current prebound graph</td><td class="num">68.619048</td><td class="num">baseline</td><td>finite 22-frame output</td></tr>
-      <tr><td>32-row FP16 simdgroup-matrix GEMM</td><td class="num">6.824399</td><td class="num">10.055×</td><td>PSNR 66.821 dB; SSIM 0.999875 versus scalar</td></tr>
-      <tr><td>Eight-query, 32-key tiled exact attention</td><td class="num">6.281185</td><td class="num">1.086×</td><td>22/22 PPM frames bit identical to prior row</td></tr>
-      <tr><td>32-row shared-weight GEMM</td><td class="num">6.068952</td><td class="num">1.035×</td><td>22/22 frames bit identical</td></tr>
-      <tr><td>64-row shared-weight GEMM</td><td class="num"><strong>5.030190</strong></td><td class="num"><strong>1.207×</strong></td><td>22/22 frames bit identical</td></tr>
-      <tr><td><strong>Current versus scalar compute reference</strong></td><td class="num">—</td><td class="num"><strong>13.641×</strong></td><td>PSNR 66.821 dB; SSIM 0.999875</td></tr>
+      <tr><td>Scalar GEMM + scalar-query attention on the current prebound graph</td><td>Establish one stable real-weight baseline after exact binding/RoPE/command-graph cleanup</td><td class="num">68.619048</td><td class="num">baseline</td><td>finite 22-frame output</td></tr>
+      <tr><td>32-row FP16 simdgroup-matrix GEMM</td><td>Dense projections dominate; use the M3 matrix hardware while retaining FP32 accumulation and an FP16 boundary</td><td class="num">6.824399</td><td class="num">10.055×</td><td>PSNR 66.821 dB; SSIM 0.999875 versus scalar</td></tr>
+      <tr><td>Eight-query, 32-key tiled exact attention</td><td>Eight queries reuse the same K/V rows without changing key order</td><td class="num">6.281185</td><td class="num">1.086×</td><td>22/22 PPM frames bit identical to prior row</td></tr>
+      <tr><td>32-row shared-weight GEMM</td><td>Share staged weight tiles across neighboring activation rows</td><td class="num">6.068952</td><td class="num">1.035×</td><td>22/22 frames bit identical</td></tr>
+      <tr><td>64-row shared-weight GEMM</td><td>Amortize each 64×32 weight tile across twice as many activation rows</td><td class="num"><strong>5.030190</strong></td><td class="num"><strong>1.207×</strong></td><td>22/22 frames bit identical</td></tr>
+      <tr><td><strong>Current versus scalar compute reference</strong></td><td>Combined selected kernel path</td><td class="num">—</td><td class="num"><strong>13.641×</strong></td><td>PSNR 66.821 dB; SSIM 0.999875</td></tr>
     </tbody>
   </table>
   <table>
