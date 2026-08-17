@@ -122,14 +122,14 @@ The following five workloads ran through one resident chat process per arm with 
 
 | Case | Output tokens | Plain end-to-end | Adaptive MTP end-to-end | Speedup | Request wall, plain / MTP |
 |---|---:|---:|---:|---:|---:|
-| C `max2` function | 28 | 5.45 tok/s | **13.66 tok/s** | 2.51× | 5.1 / 2.0 s |
-| Hash-table explanation | 531 / 533 | 7.81 tok/s | **10.12 tok/s** | 1.30× | 68.0 / 52.7 s |
-| Python `LRUCache` class | 1,155 | 7.82 tok/s | **14.86 tok/s** | 1.90× | 147.8 / 77.7 s |
-| Virtual-memory essay | 1,463 / 1,577 | 7.91 tok/s | 9.29 tok/s | 1.17× | 185.0 / 169.7 s |
-| Notes summary, 159-token prompt | 128 | 6.84 tok/s | **9.20 tok/s** | 1.35× | 18.7 / 13.9 s |
-| **Aggregate** | **3,305 / 3,421** | **7.78 tok/s** | **10.82 tok/s** | **1.39×** | **424.6 / 316.0 s** |
+| C `max2` function | 28 | 6.25 tok/s | **14.17 tok/s** | 2.27× | 4.5 / 2.0 s |
+| Hash-table explanation | 531 / 533 | 7.81 tok/s | **10.56 tok/s** | 1.35× | 68.0 / 50.5 s |
+| Python `LRUCache` class | 1,155 | 7.64 tok/s | **15.66 tok/s** | 2.05× | 151.2 / 73.7 s |
+| Virtual-memory essay | 1,463 / 1,577 | 8.06 tok/s | 9.63 tok/s | 1.19× | 181.5 / 163.8 s |
+| Notes summary, 159-token prompt | 128 | 7.01 tok/s | **9.43 tok/s** | 1.35× | 18.3 / 13.6 s |
+| **Aggregate** | **3,305 / 3,421** | **7.81 tok/s** | **11.27 tok/s** | **1.44×** | **423.3 / 303.6 s** |
 
-Aggregate decode throughput is 7.89 plain and 11.12 speculative. Code-heavy cases run at 15.1–34.4 decode tok/s because their draft chains accept deeply; prose cases sit near 9.4–10.3, acceptance-limited. Three cases are token-identical between arms; the two paired token counts mark the prose cases where the fast verify's accumulation order flips one numerical near-tie onto an alternate fluent greedy continuation. `QWEN38_VERIFY_FAST=0` selects the exact verify kernels, which are token-identical on all five cases at 9.81 aggregate end-to-end tok/s.
+Aggregate decode throughput is 7.92 plain and 11.58 speculative. Code-heavy cases run at 16.0–36.0 decode tok/s because their draft chains accept deeply; prose cases sit near 9.7–10.7, acceptance-limited. Three cases are token-identical between arms; the two paired token counts mark the prose cases where the fast verify's accumulation order flips one numerical near-tie onto an alternate fluent greedy continuation. `QWEN38_VERIFY_FAST=0` selects the exact verify kernels, which are token-identical on all five cases at 9.81 aggregate end-to-end tok/s.
 
 ## llama.cpp comparison
 

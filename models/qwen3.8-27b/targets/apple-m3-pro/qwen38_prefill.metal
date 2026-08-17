@@ -1228,9 +1228,20 @@ constant uint kGemmWideRows = 64;
                 (quants + block * 32 + (k_base >> 1));                    \
             for (uint word = 0; word < 4; ++word) {                       \
                 uint bits = words[word];                                  \
-                for (uint j = 0; j < 8; ++j)                              \
-                    w_tile[(k_base + word * 8 + j) * kGemmWideRows + r] = \
-                        scale * half((bits >> (4 * j)) & 0x0f) + bias;    \
+                half4 lo = half4(as_type<uchar4>(bits & 0x0f0f0f0fu)) *   \
+                           scale + bias;                                  \
+                half4 hi = half4(as_type<uchar4>((bits >> 4) &            \
+                                                 0x0f0f0f0fu)) *          \
+                           scale + bias;                                  \
+                uint base = (k_base + word * 8) * kGemmWideRows + r;      \
+                w_tile[base] = lo.x;                                      \
+                w_tile[base + kGemmWideRows] = hi.x;                      \
+                w_tile[base + 2 * kGemmWideRows] = lo.y;                  \
+                w_tile[base + 3 * kGemmWideRows] = hi.y;                  \
+                w_tile[base + 4 * kGemmWideRows] = lo.z;                  \
+                w_tile[base + 5 * kGemmWideRows] = hi.z;                  \
+                w_tile[base + 6 * kGemmWideRows] = lo.w;                  \
+                w_tile[base + 7 * kGemmWideRows] = hi.w;                  \
             }                                                             \
         } else {                                                          \
             for (uint i = 0; i < 32; ++i)                                 \
