@@ -176,5 +176,26 @@
     },
     "summary": "this runtime leads 1.09x end to end without speculation and 1.56x with it (output token-identical to plain decoding); llama.cpp's reply is correct but differs textually - a different Q4 quantization of the same model",
     "regression": "the runtime's replies match the recorded 3.8 outputs exactly after the wide-tile/S128 prefill changes, with and without speculation"
+  },
+  "memory_for_speed_experiments": {
+    "measured_at": "2026-08-16",
+    "question": "decode streams every weight byte per token, so spare RAM can buy speed only as more tokens verified per weight stream; two candidates were built and measured same-window (thermal drift makes cross-window comparison unreliable)",
+    "context_lookup_drafting": {
+      "design": "when the tokens just generated reproduce an earlier n-gram of the conversation, draft up to 7 followers with no draft-model pass and verify them in one batched forward (verify batches 2-8), with a cooldown after failed lookups",
+      "same_window_ab": {
+        "summary_case": "7.97 tok/s lookup off vs 7.17 on; 5 lookup steps accepted 17 drafts (3.4/step)",
+        "prose_with_bigram_trigger": "4 accepts in 23 lookup steps - misfires dominate",
+        "output": "token-identical in every arm"
+      },
+      "why_it_loses": "a partial accept pays the wide verify plus a replay (state repair), ~130 ms per emitted token at 3.4/7 accepts versus ~100 for the MTP chain; the exact-kernel verify also grows ~0.7 ms/layer per extra row",
+      "disposition": "reverted; would need carry-forward verification (fold the accepted prefix into the next step's verify instead of replaying) to reach parity, and parity is not a win"
+    },
+    "adaptive_depth_ceiling_5": {
+      "design": "raise the adaptive MTP chain ceiling from 3 to 5 above acceptance EMA 0.99",
+      "same_window_ab": "long code case: 10.84 tok/s at fixed depth 3 vs 10.71 adaptive-with-ceiling-5; docstring spans dip the EMA so deep steps rarely engage and shallow recovery steps dominate",
+      "disposition": "reverted to ceiling 3"
+    },
+    "weight_copy_analysis": "an FP16 weight copy for a dequant-free verify path needs ~27 GB next to the 14.1 GiB Q4 image - exceeds 36 GB; a Q8 copy (~29 GB total resident) risks swap for a marginal dequant saving; not attempted",
+    "retained": "verify pipeline sets for batches 2-8 and an 8-row logits buffer; QWEN38_MTP_DEPTH now accepts fixed depths up to 7 for experiments (default remains adaptive with ceiling 3)"
   }
 }

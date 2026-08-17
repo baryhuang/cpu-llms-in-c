@@ -375,7 +375,7 @@ int main(int argc, char **argv) {
         if (mtp_depth < 0) mtp_depth = 0;
         if (mtp_depth > 3) mtp_depth = 3;
     }
-    int mtp_depth_max = mtp_depth == 0 ? 3 : mtp_depth;
+
     const char *mtp_env = getenv("QWEN38_MTP");
     if (mtp_env == NULL || strcmp(mtp_env, "0") != 0) {
         char layer_path[1024];
@@ -610,6 +610,7 @@ int main(int argc, char **argv) {
         double first_token_seconds = -1.0;
         size_t mtp_steps = 0;
         size_t mtp_accepts = 0;
+
         if (use_mtp) {
             uint32_t pending;
             size_t sample_count = logit_count;
@@ -625,8 +626,7 @@ int main(int argc, char **argv) {
             while (!done) {
                 if (pending == QWEN38_END_OF_TEXT ||
                     pending == QWEN38_IM_END ||
-                    generated_count + (uint32_t)mtp_depth_max + 1 >
-                        budget ||
+                    generated_count + 8 > budget ||
                     (uint64_t)mtp_position + 2 > capacity) {
                     generated[generated_count++] = pending;
                     break;

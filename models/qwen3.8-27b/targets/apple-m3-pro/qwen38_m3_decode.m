@@ -204,6 +204,9 @@ enum { Q38_PREFILL_MAX_BATCH = 128 };
     Q38PrefillPipelines *prefill2;
     Q38PrefillPipelines *prefill3;
     Q38PrefillPipelines *prefill4;
+    Q38PrefillPipelines *prefill5;
+    Q38PrefillPipelines *prefill6;
+    Q38PrefillPipelines *prefill7;
     Q38PrefillPipelines *prefill8;
     uint32_t mtp_depth;
     Q38PrefillPipelines *prefill16;
@@ -1548,6 +1551,9 @@ static Q38PrefillPipelines *prefill_set_for_batch(
     case 2: return r->prefill2;
     case 3: return r->prefill3;
     case 4: return r->prefill4;
+    case 5: return r->prefill5;
+    case 6: return r->prefill6;
+    case 7: return r->prefill7;
     case 8: return r->prefill8;
     case 16: return r->prefill16;
     case 32: return r->prefill32;
@@ -2075,11 +2081,12 @@ int qwen38_m3_model_mtp_open(
         const char *depth_env = getenv("QWEN38_MTP_DEPTH");
         int depth_value = depth_env != NULL ? atoi(depth_env) : 0;
         if (depth_value < 0) depth_value = 0;
-        if (depth_value > 3) depth_value = 3;
+        if (depth_value > 7) depth_value = 7;
         r->mtp_depth = (uint32_t)depth_value;
-        uint32_t max_depth = r->mtp_depth == 0 ? 3 : r->mtp_depth;
+        /* Eight rows: the widest verify (seven context-lookup drafts
+         * plus the pending token). */
         r->p_logits2 = [r->device
-            newBufferWithLength:(size_t)(max_depth + 1) *
+            newBufferWithLength:(size_t)8 *
                                 QWEN38_VOCAB_SIZE * sizeof(float)
                         options:MTLResourceStorageModeShared];
         size_t recurrent_total = 0;
@@ -2100,20 +2107,26 @@ int qwen38_m3_model_mtp_open(
             r->prefill1 = prefill_pipelines(r, 1, &pipeline_message);
         if (r->prefill2 == nil)
             r->prefill2 = prefill_pipelines(r, 2, &pipeline_message);
-        int deep = r->mtp_depth == 0 || r->mtp_depth >= 2;
-        if (deep && r->prefill3 == nil)
+        /* Batches 3..7 serve the speculative verify: the adaptive MTP
+         * chain uses up to 4 rows, context-lookup drafts up to 8. */
+        if (r->prefill3 == nil)
             r->prefill3 = prefill_pipelines(r, 3, &pipeline_message);
-        if ((r->mtp_depth == 0 || r->mtp_depth >= 3) &&
-            r->prefill4 == nil)
+        if (r->prefill4 == nil)
             r->prefill4 = prefill_pipelines(r, 4, &pipeline_message);
+        if (r->prefill5 == nil)
+            r->prefill5 = prefill_pipelines(r, 5, &pipeline_message);
+        if (r->prefill6 == nil)
+            r->prefill6 = prefill_pipelines(r, 6, &pipeline_message);
+        if (r->prefill7 == nil)
+            r->prefill7 = prefill_pipelines(r, 7, &pipeline_message);
         if (r->mtp_fc_quants == nil || r->mtp_fc_metadata == nil ||
             r->mtp_constants == nil || r->mtp_fused == nil ||
             r->mtp_logits == nil || r->p_logits2 == nil ||
             r->snapshot_recurrent == nil ||
             r->snapshot_convolution == nil || r->prefill1 == nil ||
-            r->prefill2 == nil || (deep && r->prefill3 == nil) ||
-            ((r->mtp_depth == 0 || r->mtp_depth >= 3) &&
-             r->prefill4 == nil)) {
+            r->prefill2 == nil || r->prefill3 == nil ||
+            r->prefill4 == nil || r->prefill5 == nil ||
+            r->prefill6 == nil || r->prefill7 == nil) {
             munmap(mapping, length);
             close(file);
             decode_error(error_message, error_message_capacity,
