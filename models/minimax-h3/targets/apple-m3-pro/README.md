@@ -3,7 +3,7 @@
 Status: the real-weight C/Metal path covers the tokenizer, streamed Q8 Qwen
 conditioner, affine-Q4 H3 transformer, BF16 residual stream, Video VAE, Audio
 VAE and MP4 mux. The corrected 864×480×124 Turbo-4 path completed in
-9,294.870 seconds with a 4.125 GiB runtime peak footprint and zero swaps. All
+2,418.708 seconds with a 4.136 GiB runtime peak footprint and zero swaps. All
 124 frames decode, the output contains four prompt-aligned shots, and no flat
 tail or sampled tile/chunk break is visible. Functional and visual smoke gates
 pass; official full-precision parity and the speed target remain open.
@@ -21,9 +21,8 @@ pass; official full-precision parity and the speed target remain open.
 | Excluded runtime dependencies | Python, PyTorch, MLX, GGML, llama.cpp, ONNX Runtime, ComfyUI |
 
 The target must leave operating-system headroom. The resident-image gate is
-32 GiB. The formal 480p run captured a 4,429,110,144-byte runtime peak physical
-footprint, a 4,479,572,864-byte outer peak physical footprint and zero swaps;
-system swap was also zero after the run.
+32 GiB. The optimized 480p run captured a 4,440,725,568-byte runtime peak
+physical footprint, a 1,062,879,232-byte maximum resident set and zero swaps.
 
 ## Real-weight runtime boundary
 
@@ -63,10 +62,11 @@ mixed-precision and third-party-derived—not as the full-precision model.
 
 ## Corrected 480p N-to-N benchmark
 
-Exact input, output media, benchmark scope and verification are in
-[`REVIEW.html`](REVIEW.html). The raw records are
+Exact input, output hashes, benchmark scope and verification are in
+[`REVIEW.html`](REVIEW.html) and [`results.json`](results.json). The preserved
 [`benchmark.json`](artifacts/anime-room-864x480-turbo4/benchmark.json) and
-[`verification.json`](artifacts/anime-room-864x480-turbo4/verification.json).
+[`verification.json`](artifacts/anime-room-864x480-turbo4/verification.json)
+are the pre-optimization baseline.
 
 | Field | Measured value |
 |---|---:|
@@ -74,22 +74,22 @@ Exact input, output media, benchmark scope and verification are in
 | Geometry | 864×480×124 at 24 fps; 5.166667 s video |
 | Sampler | Turbo v4-600 EMA; four evaluations; seed 42 |
 | Packed rows | 15,639 |
-| Text image access / encode | 4.784617 / 4.713666 s |
-| H3 denoise | 1,881.824388 s |
-| Video VAE decode | 7,387.292038 s |
-| Audio VAE decode / mux | 13.531083 / 0.600629 s |
-| Complete runtime | **9,294.869743 s** |
-| Runtime peak physical footprint | **4,429,110,144 bytes (4.125 GiB)** |
-| Maximum resident set | 1,714,831,360 bytes (1.597 GiB) |
+| Text image access / encode | 4.693886 / 4.567422 s |
+| H3 denoise | 1,898.120497 s |
+| Video VAE precompute / decode | 0.007911 / **487.273811 s** |
+| Audio VAE decode / mux | 13.760077 / 0.671221 s |
+| Complete runtime | **2,418.708237 s** |
+| Pre-optimization runtime | 9,294.869743 s; current path is **3.842907× faster** |
+| Runtime peak physical footprint | **4,440,725,568 bytes (4.136 GiB)** |
+| Maximum resident set | 1,062,879,232 bytes (0.990 GiB) |
 | Swaps | **0** |
 | Output structure | 124/124 H.264 frames; 32 kHz stereo AAC; non-silent |
 | Visual result | four prompt-aligned shots; 0 flat frames; no sampled spatial seam or temporal break |
 
-Video VAE is 79.477% of runtime. It currently executes seven temporal chunks
-times 15 serial spatial tiles times 36 layers. H3 denoise is 20.246%; within
-its 200 layer/evaluation calls, exact dense attention consumes 1,126.361
-seconds, projections 248.612 seconds and MLP 495.999 seconds. These are the
-next optimization boundaries.
+H3 denoise is now 78.477% of runtime and Video VAE is 20.146%. Within the 200
+H3 layer/evaluation calls, exact dense attention consumes 1,143.533 seconds,
+projections 248.384 seconds and MLP 495.066 seconds. H3 attention and dense
+projection/MLP work are now the next optimization boundaries.
 
 The earlier same-size attempt incorrectly decoded all 37 video latents as one
 sequence. It produced 38 non-flat frames followed by 86 flat gray frames. The
@@ -98,10 +98,10 @@ at the cost of increasing Video VAE time from 5,342.026 to 7,387.292 seconds.
 
 ## Video VAE structure and optimization
 
-The formal 7,387.292-second Video VAE number above predates the kernels in
-this section. A new 480p N-to-N run has not been completed. Component results
-below use the real 2.604B-parameter Video VAE and deterministic latents; they
-are not prompt-to-media results.
+The full 480p N-to-N run measures the optimized Video VAE at 487.273811
+seconds versus the 7,387.292038-second pre-optimization baseline: 15.160454×
+faster. Component results below use deterministic latents through the same
+real 2.604B-parameter Video VAE and remain separate correctness gates.
 
 | VAE property | Value |
 |---|---:|
@@ -169,9 +169,10 @@ compiling the vertical tile to 272 pixels changes three tiles into two because
 
 This candidate is not enabled by default. At 864×480, 272×272 tiles would
 reduce each temporal chunk from 15 tasks to 8. Multiplying measured one-tile
-times projects 528.170 seconds for the exact 256 layout and 326.679 seconds
-for the experimental 272 layout. These are projections, not a new 480p
-measurement; thermal, cache, overlap and final media review remain unmeasured.
+times projected 528.170 seconds for the exact 256 layout; the complete run
+measured 487.274 seconds, 7.743% below that projection. The 326.679-second
+estimate for the experimental 272 layout remains a projection; its complete
+run quality and thermal behavior are open.
 
 ### Metal API decisions
 
@@ -194,10 +195,10 @@ FP16 boundary and therefore needs a differential rather than an algebra-only
 claim.
 
 Audio VAE is lower priority. It is a 151.327M-parameter F32 BigVGAN-style
-decoder with seven upsampling stages; the formal 480p run spent 13.531 seconds
-there, 0.146% of total time. Its direct convolution, alias/Snake activation
-and residual operations can be tiled and fused in Metal after the Video VAE
-and denoiser cease to dominate.
+decoder with seven upsampling stages; the optimized 480p run spent 13.760
+seconds there, 0.569% of total time. Its direct convolution, alias/Snake
+activation and residual operations can be tiled and fused in Metal after the
+denoiser ceases to dominate.
 
 The external peer publishes three sampling profiles: Turbo 4 Fast, Turbo 6
 Balanced and non-Turbo Quality 20. The comparable front-page sample uses four
@@ -404,7 +405,7 @@ An optimization is not enabled in the release path until both gates pass.
 | Video and audio decoders | real-weight Video VAE and Audio VAE completed; H.264 + WAV mux produced a playable MP4 |
 | Free-prompt conditioner | real 15-token prompt completed all 50 streamed Q8 layers and the full N-to-N media path |
 | Free-prompt output verification | 22/22 video frames, stereo audio non-silent, coarse prompt response visible; reference-quality parity open |
-| Corrected 480p N-to-N run | 864×480×124 Turbo-4 completed in 9,294.870 s; 4.125 GiB runtime peak physical footprint; zero swaps |
+| Corrected 480p N-to-N run | 864×480×124 Turbo-4 completed in 2,418.708 s; 4.136 GiB runtime peak physical footprint; zero swaps; 3.843× over the pre-optimization baseline |
 | Corrected 480p media verification | 124/124 decoded frames, 0 flat frames, three detected cuts forming four prompt-aligned shots; no sampled tile or temporal-chunk break |
 
 ## Attention experiment

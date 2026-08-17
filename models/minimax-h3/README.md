@@ -2,8 +2,8 @@
 
 Status: the portable C graph rules and Apple M3 Pro runtime are implemented
 through tokenizer, streamed 50-layer Qwen conditioner, 50-block H3 denoiser,
-Video VAE, Audio VAE and media mux. A corrected real-weight
-864×480×124 Turbo-4 run completed in 9,294.870 seconds with a 4.125 GiB
+Video VAE, Audio VAE and media mux. The optimized real-weight
+864×480×124 Turbo-4 run completed in 2,418.708 seconds with a 4.136 GiB
 runtime peak physical footprint and zero swaps. All 124 frames decode and four
 prompt-aligned shots are visible. Functional and visual smoke gates pass;
 official full-precision parity and the speed target remain open.
@@ -145,7 +145,7 @@ The code allocates no memory. The caller supplies layout and scheduler buffers. 
 | Packed checkpoint import | compiler/import tooling supports remote or local safetensors; deployed inference requires local packed files and performs no network reads |
 | Real-weight downstream path | pass at 32×32×22: H3 30 intervals, video VAE, audio VAE and MP4 mux |
 | Free-prompt N-to-N generation | pass at 128×128×22: 15 prompt tokens → 50-layer conditioner → 30 H3 intervals → both VAEs → verified 22-frame H.264 + stereo AAC MP4 |
-| Corrected 480p N-to-N generation | pass at 864×480×124 Turbo-4: 240 prompt tokens → four H3 evaluations → seven-chunk Video VAE → synchronized MP4 in 9,294.870 s |
+| Corrected 480p N-to-N generation | pass at 864×480×124 Turbo-4: 240 prompt tokens → four H3 evaluations → seven-chunk Video VAE → synchronized MP4 in 2,418.708 s; 3.843× over the pre-optimization baseline |
 | Corrected 480p media quality | four prompt-aligned shots, 0 flat frames, no sampled tile seam or temporal break; same-prompt official parity remains open |
 
 Exact input, output media, stage timings, CPU time, process footprint and post-run verification are in the [Apple M3 Pro review](targets/apple-m3-pro/REVIEW.html) and [raw results](targets/apple-m3-pro/results.json).

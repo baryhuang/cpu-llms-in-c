@@ -271,11 +271,15 @@
       "metal4_machine_learning": "not a deployment option on the pinned macOS 15.7.3 runtime; SDK declarations require macOS 26",
       "mps": "benchmark oracle only; production path remains custom MSL"
     },
-    "corrected_480p_projection_not_measured": {
-      "default_256_tile_seconds": 528.169950,
-      "experimental_272_tile_seconds": 326.679080,
-      "method": "single real-weight tile time multiplied by 7 temporal chunks and 15 or 8 spatial tiles; excludes cache, overlap and thermal effects",
-      "status": "projection only; a new 480p N-to-N measurement is required"
+    "corrected_480p_measurement": {
+      "default_256_tile_projected_seconds": 528.169950,
+      "default_256_tile_measured_seconds": 487.273811,
+      "measured_vs_projection_percent": -7.742989,
+      "pre_optimization_seconds": 7387.292038,
+      "speedup_vs_pre_optimization": 15.160454,
+      "experimental_272_tile_projected_seconds": 326.679080,
+      "projection_method": "single real-weight tile time multiplied by 7 temporal chunks and 15 or 8 spatial tiles",
+      "status": "exact 256-tile graph measured end to end; experimental 272-tile graph remains projected"
     }
   },
   "real_weight_runs": [
@@ -344,7 +348,7 @@
       "quality_status": "coarse prompt correspondence at 128x128; red flower, green background and a moving dark/white subject are visible, but the subject is not sharply identifiable and reference parity is not established"
     },
     {
-      "name": "corrected-480p-turbo4-n-to-n",
+      "name": "corrected-480p-turbo4-n-to-n-pre-video-vae-optimization",
       "status": "passed-with-reference-parity-open",
       "n_to_n": true,
       "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
@@ -384,12 +388,94 @@
         "audio_channels": 2
       },
       "quality_status": "visual prompt response passed with four distinct shots and zero flat frames; sampled spatial-tile and temporal-chunk boundaries are coherent; same-prompt official full-precision parity and audio semantic listening remain open"
+    },
+    {
+      "name": "optimized-480p-turbo4-n-to-n",
+      "status": "passed-with-reference-parity-open",
+      "n_to_n": true,
+      "repository_commit": "54cdbd3",
+      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
+      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+      "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
+      "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
+      "geometry": {"width": 864, "height": 480, "frames": 124, "fps": 24},
+      "seed": 42,
+      "sampling": {"profile": "turbo-v4-step600-ema", "evaluations": 4},
+      "prompt_tokens": 240,
+      "sequence_rows": 15639,
+      "durations_seconds": {
+        "tokenizer": 0.007698,
+        "metal_setup": 0.043712,
+        "text_download": 4.693886,
+        "text_encode": 4.567422,
+        "transformer_download": 0.0,
+        "turbo_compile": 0.868117,
+        "rope_precompute": 0.000996,
+        "denoise": 1898.120497,
+        "video_download": 0.0,
+        "video_precompute": 0.007911,
+        "video_decode": 487.273811,
+        "audio_download": 0.0,
+        "audio_decode": 13.760077,
+        "mux": 0.671221,
+        "total": 2418.708237,
+        "outer_wall_including_preflight_hashes": 2484.38
+      },
+      "denoise_layer_subtotal_seconds": {
+        "qkv_and_output_projections": 248.383771,
+        "dense_attention": 1143.532739,
+        "mlp": 495.065992,
+        "sum": 1886.982502,
+        "calls_per_category": 200
+      },
+      "comparison_to_pre_optimization": {
+        "runtime_speedup": 3.842907,
+        "runtime_reduction_percent": 73.978030,
+        "video_vae_speedup": 15.160454,
+        "video_vae_reduction_percent": 93.403891,
+        "denoise_change_percent": 0.865974
+      },
+      "process_cpu_seconds": {"user": 11.030184, "system": 30.704046},
+      "outer_process_tree_cpu_seconds": {"user": 72.80, "system": 35.23},
+      "peak_footprint_bytes": 4440725568,
+      "maximum_resident_set_bytes": 1062879232,
+      "page_faults": 1103285,
+      "swaps": 0,
+      "output": {
+        "local_run_path": "tmp/minimax-h3-runs/20260816-480p-e2e-54cdbd3/minimax-h3.mp4",
+        "sha256": "afd7d15af4409e5dfe0d72d3092abdc31198a95ad822758dc6dbc5090b0d0bf6",
+        "bytes": 867085,
+        "duration_seconds": 5.167,
+        "video_codec": "H.264",
+        "video_frames_declared": 124,
+        "video_frames_decoded": 124,
+        "audio_codec": "AAC",
+        "audio_sample_rate_hz": 32000,
+        "audio_channels": 2,
+        "audio_source_sha256": "37dff2b1ead54637d402ffaf1fee4f7a4077dcccf3d2f02a5efbda9942439d73"
+      },
+      "verification": {
+        "flat_frames": 0,
+        "minimum_luma_range": 180,
+        "mean_luma_range": 206.943548,
+        "maximum_luma_range": 235,
+        "adjacent_frame_differences": 123,
+        "adjacent_difference_yavg_min": 0.025275,
+        "adjacent_difference_yavg_mean": 4.494335,
+        "adjacent_difference_yavg_max": 87.761300,
+        "scene_changes_seconds": [1.541667, 2.583333, 3.916667],
+        "comparison_to_pre_optimization_encoded_video": {"psnr_db": 43.720170, "ssim": 0.984754},
+        "audio_source_bit_identical_to_pre_optimization": true,
+        "visual_review": "four prompt-aligned shots; no sampled spatial seam or temporal-chunk break"
+      },
+      "quality_status": "visual prompt response and media structure passed; same-prompt official full-precision parity and audio semantic listening remain open"
     }
   ],
   "commands": {
     "attention": "make build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib 5 2",
     "projection": "make build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib 15485 5 2",
     "n_to_n": "MINIMAX_H3_TEXT_ENCODER_URL=file://$PWD/tmp/minimax-h3-text-encoder.safetensors build/minimax-h3-m3-e2e 'a jeweled hummingbird hovering beside a red orchid, cinematic natural light' models/minimax-h3/targets/apple-m3-pro/artifacts/hummingbird-128x128-euler30 128 128 22 314159",
-    "corrected_480p": "MINIMAX_H3_TEXT_ENCODER_URL=file://$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors build/minimax-h3-m3-e2e \"$(cat models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt)\" models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4 864 480 124 42"
+    "corrected_480p": "MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt"
   }
 }
