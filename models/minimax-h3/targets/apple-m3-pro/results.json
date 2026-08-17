@@ -349,6 +349,7 @@
     "timing_semantics": {
       "model_runtime_seconds": 2418.708237,
       "shell_wall_seconds": 2484.38,
+      "shell_only_seconds": 65.671763,
       "shell_only_work": "preflight SHA-256 of the 28.22 GB text encoder and 780 MB Turbo adapter plus shell overhead",
       "cache_hits_skip": ["network transfer", "offline checkpoint import", "offline packing"],
       "cache_hits_do_not_skip": ["conditioner", "H3 denoise", "Video VAE", "Audio VAE", "mux"],
@@ -550,6 +551,7 @@
         "audio_download": 0.0,
         "audio_decode": 13.760077,
         "mux": 0.671221,
+        "other_measured_runtime": 8.692889,
         "total": 2418.708237,
         "outer_wall_including_preflight_hashes": 2484.38
       },

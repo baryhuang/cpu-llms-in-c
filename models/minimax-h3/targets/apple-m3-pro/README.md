@@ -20,6 +20,30 @@ pass; official full-precision parity and the speed target remain open.
 | + 64-row shared-weight GEMM | 2,435.747655 | −109.070010 | 3.816× | projected from 5.030190 s/task |
 | Full current N-to-N validation | **2,418.708237** | −17.039418 vs projection | **3.843×** | measured complete N-to-N |
 
+### Latest measured run breakdown
+
+| Stage | Seconds | Runtime share | Boundary |
+|---|---:|---:|---|
+| Tokenizer | 0.007698 | <0.001% | UTF-8 prompt → 240 token IDs |
+| Metal setup | 0.043712 | 0.002% | offline metallib and pipelines |
+| Text image access | 4.693886 | 0.194% | complete local 28.22 GB safetensors image |
+| 50-layer text conditioner | 4.567422 | 0.189% | streamed affine-Q8 layers |
+| Turbo AdaLN compile | 0.868117 | 0.036% | four fixed evaluations |
+| H3 RoPE precompute | 0.000996 | <0.001% | fixed 15,639-row geometry |
+| **H3 denoise** | **1,898.120497** | **78.477%** | 50 blocks × four dense evaluations |
+| Video VAE precompute | 0.007911 | <0.001% | fixed tile/chunk geometry |
+| **Video VAE decode** | **487.273811** | **20.146%** | 7 temporal chunks × 15 spatial tiles × 36 layers |
+| Audio VAE decode | 13.760077 | 0.569% | 165,333 samples per channel |
+| H.264/AAC mux | 0.671221 | 0.028% | synchronized MP4 |
+| Other measured runtime | 8.692889 | 0.359% | allocation, Euler updates and stage transitions |
+| **Model runtime** | **2,418.708237** | **100%** | tokenizer through original mux |
+| Preflight hashes and shell overhead | 65.671763 | outside runtime | SHA-256 checks and shell work |
+| **Command wall** | **2,484.380000** | runtime + preflight | outer `/usr/bin/time` wall |
+
+The model-runtime rows add exactly to 2,418.708237 seconds. Post-run decode,
+hash, media statistics and visual verification are excluded from both runtime
+and command wall.
+
 Intermediate N-to-N values are projections, not hidden full runs. Each uses
 the valid baseline's measured 1,907.577705 seconds outside Video VAE plus 105
 times the corresponding real-weight 256×256×22 VAE task. The first and last

@@ -18,6 +18,30 @@ official full-precision parity and the speed target remain open.
 | + 64-row shared-weight GEMM | 2,435.747655 | projected from 5.030190 s/task |
 | Current full validation | **2,418.708237** | measured complete run; **3.843×** over baseline |
 
+## Latest measured run breakdown
+
+| Stage | Seconds | Runtime share |
+|---|---:|---:|
+| Tokenizer | 0.007698 | <0.001% |
+| Metal setup | 0.043712 | 0.002% |
+| Text image access | 4.693886 | 0.194% |
+| 50-layer text conditioner | 4.567422 | 0.189% |
+| Turbo AdaLN compile | 0.868117 | 0.036% |
+| H3 RoPE precompute | 0.000996 | <0.001% |
+| **H3 denoise** | **1,898.120497** | **78.477%** |
+| Video VAE precompute | 0.007911 | <0.001% |
+| **Video VAE decode** | **487.273811** | **20.146%** |
+| Audio VAE decode | 13.760077 | 0.569% |
+| H.264/AAC mux | 0.671221 | 0.028% |
+| Other measured runtime | 8.692889 | 0.359% |
+| **Model runtime** | **2,418.708237** | **100%** |
+| Preflight hashes and shell overhead | 65.671763 | outside runtime |
+| **Command wall** | **2,484.380000** | runtime + preflight |
+
+The model-runtime rows add exactly to 2,418.708237 seconds. Command wall adds
+preflight SHA-256 checks of the local 28.22 GB conditioner and 780 MB Turbo
+adapter. Post-run media verification is excluded from both measurements.
+
 Projected rows use the baseline's measured non-VAE time plus 105 real-weight
 VAE tasks; they are not presented as full runs. Reasons, deltas and quality
 gates are in the [target optimization ledger](targets/apple-m3-pro/README.md#optimization-ledger).

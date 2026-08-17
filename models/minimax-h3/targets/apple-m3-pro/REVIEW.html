@@ -46,6 +46,28 @@
       <tr><td>Full current N-to-N validation</td><td class="num"><strong>2,418.708237</strong></td><td class="num">−17.039418 vs projection</td><td class="num"><strong>3.843×</strong></td><td>measured complete N-to-N</td></tr>
     </tbody>
   </table>
+  <h3>Latest measured run breakdown</h3>
+  <table>
+    <thead><tr><th>Stage</th><th class="num">Seconds</th><th class="num">Runtime share</th></tr></thead>
+    <tbody>
+      <tr><td>Tokenizer</td><td class="num">0.007698</td><td class="num">&lt;0.001%</td></tr>
+      <tr><td>Metal setup</td><td class="num">0.043712</td><td class="num">0.002%</td></tr>
+      <tr><td>Text image access</td><td class="num">4.693886</td><td class="num">0.194%</td></tr>
+      <tr><td>50-layer text conditioner</td><td class="num">4.567422</td><td class="num">0.189%</td></tr>
+      <tr><td>Turbo AdaLN compile</td><td class="num">0.868117</td><td class="num">0.036%</td></tr>
+      <tr><td>H3 RoPE precompute</td><td class="num">0.000996</td><td class="num">&lt;0.001%</td></tr>
+      <tr><td><strong>H3 denoise</strong></td><td class="num"><strong>1,898.120497</strong></td><td class="num"><strong>78.477%</strong></td></tr>
+      <tr><td>Video VAE precompute</td><td class="num">0.007911</td><td class="num">&lt;0.001%</td></tr>
+      <tr><td><strong>Video VAE decode</strong></td><td class="num"><strong>487.273811</strong></td><td class="num"><strong>20.146%</strong></td></tr>
+      <tr><td>Audio VAE decode</td><td class="num">13.760077</td><td class="num">0.569%</td></tr>
+      <tr><td>H.264/AAC mux</td><td class="num">0.671221</td><td class="num">0.028%</td></tr>
+      <tr><td>Other measured runtime</td><td class="num">8.692889</td><td class="num">0.359%</td></tr>
+      <tr><td><strong>Model runtime</strong></td><td class="num"><strong>2,418.708237</strong></td><td class="num"><strong>100%</strong></td></tr>
+      <tr><td>Preflight hashes and shell overhead</td><td class="num">65.671763</td><td class="num">outside runtime</td></tr>
+      <tr><td><strong>Command wall</strong></td><td class="num"><strong>2,484.380000</strong></td><td class="num">runtime + preflight</td></tr>
+    </tbody>
+  </table>
+  <p>The model-runtime rows add exactly to 2,418.708237 seconds. Post-run media verification is excluded from both model runtime and command wall.</p>
   <p>Projected rows use the measured 1,907.577705 seconds outside Video VAE plus 105 times the corresponding real-weight 256×256×22 task. Only the first and last rows are complete runs. The 7,249.519-second one-sequence attempt is excluded because 86/124 frames were flat.</p>
 
   <h2>1. Exact input and output</h2>
@@ -83,11 +105,13 @@
       <tr><td>Text image access</td><td class="num">4.693886</td><td class="num">0.194%</td><td>Complete local 28.22 GB safetensors image</td></tr>
       <tr><td>50-layer text conditioner</td><td class="num">4.567422</td><td class="num">0.189%</td><td>Streamed affine-Q8 layers</td></tr>
       <tr><td>Turbo AdaLN compile</td><td class="num">0.868117</td><td class="num">0.036%</td><td>Four fixed evaluations</td></tr>
+      <tr><td>H3 RoPE precompute</td><td class="num">0.000996</td><td class="num">&lt;0.001%</td><td>Fixed 15,639-row geometry</td></tr>
       <tr><td>H3 denoise</td><td class="num"><strong>1,898.120497</strong></td><td class="num"><strong>78.477%</strong></td><td>50 blocks × four exact dense evaluations</td></tr>
+      <tr><td>Video VAE precompute</td><td class="num">0.007911</td><td class="num">&lt;0.001%</td><td>Fixed tile and temporal-chunk geometry</td></tr>
       <tr><td>Video VAE decode</td><td class="num"><strong>487.273811</strong></td><td class="num"><strong>20.146%</strong></td><td>7 temporal chunks × 15 serial spatial tiles × 36 layers</td></tr>
       <tr><td>Audio VAE decode</td><td class="num">13.760077</td><td class="num">0.569%</td><td>165,333 samples/channel</td></tr>
       <tr><td>H.264/AAC mux</td><td class="num">0.671221</td><td class="num">0.028%</td><td>Final synchronized MP4</td></tr>
-      <tr><td>Other measured runtime</td><td class="num">8.692889</td><td class="num">0.359%</td><td>Precompute, allocation, Euler updates and stage transitions</td></tr>
+      <tr><td>Other measured runtime</td><td class="num">8.692889</td><td class="num">0.359%</td><td>Allocation, Euler updates and stage transitions</td></tr>
       <tr><td><strong>Runtime total</strong></td><td class="num"><strong>2,418.708237</strong></td><td class="num"><strong>100%</strong></td><td>40 min 18.708 s; 3.843× over the prior run</td></tr>
       <tr><td>Outer <code>/usr/bin/time</code> wall</td><td class="num">2,484.38</td><td class="num">—</td><td>Includes preflight SHA-256 of 28.22 GB conditioner and Turbo adapter</td></tr>
     </tbody>
