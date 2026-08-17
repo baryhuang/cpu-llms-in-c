@@ -38,6 +38,17 @@ typedef struct {
 
 enum { Q38_PREFILL_MAX_BATCH = 128 };
 
+/* Per-position GDN factor checkpoints, captured by the batch<=8 prefill
+ * sets during a speculative verify. A partial accept rebuilds the state
+ * at the last accepted row from these instead of replaying a forward. */
+enum {
+    Q38_CKPT_ROWS = 8,
+    Q38_CKPT_DELTA_LAYERS = 48,
+    Q38_CKPT_CONV_POSITION_FLOATS = 10240 * 4,
+    Q38_CKPT_KV_LAYER_FLOATS = Q38_CKPT_ROWS * 6144,
+    Q38_CKPT_DB_LAYER_FLOATS = Q38_CKPT_ROWS * 48,
+};
+
 /* One specialized pipeline set per compiled prefill shape bucket. */
 @interface Q38PrefillPipelines : NSObject {
 @public
@@ -69,6 +80,14 @@ enum { Q38_PREFILL_MAX_BATCH = 128 };
     id<MTLComputePipelineState> attention_scores;
     id<MTLComputePipelineState> attention_softmax_value;
     id<MTLComputePipelineState> mtp_fuse;
+    id<MTLComputePipelineState> delta_conv_cap;
+    id<MTLComputePipelineState> delta_prepare_cap;
+    id<MTLComputePipelineState> silu_mul_cap;
+    id<MTLComputePipelineState> delta_gated_norm_cap;
+    id<MTLComputePipelineState> attention_softmax_value_cap;
+    id<MTLComputePipelineState> gemm_f16_mma8;
+    id<MTLComputePipelineState> gemm_f32_residual_f16_mma8;
+    id<MTLComputePipelineState> gemm_f32_residual_f32_mma8;
 }
 @end
 
@@ -98,6 +117,9 @@ enum { Q38_PREFILL_MAX_BATCH = 128 };
     id<MTLBuffer> convolution_state;
     id<MTLBuffer> key_cache;
     id<MTLBuffer> value_cache;
+    /* 0..47 among DeltaNet layers; selects this layer's slice of the
+     * per-position factor checkpoints used by replay-free rollback. */
+    uint32_t delta_ordinal;
 }
 @end
 
@@ -157,6 +179,18 @@ enum { Q38_PREFILL_MAX_BATCH = 128 };
     size_t state_bytes;
     size_t kv_bytes;
     int prefill_mma_level;
+    /* Smallest batch routed to the simdgroup-matrix GEMM kernels. Those
+     * kernels pay for a full 32-row batch tile regardless of the real
+     * batch (~513 ms at batch 2, flat through 8), so the verify batches
+     * 2-8 stay on the scalar path; QWEN38_VERIFY_MMA=1 routes them to
+     * the matrix path for measurement. */
+    int mma_min_batch;
+    /* Batches 2-8 route to the eight-wide half-MMA GEMM kernels, which
+     * bring the verify near the batch-1 weight-streaming floor. Their
+     * accumulation order differs from the exact scalar path, so they are
+     * held to the argmax/token-parity standard; QWEN38_VERIFY_FAST=0
+     * restores the exact scalar kernels. */
+    int fast_verify;
     id<MTLResidencySet> residency API_AVAILABLE(macos(15.0));
 
     id<MTLComputePipelineState> rms_half;
@@ -227,6 +261,11 @@ enum { Q38_PREFILL_MAX_BATCH = 128 };
     id<MTLBuffer> p_logits2;
     id<MTLBuffer> snapshot_recurrent;
     id<MTLBuffer> snapshot_convolution;
+    id<MTLBuffer> ckpt_conv_windows;
+    id<MTLBuffer> ckpt_key;
+    id<MTLBuffer> ckpt_value;
+    id<MTLBuffer> ckpt_decay;
+    id<MTLBuffer> ckpt_beta;
     id<MTLBuffer> prefix_recurrent;
     id<MTLBuffer> prefix_convolution;
     id<MTLBuffer> p_token_ids;
@@ -768,6 +807,18 @@ static Q38PrefillPipelines *prefill_pipelines(
                  @"qwen38_prefill_q4_gemm_f32_residual_f16");
     MAKE_PREFILL(gemm_f32_residual_f32,
                  @"qwen38_prefill_q4_gemm_f32_residual_f32");
+    MAKE_PREFILL(delta_conv_cap, @"qwen38_prefill_delta_conv_cap");
+    MAKE_PREFILL(delta_prepare_cap, @"qwen38_prefill_delta_prepare_cap");
+    MAKE_PREFILL(silu_mul_cap, @"qwen38_prefill_silu_mul_cap");
+    MAKE_PREFILL(delta_gated_norm_cap,
+                 @"qwen38_prefill_delta_gated_norm_cap");
+    MAKE_PREFILL(attention_softmax_value_cap,
+                 @"qwen38_prefill_attention_softmax_value_cap");
+    MAKE_PREFILL(gemm_f16_mma8, @"qwen38_prefill_q4_gemm_f16_mma8");
+    MAKE_PREFILL(gemm_f32_residual_f16_mma8,
+                 @"qwen38_prefill_q4_gemm_f32_residual_f16_mma8");
+    MAKE_PREFILL(gemm_f32_residual_f32_mma8,
+                 @"qwen38_prefill_q4_gemm_f32_residual_f32_mma8");
     MAKE_PREFILL(gemm_f16_mma, @"qwen38_prefill_q4_gemm_f16_mma");
     MAKE_PREFILL(gemm_f32_residual_f16_mma,
                  @"qwen38_prefill_q4_gemm_f32_residual_f16_mma");
@@ -806,7 +857,20 @@ static void encode_prefill_gemm_f16(
     id<MTLBuffer> x, id<MTLBuffer> quants, id<MTLBuffer> metadata,
     id<MTLBuffer> output, uint32_t rows, uint32_t groups_per_row) {
     q38_prefill_gemm_parameters parameters = {rows, groups_per_row};
-    int use_mma = r->prefill_mma_level > 0 && p->batch > 8;
+    int use_mma = r->prefill_mma_level > 0 &&
+                  (int)p->batch >= r->mma_min_batch;
+    if (!use_mma && r->fast_verify && r->prefill_mma_level > 0 &&
+        p->batch >= 3 && p->batch <= 8) {
+        [encoder setComputePipelineState:p->gemm_f16_mma8];
+        [encoder setBuffer:x offset:0 atIndex:0];
+        [encoder setBuffer:quants offset:0 atIndex:1];
+        [encoder setBuffer:metadata offset:0 atIndex:2];
+        [encoder setBuffer:output offset:0 atIndex:3];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4];
+        [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+        return;
+    }
     int wide = use_mma && r->prefill_mma_level >= 3;
     [encoder setComputePipelineState:
         wide ? p->gemm_f16_mma3 :
@@ -837,7 +901,25 @@ static void encode_prefill_gemm_residual(
     id<MTLBuffer> residual, id<MTLBuffer> output, uint32_t rows,
     uint32_t groups_per_row, BOOL residual_is_half) {
     q38_prefill_gemm_parameters parameters = {rows, groups_per_row};
-    int use_mma = r->prefill_mma_level > 0 && p->batch > 8;
+    int use_mma = r->prefill_mma_level > 0 &&
+                  (int)p->batch >= r->mma_min_batch;
+    if (!use_mma && r->fast_verify && r->prefill_mma_level > 0 &&
+        p->batch >= 3 && p->batch <= 8) {
+        /* x's producer wrote a half copy of it into p_x_half in the same
+         * encoder, so no conversion dispatch is needed. */
+        (void)x;
+        [encoder setComputePipelineState:residual_is_half ?
+            p->gemm_f32_residual_f16_mma8 : p->gemm_f32_residual_f32_mma8];
+        [encoder setBuffer:r->p_x_half offset:0 atIndex:0];
+        [encoder setBuffer:quants offset:0 atIndex:1];
+        [encoder setBuffer:metadata offset:0 atIndex:2];
+        [encoder setBuffer:residual offset:0 atIndex:3];
+        [encoder setBuffer:output offset:0 atIndex:4];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:5];
+        [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+        return;
+    }
     int wide = use_mma && r->prefill_mma_level >= 3;
     id<MTLComputePipelineState> pipeline;
     if (wide)
@@ -881,6 +963,19 @@ static void encode_prefill_gemm_residual(
                 threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
 }
 
+/* Factor capture runs for every small batch outside exact mode so a
+ * speculative partial accept can roll back without a replay forward.
+ * The half activation copy is only needed when the small-batch MMA
+ * GEMMs will consume it. */
+static int prefill_capture(Q38DecodeRuntime *r, Q38PrefillPipelines *p) {
+    return r->prefill_mma_level > 0 && p->batch >= 2 && p->batch <= 8;
+}
+
+static int prefill_x_half(Q38DecodeRuntime *r, Q38PrefillPipelines *p) {
+    return r->fast_verify && r->prefill_mma_level > 0 &&
+           p->batch >= 3 && p->batch <= 8;
+}
+
 static void encode_prefill_mlp(Q38DecodeRuntime *r, Q38PrefillPipelines *p,
                                id<MTLComputeCommandEncoder> encoder,
                                Q38DecodeLayer *layer) {
@@ -890,10 +985,13 @@ static void encode_prefill_mlp(Q38DecodeRuntime *r, Q38PrefillPipelines *p,
     encode_prefill_gemm_f16(r, p, encoder, r->p_post_normalized,
                             layer->up_quants, layer->up_metadata,
                             r->p_mlp_up, 17408, 80);
-    [encoder setComputePipelineState:p->silu_mul];
+    [encoder setComputePipelineState:prefill_x_half(r, p) ?
+        p->silu_mul_cap : p->silu_mul];
     [encoder setBuffer:r->p_mlp_gate offset:0 atIndex:0];
     [encoder setBuffer:r->p_mlp_up offset:0 atIndex:1];
     [encoder setBuffer:r->p_mlp_activated offset:0 atIndex:2];
+    if (prefill_x_half(r, p))
+        [encoder setBuffer:r->p_x_half offset:0 atIndex:3];
     [encoder dispatchThreads:MTLSizeMake(17408, p->batch, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
     encode_prefill_gemm_residual(r, p, encoder, r->p_mlp_activated,
@@ -918,15 +1016,25 @@ static void encode_prefill_delta(Q38DecodeRuntime *r,
     encode_prefill_gemm_f16(r, p, encoder, r->p_normalized,
                             layer->input_quants, layer->input_metadata,
                             r->p_projected, 16480, 80);
-    [encoder setComputePipelineState:p->delta_conv];
+    NSUInteger ordinal = layer->delta_ordinal;
+    int capture = prefill_capture(r, p);
+    int x_half = prefill_x_half(r, p);
+    [encoder setComputePipelineState:capture ? p->delta_conv_cap :
+                                               p->delta_conv];
     [encoder setBuffer:r->p_projected offset:0 atIndex:0];
     [encoder setBuffer:layer->constants
                  offset:h->conv_constants_index * sizeof(float) atIndex:1];
     [encoder setBuffer:layer->convolution_state offset:0 atIndex:2];
     [encoder setBuffer:r->p_convolved offset:0 atIndex:3];
+    if (capture)
+        [encoder setBuffer:r->ckpt_conv_windows
+                     offset:ordinal * Q38_CKPT_ROWS *
+                            Q38_CKPT_CONV_POSITION_FLOATS * sizeof(float)
+                    atIndex:4];
     [encoder dispatchThreads:MTLSizeMake(10240, 1, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    [encoder setComputePipelineState:p->delta_prepare];
+    [encoder setComputePipelineState:capture ? p->delta_prepare_cap :
+                                               p->delta_prepare];
     [encoder setBuffer:r->p_convolved offset:0 atIndex:0];
     [encoder setBuffer:r->p_projected offset:0 atIndex:1];
     [encoder setBuffer:layer->constants
@@ -938,6 +1046,24 @@ static void encode_prefill_delta(Q38DecodeRuntime *r,
     [encoder setBuffer:r->p_value offset:0 atIndex:6];
     [encoder setBuffer:r->p_decay offset:0 atIndex:7];
     [encoder setBuffer:r->p_beta offset:0 atIndex:8];
+    if (capture) {
+        [encoder setBuffer:r->ckpt_key
+                     offset:ordinal * Q38_CKPT_KV_LAYER_FLOATS *
+                            sizeof(float)
+                    atIndex:9];
+        [encoder setBuffer:r->ckpt_value
+                     offset:ordinal * Q38_CKPT_KV_LAYER_FLOATS *
+                            sizeof(float)
+                    atIndex:10];
+        [encoder setBuffer:r->ckpt_decay
+                     offset:ordinal * Q38_CKPT_DB_LAYER_FLOATS *
+                            sizeof(float)
+                    atIndex:11];
+        [encoder setBuffer:r->ckpt_beta
+                     offset:ordinal * Q38_CKPT_DB_LAYER_FLOATS *
+                            sizeof(float)
+                    atIndex:12];
+    }
     [encoder dispatchThreadgroups:MTLSizeMake(48, p->batch, 1)
             threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
     [encoder setComputePipelineState:p->delta_recurrent];
@@ -950,13 +1076,15 @@ static void encode_prefill_delta(Q38DecodeRuntime *r,
     [encoder setBuffer:r->p_core offset:0 atIndex:6];
     [encoder dispatchThreads:MTLSizeMake(48 * 128, 1, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    [encoder setComputePipelineState:p->delta_gated_norm];
+    [encoder setComputePipelineState:x_half ? p->delta_gated_norm_cap :
+                                               p->delta_gated_norm];
     [encoder setBuffer:r->p_core offset:0 atIndex:0];
     [encoder setBuffer:r->p_projected offset:0 atIndex:1];
     [encoder setBuffer:layer->constants
                  offset:h->recurrent_norm_constants_index * sizeof(float)
                 atIndex:2];
     [encoder setBuffer:r->p_gated offset:0 atIndex:3];
+    if (x_half) [encoder setBuffer:r->p_x_half offset:0 atIndex:4];
     [encoder dispatchThreadgroups:MTLSizeMake(48, p->batch, 1)
             threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
     encode_prefill_gemm_residual(r, p, encoder, r->p_gated,
@@ -1022,12 +1150,15 @@ static void encode_prefill_attention(Q38DecodeRuntime *r,
     [encoder dispatchThreadgroups:
         MTLSizeMake((score_count + 7) / 8, p->batch, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    [encoder setComputePipelineState:p->attention_softmax_value];
+    [encoder setComputePipelineState:prefill_x_half(r, p) ?
+        p->attention_softmax_value_cap : p->attention_softmax_value];
     [encoder setBuffer:r->p_scores offset:0 atIndex:0];
     [encoder setBuffer:layer->value_cache offset:0 atIndex:1];
     [encoder setBuffer:r->p_query_gate offset:0 atIndex:2];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
     [encoder setBuffer:r->p_gated offset:0 atIndex:4];
+    if (prefill_x_half(r, p))
+        [encoder setBuffer:r->p_x_half offset:0 atIndex:5];
     [encoder dispatchThreadgroups:MTLSizeMake(24, p->batch, 1)
             threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
     encode_prefill_gemm_residual(r, p, encoder, r->p_gated,
@@ -1239,6 +1370,16 @@ static int allocate_workspace(Q38DecodeRuntime *r, NSString **message) {
     ALLOC(p_mlp_activated, Q38_PREFILL_MAX_BATCH * 17408, float);
     ALLOC(p_layer_output, Q38_PREFILL_MAX_BATCH * 5120, float);
     ALLOC(p_x_half, Q38_PREFILL_MAX_BATCH * 17408, uint16_t);
+    ALLOC(ckpt_conv_windows, (size_t)Q38_CKPT_DELTA_LAYERS *
+          Q38_CKPT_ROWS * Q38_CKPT_CONV_POSITION_FLOATS, float);
+    ALLOC(ckpt_key,
+          (size_t)Q38_CKPT_DELTA_LAYERS * Q38_CKPT_KV_LAYER_FLOATS, float);
+    ALLOC(ckpt_value,
+          (size_t)Q38_CKPT_DELTA_LAYERS * Q38_CKPT_KV_LAYER_FLOATS, float);
+    ALLOC(ckpt_decay,
+          (size_t)Q38_CKPT_DELTA_LAYERS * Q38_CKPT_DB_LAYER_FLOATS, float);
+    ALLOC(ckpt_beta,
+          (size_t)Q38_CKPT_DELTA_LAYERS * Q38_CKPT_DB_LAYER_FLOATS, float);
 #undef ALLOC
     if (r->hidden_half == nil || r->normalized == nil ||
         r->projected == nil || r->convolved == nil || r->query == nil ||
@@ -1256,7 +1397,10 @@ static int allocate_workspace(Q38DecodeRuntime *r, NSString **message) {
         r->p_gated == nil || r->p_scores == nil ||
         r->p_mixer_output == nil || r->p_post_normalized == nil ||
         r->p_mlp_gate == nil || r->p_mlp_up == nil ||
-        r->p_mlp_activated == nil || r->p_layer_output == nil) {
+        r->p_mlp_activated == nil || r->p_layer_output == nil ||
+        r->ckpt_conv_windows == nil || r->ckpt_key == nil ||
+        r->ckpt_value == nil || r->ckpt_decay == nil ||
+        r->ckpt_beta == nil) {
         if (message != NULL) *message = @"cannot allocate decode workspace";
         return -1;
     }
@@ -1342,6 +1486,7 @@ qwen38_m3_model *qwen38_m3_model_open(
             return NULL;
         }
         r->mapped_bytes = r->global->length;
+        uint32_t delta_ordinal = 0;
         for (unsigned index = 0; index < 64; ++index) {
             NSString *filename = index % 4 == 3 ?
                 [NSString stringWithFormat:@"layer-%02u.q38att", index] :
@@ -1355,10 +1500,17 @@ qwen38_m3_model *qwen38_m3_model_open(
                 decode_error(error_message, error_message_capacity, message);
                 return NULL;
             }
+            if (!layer->attention) layer->delta_ordinal = delta_ordinal++;
             [r->layers addObject:layer];
             r->mapped_bytes += layer->length;
         }
         request_weight_residency(r);
+        const char *verify_mma = getenv("QWEN38_VERIFY_MMA");
+        r->mma_min_batch =
+            verify_mma != NULL && strcmp(verify_mma, "1") == 0 ? 2 : 9;
+        const char *verify_fast = getenv("QWEN38_VERIFY_FAST");
+        r->fast_verify = verify_fast == NULL ||
+                         strcmp(verify_fast, "0") != 0;
         qwen38_m3_model *model = calloc(1, sizeof(*model));
         if (model == NULL) {
             decode_error(error_message, error_message_capacity,
@@ -1903,6 +2055,82 @@ static void gdn_state_copy(Q38DecodeRuntime *r, int restore) {
     }
 }
 
+/* Replay-free partial accept: rebuild the GDN state at the last
+ * accepted verify row without another full forward. The recurrent
+ * states restore from the pre-verify snapshot and re-run the in-buffer
+ * delta recurrence over the accepted rows using the factor checkpoints
+ * the verify captured; no weight traffic is involved. The convolution
+ * windows restore directly from their per-position checkpoints. */
+static int rollback_to_accept(qwen38_m3_model *model, uint32_t rows,
+                              char *error_message,
+                              size_t error_message_capacity) {
+    Q38DecodeRuntime *r = (__bridge Q38DecodeRuntime *)model->runtime;
+    if (rows == 0 || rows > Q38_CKPT_ROWS) {
+        decode_error(error_message, error_message_capacity,
+                     @"rollback row count out of range");
+        return 1;
+    }
+    Q38PrefillPipelines *p = prefill_set_for_batch(r, rows);
+    MTLCommandBufferStatus status;
+    NSString *failure = nil;
+    @autoreleasepool {
+        id<MTLCommandBuffer> command = [r->queue commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+        NSUInteger recurrent_offset = 0;
+        for (Q38DecodeLayer *layer in r->layers) {
+            if (layer->attention) continue;
+            [blit copyFromBuffer:r->snapshot_recurrent
+                    sourceOffset:recurrent_offset
+                        toBuffer:layer->recurrent_state
+               destinationOffset:0
+                            size:layer->recurrent_state.length];
+            [blit copyFromBuffer:r->ckpt_conv_windows
+                    sourceOffset:((NSUInteger)layer->delta_ordinal *
+                                      Q38_CKPT_ROWS + rows - 1) *
+                                 Q38_CKPT_CONV_POSITION_FLOATS *
+                                 sizeof(float)
+                        toBuffer:layer->convolution_state
+               destinationOffset:0
+                            size:layer->convolution_state.length];
+            recurrent_offset += layer->recurrent_state.length;
+        }
+        [blit endEncoding];
+        id<MTLComputeCommandEncoder> encoder =
+            [command computeCommandEncoder];
+        for (Q38DecodeLayer *layer in r->layers) {
+            if (layer->attention) continue;
+            NSUInteger kv_offset = (NSUInteger)layer->delta_ordinal *
+                                   Q38_CKPT_KV_LAYER_FLOATS * sizeof(float);
+            NSUInteger db_offset = (NSUInteger)layer->delta_ordinal *
+                                   Q38_CKPT_DB_LAYER_FLOATS * sizeof(float);
+            [encoder setComputePipelineState:p->delta_recurrent];
+            /* The query input only shapes the discarded output rows;
+             * the key checkpoint stands in as an in-bounds binding. */
+            [encoder setBuffer:r->ckpt_key offset:kv_offset atIndex:0];
+            [encoder setBuffer:r->ckpt_key offset:kv_offset atIndex:1];
+            [encoder setBuffer:r->ckpt_value offset:kv_offset atIndex:2];
+            [encoder setBuffer:r->ckpt_decay offset:db_offset atIndex:3];
+            [encoder setBuffer:r->ckpt_beta offset:db_offset atIndex:4];
+            [encoder setBuffer:layer->recurrent_state offset:0 atIndex:5];
+            [encoder setBuffer:r->p_core offset:0 atIndex:6];
+            [encoder dispatchThreads:MTLSizeMake(48 * 128, 1, 1)
+                    threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+        }
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        status = command.status;
+        if (command.error != nil)
+            failure = command.error.localizedDescription;
+    }
+    if (status != MTLCommandBufferStatusCompleted) {
+        decode_error(error_message, error_message_capacity,
+            failure != nil ? failure : @"Metal rollback failed");
+        return 2;
+    }
+    return 0;
+}
+
 /* Prompt-boundary GDN state checkpoint. The attention KV cache is
  * per-position and simply gets overwritten, but the DeltaNet recurrent
  * and convolution states are cumulative and cannot rewind, so a
@@ -2168,11 +2396,14 @@ int qwen38_m3_model_mtp_step(
     uint32_t depth = r->mtp_depth;
     if (depth == 0) {
         /* Adaptive: a running per-draft acceptance estimate picks the
-         * chain length. Around 0.83 (free prose) a deeper chain loses
-         * to the extra verify rows and replays, so the thresholds sit
-         * where measured break-even is. */
+         * chain length. With the eight-wide MMA verify a marginal chain
+         * level costs ~7 ms (draft pass plus ~1.3 ms verify row), so
+         * deep chains pay off at much lower acceptance than under the
+         * old ~50 ms rows; the tiers follow the measured cost curve. */
         float ema = model->mtp_accept_ema;
-        depth = ema > 0.95f ? 3 : (ema > 0.90f ? 2 : 1);
+        depth = ema > 0.85f ? 7 :
+                (ema > 0.70f ? 5 :
+                 (ema > 0.55f ? 3 : (ema > 0.40f ? 2 : 1)));
     }
     while (depth > 1 && (uint64_t)j + depth + 1 > r->capacity) --depth;
     id<MTLBuffer> hidden = model->mtp_hidden_source == 0 ?
@@ -2236,14 +2467,18 @@ int qwen38_m3_model_mtp_step(
 
     uint32_t emit_count;
     uint32_t next_pending;
+    int used_rollback = 0;
     if (accepted_count == depth) {
         emit_count = depth + 1;
         next_pending = true_next[depth];
-    } else {
-        /* Restore the pre-verify GDN state, then re-verify the accepted
-         * prefix plus the corrected token; that both repairs the layer
-         * state and advances it one position past the correction. The
-         * attention KV rows are simply overwritten. */
+    } else if (r->prefill_mma_level == 0 ||
+               (getenv("QWEN38_REPLAY") != NULL &&
+                strcmp(getenv("QWEN38_REPLAY"), "1") == 0)) {
+        /* Comparison path: restore the pre-verify GDN state, then
+         * re-verify the accepted prefix plus the corrected token; that
+         * both repairs the layer state and advances it one position
+         * past the correction. The attention KV rows are simply
+         * overwritten. */
         gdn_state_copy(r, 1);
         uint32_t replay_tokens[8];
         for (uint32_t i = 0; i <= accepted_count; ++i)
@@ -2259,6 +2494,18 @@ int qwen38_m3_model_mtp_step(
         next_pending = argmax_f32(
             logits + (size_t)(accepted_count + 1) * QWEN38_VOCAB_SIZE,
             QWEN38_VOCAB_SIZE);
+    } else {
+        /* Replay-free: rebuild the GDN state at the last accepted row
+         * from the verify's factor checkpoints, emit the accepted
+         * prefix and hand the corrected token over as the next pending
+         * token instead of forwarding it here. */
+        status = rollback_to_accept(model, accepted_count + 1,
+                                    error_message,
+                                    error_message_capacity);
+        if (status != 0) return status;
+        used_rollback = 1;
+        emit_count = accepted_count + 1;
+        next_pending = true_next[accepted_count];
     }
     *accepted = (int)accepted_count;
 
@@ -2271,9 +2518,13 @@ int qwen38_m3_model_mtp_step(
      * true post-final-norm hidden rows the last forward produced; the
      * rows written speculatively during chained drafting are among the
      * ones overwritten. The fused command buffer already encoded the
-     * full-accept refresh, so only a partial accept (or the profiled
-     * path) re-runs it with the corrected tokens. */
-    if (!fused || accepted_count != depth) {
+     * full-accept refresh, and on a rollback its rows up to the last
+     * accepted position are already correct while later junk rows sit
+     * beyond the causal horizon until the next chain rewrites them, so
+     * only the replay path and the profiled path re-run it. */
+    int need_refresh = !fused || accepted_count != depth;
+    if (used_rollback) need_refresh = !fused && emit_count > 1;
+    if (need_refresh) {
         status = run_mtp_pass(model, emit_count - 1, emitted + 1, j + 1,
                               r->p_post_normalized, 0, 0, 0, NULL,
                               error_message, error_message_capacity);

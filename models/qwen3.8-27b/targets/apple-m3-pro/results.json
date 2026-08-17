@@ -1,201 +1,225 @@
 {
-  "schema": 1,
-  "status": "measured",
-  "measured_at": "2026-08-15",
-  "machine": "MacBook Pro Mac15,6, Apple M3 Pro, 36 GB, macOS 15.7.3",
-  "source": {
-    "weights": "mlx-community/Qwen3.8-27B-4bit @ 3e6447f082e89cc7f0bc6e5441afd38dfce760ff",
-    "weights_shard_sha256": [
-      "6cc1508e96fb5d0865dfd5753a79f4ec60651bf3e2a82844a7e8ae9c60528c0d",
-      "83f2a20ca8058f486a3634a27faf99587f4cd3c156a83dee34fb99e6ac178670",
-      "31b8c91ef899f79efaaa69e3d2c096f6e2ebeb2ff20e29222abbd9ebc79e560a"
-    ],
-    "mtp": "mlx-community/Qwen3.8-27B-MTP-4bit @ b643c01b6d3b094e325edb6ebd832e16c486c575",
-    "mtp_sha256": "76663c101e7e8ea9c0ae17bcb95183cd7f733ce424c912b8b264a7b1c48e4cc6",
-    "tokenizer_sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
-  },
-  "implementation": "Qwen3.8-specific compiled-image format, C/Metal runtime, tokenizer, sampler, batched prefill, FP16 KV cache and adaptive MTP speculative decoding",
-  "verification": {
-    "image_format": "68/68 runtime files use Qwen3.8 names and .q38* formats; sampled magic values Q38M3GLB, Q38TOK1, Q38M3Q4, Q38M3ATT and Q38M3MTP",
-    "api_state_test": "16/16 pass against the 3.8 images",
-    "prefill_parity_test": "36/36 pass across 12 lengths from 16 to 131 tokens and three execution modes; argmax identical on every run, zero NaN",
-    "smoke": "2+2 -> 4; C max2 correct; capital-of-France in Chinese -> Paris",
-    "mtp_image_smoke": "one through ten generated correctly; 19 visible tokens, first token 1.54 s, 13.0 decode tok/s, 13 drafts accepted over 7 steps",
-    "mtp_output_parity": "5/5 matrix cases token-identical, MTP adaptive vs off"
-  },
-  "throughput_matrix": {
-    "method": "five-case resident-chat matrix, one process per arm, greedy seed 42",
-    "cases": [
-      {
-        "case": "C max2 (code, short)",
-        "match": true,
-        "tokens": 28,
-        "decode_off": 8.29,
-        "decode_on": 12.16,
-        "speedup": 1.466,
-        "wall_off": 4.5,
-        "wall_on": 3.8,
-        "accepts": "14/14",
-        "e2e_tok_s_off": 6.22,
-        "e2e_tok_s_on": 7.37
-      },
-      {
-        "case": "hash table prose",
-        "match": true,
-        "tokens": 531,
-        "decode_off": 8.01,
-        "decode_on": 9.56,
-        "speedup": 1.194,
-        "wall_off": 67.1,
-        "wall_on": 56.5,
-        "accepts": "230/254",
-        "e2e_tok_s_off": 7.91,
-        "e2e_tok_s_on": 9.4
-      },
-      {
-        "case": "LRUCache (code, long)",
-        "match": true,
-        "tokens": 1155,
-        "decode_off": 8.1,
-        "decode_on": 11.54,
-        "speedup": 1.424,
-        "wall_off": 144.6,
-        "wall_on": 102.3,
-        "accepts": "708/409",
-        "e2e_tok_s_off": 7.99,
-        "e2e_tok_s_on": 11.29
-      },
-      {
-        "case": "virtual memory essay",
-        "match": true,
-        "tokens": 1463,
-        "decode_off": 8.18,
-        "decode_on": 9.06,
-        "speedup": 1.108,
-        "wall_off": 180.3,
-        "wall_on": 163.1,
-        "accepts": "590/709",
-        "e2e_tok_s_off": 8.11,
-        "e2e_tok_s_on": 8.97
-      },
-      {
-        "case": "notes summary (159-tok prompt)",
-        "match": true,
-        "tokens": 128,
-        "decode_off": 8.27,
-        "decode_on": 11.01,
-        "speedup": 1.331,
-        "wall_off": 19.8,
-        "wall_on": 16.3,
-        "accepts": "72/51",
-        "e2e_tok_s_off": 6.46,
-        "e2e_tok_s_on": 7.85
-      }
-    ],
-    "aggregate": {
-      "total_tokens": 3305,
-      "decode_tok_s_mtp_off": 8.13,
-      "decode_tok_s_mtp_on": 9.98,
-      "overall_speedup": 1.23,
-      "code_speedup": "1.42-1.47x",
-      "prose_speedup": "1.11-1.19x",
-      "e2e_tok_s_mtp_off": 7.94,
-      "e2e_tok_s_mtp_on": 9.66,
-      "e2e_speedup": 1.22,
-      "definition": "end-to-end = completion tokens / full request wall (prompt prefill + first token + decode); decode = tokens per interval after the first token"
-    }
-  },
-  "thinking_mode": {
-    "implemented": "per-request reasoning_effort (low/medium/xhigh/none) with the verbatim template injections; reply opens at <think>; reasoning_content/content split in stream and plain paths; preserve_thinking replay",
-    "verified": {
-      "xhigh_stream": "301 chars reasoning + correct split answer (6 primes between 10 and 30)",
-      "none": "reproduces the pinned no-think behavior",
-      "low_with_small_budget": "400-token budget exhausted mid-think: truncated thinking in reasoning_content, empty content, finish_reason length"
-    }
-  },
-  "quality_arc_easy_5": {
-    "record": "../../benchmarks/arc-easy-5/results-macos-m3-pro.json",
-    "strict_32_token_budget": "3/5",
-    "strict_96_token_budget": "4/5",
-    "observation": "every miss states the correct answer's content in prose without completing the required 'Answer: X' line; this five-case generative adaptation is a smoke test, not an official ARC-Easy score"
-  },
-  "llama_cpp_unsloth_comparison": {
-    "measured_at": "2026-08-15",
-    "stack": "llama.cpp build 10360 (Metal, flash attention, llama-server resident, context 4096)",
-    "weights": "unsloth/Qwen3.8-27B-GGUF Q4_K_M, revision f1bfb127c64f7072bdd2cad55f258b9c8b2910fe, file sha256 7e78da5d7e3ae28d178121f58646953305f3e5bd3cb46f4a75584e8b6c6fe169, 17,106,775,008 bytes",
-    "method": "same rendered 36-token prompt, 28-token greedy completion (this model's natural reply length), one warmup then four measured requests per stack, model resident in both",
-    "rounds": [
-      {
-        "wall_s": 4.921,
-        "prompt_tps": 38.74,
-        "predicted_n": 28,
-        "predicted_tps": 7.06
-      },
-      {
-        "wall_s": 4.839,
-        "prompt_tps": 38.79,
-        "predicted_n": 28,
-        "predicted_tps": 7.16
-      },
-      {
-        "wall_s": 4.919,
-        "prompt_tps": 39.28,
-        "predicted_n": 28,
-        "predicted_tps": 7.0
-      },
-      {
-        "wall_s": 4.831,
-        "prompt_tps": 39.01,
-        "predicted_n": 28,
-        "predicted_tps": 7.17
-      },
-      {
-        "wall_s": 4.868,
-        "prompt_tps": 39.08,
-        "predicted_n": 28,
-        "predicted_tps": 7.1
-      }
-    ],
-    "results": {
-      "this_runtime_plain": {
-        "wall_s": 4.45,
-        "e2e_tok_s": 6.29,
-        "ttft_s": 1.023
-      },
-      "this_runtime_speculative_default": {
-        "wall_s": 3.109,
-        "e2e_tok_s": 9.01,
-        "ttft_s": 1.179
-      },
-      "llama_cpp": {
-        "wall_s": 4.864,
-        "e2e_tok_s": 5.76,
-        "prompt_tok_s": 39.0,
-        "decode_tok_s": 7.11
-      }
-    },
-    "summary": "this runtime leads 1.09x end to end without speculation and 1.56x with it (output token-identical to plain decoding); llama.cpp's reply is correct but differs textually - a different Q4 quantization of the same model",
-    "regression": "the runtime's replies match the recorded 3.8 outputs exactly after the wide-tile/S128 prefill changes, with and without speculation"
-  },
-  "memory_for_speed_experiments": {
-    "measured_at": "2026-08-16",
-    "question": "decode streams every weight byte per token, so spare RAM can buy speed only as more tokens verified per weight stream; two candidates were built and measured same-window (thermal drift makes cross-window comparison unreliable)",
-    "context_lookup_drafting": {
-      "design": "when the tokens just generated reproduce an earlier n-gram of the conversation, draft up to 7 followers with no draft-model pass and verify them in one batched forward (verify batches 2-8), with a cooldown after failed lookups",
-      "same_window_ab": {
-        "summary_case": "7.97 tok/s lookup off vs 7.17 on; 5 lookup steps accepted 17 drafts (3.4/step)",
-        "prose_with_bigram_trigger": "4 accepts in 23 lookup steps - misfires dominate",
-        "output": "token-identical in every arm"
-      },
-      "why_it_loses": "a partial accept pays the wide verify plus a replay (state repair), ~130 ms per emitted token at 3.4/7 accepts versus ~100 for the MTP chain; the exact-kernel verify also grows ~0.7 ms/layer per extra row",
-      "disposition": "reverted; would need carry-forward verification (fold the accepted prefix into the next step's verify instead of replaying) to reach parity, and parity is not a win"
-    },
-    "adaptive_depth_ceiling_5": {
-      "design": "raise the adaptive MTP chain ceiling from 3 to 5 above acceptance EMA 0.99",
-      "same_window_ab": "long code case: 10.84 tok/s at fixed depth 3 vs 10.71 adaptive-with-ceiling-5; docstring spans dip the EMA so deep steps rarely engage and shallow recovery steps dominate",
-      "disposition": "reverted to ceiling 3"
-    },
-    "weight_copy_analysis": "an FP16 weight copy for a dequant-free verify path needs ~27 GB next to the 14.1 GiB Q4 image - exceeds 36 GB; a Q8 copy (~29 GB total resident) risks swap for a marginal dequant saving; not attempted",
-    "retained": "verify pipeline sets for batches 2-8 and an 8-row logits buffer; QWEN38_MTP_DEPTH now accepts fixed depths up to 7 for experiments (default remains adaptive with ceiling 3)"
+ "schema": 1,
+ "status": "measured",
+ "measured_at": "2026-08-17",
+ "machine": "MacBook Pro Mac15,6, Apple M3 Pro, 36 GB, macOS 15.7.3",
+ "source": {
+  "weights": "mlx-community/Qwen3.8-27B-4bit @ 3e6447f082e89cc7f0bc6e5441afd38dfce760ff",
+  "weights_shard_sha256": [
+   "6cc1508e96fb5d0865dfd5753a79f4ec60651bf3e2a82844a7e8ae9c60528c0d",
+   "83f2a20ca8058f486a3634a27faf99587f4cd3c156a83dee34fb99e6ac178670",
+   "31b8c91ef899f79efaaa69e3d2c096f6e2ebeb2ff20e29222abbd9ebc79e560a"
+  ],
+  "mtp": "mlx-community/Qwen3.8-27B-MTP-4bit @ b643c01b6d3b094e325edb6ebd832e16c486c575",
+  "mtp_sha256": "76663c101e7e8ea9c0ae17bcb95183cd7f733ce424c912b8b264a7b1c48e4cc6",
+  "tokenizer_sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
+ },
+ "implementation": "Qwen3.8-specific compiled-image format, C/Metal runtime, tokenizer, sampler, batched prefill, FP16 KV cache and adaptive MTP speculative decoding",
+ "verification": {
+  "image_format": "68/68 runtime files use Qwen3.8 names and .q38* formats; sampled magic values Q38M3GLB, Q38TOK1, Q38M3Q4, Q38M3ATT and Q38M3MTP",
+  "api_state_test": "16/16 pass against the 3.8 images",
+  "prefill_parity_test": "36/36 pass across 12 lengths from 16 to 131 tokens and three execution modes; argmax identical on every run, zero NaN; exact mode remains bitwise for runs without 32-token chunks",
+  "smoke": "2+2 -> 4; C max2 correct; capital-of-France in Chinese -> Paris",
+  "mtp_image_smoke": "one through ten generated correctly; 19 visible tokens, first token 1.54 s, 13.0 decode tok/s, 13 drafts accepted over 7 steps",
+  "mtp_output_parity": "default fast verify: 3/5 five-workload cases token-identical to plain greedy; prose and essay flip one numerical near-tie each onto an alternate fluent greedy continuation; QWEN38_VERIFY_FAST=0 restores 5/5 token-identity (9.81 aggregate e2e); every emitted token remains the argmax of a true model forward"
+ },
+ "throughput_matrix": {
+  "method": "five-case resident-chat matrix, one process per arm, greedy seed 42; adaptive MTP with replay-free partial accepts, eight-wide half-MMA verify and depth ceiling 7",
+  "measured_at": "2026-08-17",
+  "cases": [
+   {
+    "case": "C max2 (code, short)",
+    "match": true,
+    "tokens": 28,
+    "decode_off": 7.91,
+    "decode_on": 30.37,
+    "wall_off": 4.4,
+    "wall_on": 2.3,
+    "accepts": "26/4",
+    "e2e_tok_s_off": 6.36,
+    "e2e_tok_s_on": 12.04
+   },
+   {
+    "case": "hash table prose",
+    "match": false,
+    "tokens": 524,
+    "decode_off": 7.83,
+    "decode_on": 9.6,
+    "wall_off": 68.4,
+    "wall_on": 55.6,
+    "accepts": "279/247",
+    "e2e_tok_s_off": 7.76,
+    "e2e_tok_s_on": 9.43
+   },
+   {
+    "case": "LRUCache (code, long)",
+    "match": true,
+    "tokens": 1155,
+    "decode_off": 7.98,
+    "decode_on": 14.48,
+    "wall_off": 146.0,
+    "wall_on": 81.4,
+    "accepts": "844/315",
+    "e2e_tok_s_off": 7.91,
+    "e2e_tok_s_on": 14.19
+   },
+   {
+    "case": "virtual memory essay",
+    "match": false,
+    "tokens": 1578,
+    "decode_off": 7.81,
+    "decode_on": 9.2,
+    "wall_off": 188.8,
+    "wall_on": 173.2,
+    "accepts": "815/764",
+    "e2e_tok_s_off": 7.75,
+    "e2e_tok_s_on": 9.11
+   },
+   {
+    "case": "notes summary (159-tok prompt)",
+    "match": true,
+    "tokens": 128,
+    "decode_off": 7.16,
+    "decode_on": 10.94,
+    "wall_off": 21.2,
+    "wall_on": 15.3,
+    "accepts": "82/46",
+    "e2e_tok_s_off": 6.04,
+    "e2e_tok_s_on": 8.36
+   }
+  ],
+  "aggregate": {
+   "completion_tokens_plain": 3305,
+   "completion_tokens_mtp": 3413,
+   "decode_tok_s_mtp_off": 8.1,
+   "decode_tok_s_mtp_on": 10.72,
+   "e2e_tok_s_mtp_off": 7.71,
+   "e2e_tok_s_mtp_on": 10.41,
+   "e2e_speedup": 1.35,
+   "wall_off_s": 428.8,
+   "wall_on_s": 327.9,
+   "definition": "end-to-end = completion tokens / full request wall (prompt prefill + first token + decode); decode = tokens per interval after the first token; per-case token counts differ between arms where the fast verify takes an alternate greedy branch"
   }
+ },
+ "thinking_mode": {
+  "implemented": "per-request reasoning_effort (low/medium/xhigh/none) with the verbatim template injections; reply opens at <think>; reasoning_content/content split in stream and plain paths; preserve_thinking replay",
+  "verified": {
+   "xhigh_stream": "301 chars reasoning + correct split answer (6 primes between 10 and 30)",
+   "none": "reproduces the pinned no-think behavior",
+   "low_with_small_budget": "400-token budget exhausted mid-think: truncated thinking in reasoning_content, empty content, finish_reason length"
+  }
+ },
+ "quality_arc_easy_5": {
+  "record": "../../benchmarks/arc-easy-5/results-macos-m3-pro.json",
+  "strict_32_token_budget": "3/5",
+  "strict_96_token_budget": "4/5",
+  "observation": "every miss states the correct answer's content in prose without completing the required 'Answer: X' line; this five-case generative adaptation is a smoke test, not an official ARC-Easy score"
+ },
+ "llama_cpp_unsloth_comparison": {
+  "measured_at": "2026-08-15",
+  "stack": "llama.cpp build 10360 (Metal, flash attention, llama-server resident, context 4096)",
+  "weights": "unsloth/Qwen3.8-27B-GGUF Q4_K_M, revision f1bfb127c64f7072bdd2cad55f258b9c8b2910fe, file sha256 7e78da5d7e3ae28d178121f58646953305f3e5bd3cb46f4a75584e8b6c6fe169, 17,106,775,008 bytes",
+  "method": "same rendered 36-token prompt, 28-token greedy completion (this model's natural reply length), one warmup then four measured requests per stack, model resident in both",
+  "rounds": [
+   {
+    "wall_s": 4.921,
+    "prompt_tps": 38.74,
+    "predicted_n": 28,
+    "predicted_tps": 7.06
+   },
+   {
+    "wall_s": 4.839,
+    "prompt_tps": 38.79,
+    "predicted_n": 28,
+    "predicted_tps": 7.16
+   },
+   {
+    "wall_s": 4.919,
+    "prompt_tps": 39.28,
+    "predicted_n": 28,
+    "predicted_tps": 7.0
+   },
+   {
+    "wall_s": 4.831,
+    "prompt_tps": 39.01,
+    "predicted_n": 28,
+    "predicted_tps": 7.17
+   },
+   {
+    "wall_s": 4.868,
+    "prompt_tps": 39.08,
+    "predicted_n": 28,
+    "predicted_tps": 7.1
+   }
+  ],
+  "results": {
+   "this_runtime_plain": {
+    "wall_s": 4.45,
+    "e2e_tok_s": 6.29,
+    "ttft_s": 1.023
+   },
+   "this_runtime_speculative_default": {
+    "wall_s": 3.109,
+    "e2e_tok_s": 9.01,
+    "ttft_s": 1.179
+   },
+   "llama_cpp": {
+    "wall_s": 4.864,
+    "e2e_tok_s": 5.76,
+    "prompt_tok_s": 39.0,
+    "decode_tok_s": 7.11
+   }
+  },
+  "summary": "this runtime leads 1.09x end to end without speculation and 1.56x with it (output token-identical to plain decoding); llama.cpp's reply is correct but differs textually - a different Q4 quantization of the same model",
+  "regression": "the runtime's replies match the recorded 3.8 outputs exactly after the wide-tile/S128 prefill changes, with and without speculation"
+ },
+ "memory_for_speed_experiments": {
+  "measured_at": "2026-08-16",
+  "question": "decode streams every weight byte per token, so spare RAM can buy speed only as more tokens verified per weight stream; two candidates were built and measured same-window (thermal drift makes cross-window comparison unreliable)",
+  "context_lookup_drafting": {
+   "design": "when the tokens just generated reproduce an earlier n-gram of the conversation, draft up to 7 followers with no draft-model pass and verify them in one batched forward (verify batches 2-8), with a cooldown after failed lookups",
+   "same_window_ab": {
+    "summary_case": "7.97 tok/s lookup off vs 7.17 on; 5 lookup steps accepted 17 drafts (3.4/step)",
+    "prose_with_bigram_trigger": "4 accepts in 23 lookup steps - misfires dominate",
+    "output": "token-identical in every arm"
+   },
+   "why_it_loses": "a partial accept pays the wide verify plus a replay (state repair), ~130 ms per emitted token at 3.4/7 accepts versus ~100 for the MTP chain; the exact-kernel verify also grows ~0.7 ms/layer per extra row",
+   "disposition": "reverted; would need carry-forward verification (fold the accepted prefix into the next step's verify instead of replaying) to reach parity, and parity is not a win"
+  },
+  "adaptive_depth_ceiling_5": {
+   "design": "raise the adaptive MTP chain ceiling from 3 to 5 above acceptance EMA 0.99",
+   "same_window_ab": "long code case: 10.84 tok/s at fixed depth 3 vs 10.71 adaptive-with-ceiling-5; docstring spans dip the EMA so deep steps rarely engage and shallow recovery steps dominate",
+   "disposition": "reverted to ceiling 3"
+  },
+  "weight_copy_analysis": "an FP16 weight copy for a dequant-free verify path needs ~27 GB next to the 14.1 GiB Q4 image - exceeds 36 GB; a Q8 copy (~29 GB total resident) risks swap for a marginal dequant saving; not attempted",
+  "retained": "verify pipeline sets for batches 2-8, an 8-row logits buffer, per-position GDN factor checkpoints (~82 MB) and replay-free partial accepts; QWEN38_MTP_DEPTH accepts fixed depths up to 7 (default remains adaptive with ceiling 3)",
+  "replay_free_partial_accepts": {
+   "measured_at": "2026-08-17",
+   "design": "the batch<=8 prefill sets side-write per-position GDN factors during the speculative verify (conv windows 63 MB, delta key/value 2x9.4 MB, decay/beta 2x74 KB, ~82 MB total); a partial accept restores the pre-verify recurrent snapshot, re-runs the in-buffer delta recurrence over the accepted rows from those factors and restores the conv window checkpoint - no weight traffic - then hands the corrected token over as the next pending token instead of replaying a forward",
+   "same_window_three_arm": {
+    "method": "plain / rollback / replay arms, one resident process each, sequential in one window, five workloads",
+    "run_1_aggregate_e2e": "plain 7.62, rollback 9.86, replay 9.47 tok/s",
+    "run_2_aggregate_e2e": "plain 7.59, rollback 9.81 tok/s (replay arm invalidated by a concurrent rebuild)",
+    "essay_largest_gain": "9.21-9.35 rollback vs 8.80 replay e2e; 866 steps, 712 accepts",
+    "output": "rollback token-identical to plain on 5/5 cases in the record run"
+   },
+   "budget_guard_fix": "the chat loop previously stopped speculative stepping 8 tokens before the reply budget, truncating capped replies up to 7 tokens short of plain; it now steps to the budget and truncates the final step's emission, so budget-capped replies match plain exactly",
+   "disposition": "kept; QWEN38_REPLAY=1 selects the old replay path for comparison"
+  },
+  "small_batch_mma_verify": {
+   "measured_at": "2026-08-17",
+   "problem": "the exact scalar batch GEMM pays ~46 ms per extra verify row (instruction-issue-bound at ~2 instructions per weight pair per row, uniform across delta and attention layers), so verify cost was 178/234/277/327/392/444/510 ms at depths 1-7 and deep draft chains could not pay",
+   "failed_attempts": {
+    "route_verify_to_32wide_mma": "existing prompt-chunk MMA kernels pay for a full 32-row batch tile regardless of real batch: flat ~513-528 ms at depths 1-3, 3x slower end-to-end, one essay argmax flip",
+    "transposed_activation_scalar_kernels": "producer-transposed [column][8] activation packs with vector FMA: per-simdgroup padding re-reads made cost flat ~294-303 ms at batches 2-4, worse than scalar everywhere",
+    "threadgroup_staged_variant": "cooperative 16 KB activation tiles cut L2 rebound but occupancy losses made batch 8 worse (558 ms)"
+   },
+   "solution": "eight-wide half-MMA GEMM kernels: batch tile of 8, the four simdgroups split the 64-column K-tile and their partial tiles sum through the existing spill path; weight staging identical to the 32-wide kernels; float-activation GEMMs read a half copy the producer kernels write in the same encoder, so no conversion dispatches",
+   "measured_verify_cost": "flat 204-212 ms from batch 2 through batch 8 (~1.3 ms marginal row); hybrid routing keeps batch 2 on the exact scalar path (167 ms); depth-7 verify 211 ms vs 510 ms scalar",
+   "adaptive_depth": "with ~7 ms per marginal chain level the ceiling rose from 3 to 7 with acceptance-EMA tiers 0.85/0.70/0.55/0.40 -> depths 7/5/3/2",
+   "same_window_ab": "plain 7.71 vs fast MTP 10.41 aggregate e2e tok/s; LRUCache 14.19 e2e (decode 14.48), C max2 12.04 e2e (decode 30.37); prose-class cases 9.1-9.4 e2e remain acceptance-limited",
+   "numerics": "half-MMA accumulation order differs from the exact path: 3/5 battery cases token-identical to plain greedy, prose and essay each flip one numerical near-tie and continue on an alternate fluent greedy branch (inspected, no degeneration); QWEN38_VERIFY_FAST=0 restores the exact kernels and 5/5 token-identity at 9.81 aggregate; QWEN38_PREFILL_MMA=0 exact mode is unchanged and bitwise (36/36 parity)",
+   "capture_kernels": "checkpoint and half-copy side outputs live in separate _cap kernel variants so the exact kernels keep their original code generation; a store added inside the hot kernels measurably perturbed fast-math contraction and broke exact-mode bitwise parity until split out"
+  }
+ }
 }

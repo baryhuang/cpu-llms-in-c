@@ -368,12 +368,12 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Model resident in %.1f s. Enter /quit to exit.\n",
             seconds_now() - start);
     int mtp = 0;
-    int mtp_depth = 0; /* 0 = adaptive (max 3) */
+    int mtp_depth = 0; /* 0 = adaptive (max 7) */
     const char *mtp_depth_env = getenv("QWEN38_MTP_DEPTH");
     if (mtp_depth_env != NULL) {
         mtp_depth = atoi(mtp_depth_env);
         if (mtp_depth < 0) mtp_depth = 0;
-        if (mtp_depth > 3) mtp_depth = 3;
+        if (mtp_depth > 7) mtp_depth = 7;
     }
 
     const char *mtp_env = getenv("QWEN38_MTP");
@@ -626,7 +626,7 @@ int main(int argc, char **argv) {
             while (!done) {
                 if (pending == QWEN38_END_OF_TEXT ||
                     pending == QWEN38_IM_END ||
-                    generated_count + 8 > budget ||
+                    generated_count + 1 >= budget ||
                     (uint64_t)mtp_position + 2 > capacity) {
                     generated[generated_count++] = pending;
                     break;
