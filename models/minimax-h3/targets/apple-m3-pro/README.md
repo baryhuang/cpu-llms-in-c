@@ -10,15 +10,15 @@ pass; official full-precision parity and the speed target remain open.
 
 ## N-to-N optimization timeline
 
-| Runtime milestone | 480p N-to-N seconds | Change from previous | Speedup vs valid baseline | Evidence |
-|---|---:|---:|---:|---|
-| Correct seven-chunk baseline | **9,294.869743** | — | 1.000× | measured complete N-to-N |
-| Whole-image buffers + static bindings + RoPE + four-layer command grouping | 9,112.577745 | −182.291998 | 1.020× | projected from 68.619048 s/task; exact setup bundle was not timed per subchange |
-| + 32-row simdgroup-matrix GEMM | 2,624.139600 | −6,488.438145 | 3.542× | projected from 6.824399 s/task |
-| + eight-query exact tiled attention | 2,567.102130 | −57.037470 | 3.621× | projected from 6.281185 s/task |
-| + 32-row shared-weight GEMM | 2,544.817665 | −22.284465 | 3.652× | projected from 6.068952 s/task |
-| + 64-row shared-weight GEMM | 2,435.747655 | −109.070010 | 3.816× | projected from 5.030190 s/task |
-| Full current N-to-N validation | **2,418.708237** | −17.039418 vs projection | **3.843×** | measured complete N-to-N |
+| Runtime milestone | Affected stage | Affected-stage time before → after | 480p N-to-N time and change | Reason | Evidence |
+|---|---|---:|---:|---|---|
+| Correct seven-chunk baseline | Video VAE | **7,387.292038 s measured** | **9,294.869743 s**; 1.000× | Establish the released seven-chunk temporal graph; this is the valid starting point, not an optimization | measured complete N-to-N |
+| Whole-image buffers + static bindings + RoPE + four-layer command grouping | Video VAE setup/execution; H3 resource binding | VAE: 7,387.292038 measured → 7,205.000040 s projected (**−182.291998 s**); H3 32×32 smoke: 17.122752 → 7.571732 s measured (**−9.551020 s**), excluded from the 480p projection | 9,112.577745 s; −182.291998; 1.020× | Reuse fixed Metal images, 438 VAE bindings and RoPE; encode four VAE layers per command buffer instead of recreating or synchronizing per use | VAE projected from 105 × 68.619048 s; H3 smoke measured separately; exact setup subchanges were not isolated |
+| + 32-row simdgroup-matrix GEMM | Video VAE dense projections and MLP | 7,205.000040 → 716.561895 s projected (**−6,488.438145 s**) | 2,624.139600 s; −6,488.438145; 3.542× | Map scalar dense linear work to M3 simdgroup-matrix hardware with FP32 accumulation | projected from 105 × 6.824399 s |
+| + eight-query exact tiled attention | Video VAE self-attention | 716.561895 → 659.524425 s projected (**−57.037470 s**) | 2,567.102130 s; −57.037470; 3.621× | Eight queries reuse 32 K/V rows in threadgroup memory while preserving the original key order | projected from 105 × 6.281185 s |
+| + 32-row shared-weight GEMM | Video VAE dense projections and MLP | 659.524425 → 637.239960 s projected (**−22.284465 s**) | 2,544.817665 s; −22.284465; 3.652× | Share staged weights across neighboring activation rows to reduce repeated weight traffic | projected from 105 × 6.068952 s |
+| + 64-row shared-weight GEMM | Video VAE dense projections and MLP | 637.239960 → 528.169950 s projected (**−109.070010 s**) | 2,435.747655 s; −109.070010; 3.816× | Amortize every staged tile across twice as many activation rows | projected from 105 × 5.030190 s |
+| Full current N-to-N validation | Full graph measurement; no new optimization | VAE: 528.169950 projected → **487.273811 s measured** (−40.896139); all other stages: 1,907.577705 → 1,931.434426 s (+23.856721) | **2,418.708237 s**; −17.039418 vs projection; **3.843×** | Replace single-task linear scaling with a complete run; the net projection difference is not claimed as an optimization | measured complete N-to-N |
 
 ### Latest measured run breakdown
 

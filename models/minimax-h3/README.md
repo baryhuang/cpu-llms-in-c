@@ -8,15 +8,15 @@ runtime peak physical footprint and zero swaps. All 124 frames decode and four
 prompt-aligned shots are visible. Functional and visual smoke gates pass;
 official full-precision parity and the speed target remain open.
 
-| N-to-N milestone | 480p seconds | Evidence |
-|---|---:|---|
-| Correct seven-chunk baseline | **9,294.869743** | measured complete run |
-| Exact buffer/binding/RoPE/command cleanup | 9,112.577745 | projected from 68.619048 s per VAE task |
-| + 32-row simdgroup-matrix GEMM | 2,624.139600 | projected from 6.824399 s/task |
-| + eight-query exact tiled attention | 2,567.102130 | projected from 6.281185 s/task |
-| + 32-row shared-weight GEMM | 2,544.817665 | projected from 6.068952 s/task |
-| + 64-row shared-weight GEMM | 2,435.747655 | projected from 5.030190 s/task |
-| Current full validation | **2,418.708237** | measured complete run; **3.843×** over baseline |
+| N-to-N milestone | Affected stage | Affected-stage time before → after | 480p N-to-N time | Why time changed | Evidence |
+|---|---|---:|---:|---|---|
+| Correct seven-chunk baseline | Video VAE | **7,387.292038 s measured** | **9,294.869743 s** | Establish the correct seven-chunk temporal graph; this is the valid baseline, not an optimization | measured complete run |
+| Exact buffer/binding/RoPE/command cleanup | Video VAE setup/execution; H3 resource binding | VAE: 7,387.292038 measured → 7,205.000040 s projected (**−182.291998 s**); H3 32×32 smoke: 17.122752 → 7.571732 s measured (**−9.551020 s**), excluded from the 480p projection | 9,112.577745 s (−182.291998) | Reuse fixed Metal images, 438 VAE bindings and RoPE; submit four VAE layers together instead of rebuilding or synchronizing per use | VAE: 105 × 68.619048 s; H3 smoke measured separately; exact setup subchanges not isolated |
+| + 32-row simdgroup-matrix GEMM | Video VAE dense projections and MLP | 7,205.000040 → 716.561895 s projected (**−6,488.438145 s**) | 2,624.139600 s (−6,488.438145) | Replace scalar dense loops with M3 matrix instructions and FP32 accumulation | 105 × 6.824399 s component result |
+| + eight-query exact tiled attention | Video VAE self-attention | 716.561895 → 659.524425 s projected (**−57.037470 s**) | 2,567.102130 s (−57.037470) | Eight queries reuse 32 K/V rows in threadgroup memory without changing key order | 105 × 6.281185 s component result |
+| + 32-row shared-weight GEMM | Video VAE dense projections and MLP | 659.524425 → 637.239960 s projected (**−22.284465 s**) | 2,544.817665 s (−22.284465) | Neighboring activation rows share staged weight tiles, reducing repeated weight traffic | 105 × 6.068952 s component result |
+| + 64-row shared-weight GEMM | Video VAE dense projections and MLP | 637.239960 → 528.169950 s projected (**−109.070010 s**) | 2,435.747655 s (−109.070010) | Each staged weight tile serves twice as many activation rows | 105 × 5.030190 s component result |
+| Current full validation | Full graph measurement; no new optimization | VAE: 528.169950 projected → **487.273811 s measured** (−40.896139); all other stages: 1,907.577705 → 1,931.434426 s (+23.856721) | **2,418.708237 s** (−17.039418 vs projection; **3.843×** vs baseline) | Replace one-task linear scaling with a complete measurement; the net projection difference is not claimed as optimization | measured complete run |
 
 ## Latest measured run breakdown
 
