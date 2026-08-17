@@ -357,6 +357,29 @@ static size_t select_nearest_leaf(size_t frame_leaf_start,
     return selected_count;
 }
 
+static minimax_h3_status emit_exact_leaf(
+    const minimax_h3_geometry *geometry,
+    const minimax_h3_t2va_layout *layout,
+    const minimax_h3_m3_tree_node *leaf,
+    route_writer *writer) {
+    uint16_t y;
+    uint16_t x;
+    for (y = 0u; y < leaf->patch_h; ++y) {
+        for (x = 0u; x < leaf->patch_w; ++x) {
+            size_t row;
+            minimax_h3_status status = minimax_h3_m3_tree_leaf_row(
+                geometry, layout, leaf, y, x, &row);
+            if (status != MINIMAX_H3_OK) return status;
+            if (row >= MINIMAX_H3_M3_TREE_SUMMARY_ENTRY) {
+                return MINIMAX_H3_OVERFLOW;
+            }
+            status = route_emit(writer, (uint32_t)row);
+            if (status != MINIMAX_H3_OK) return status;
+        }
+    }
+    return MINIMAX_H3_OK;
+}
+
 static minimax_h3_status build_one_route(
     const minimax_h3_geometry *geometry,
     const minimax_h3_t2va_layout *layout,
@@ -423,30 +446,136 @@ static minimax_h3_status build_one_route(
                                             (uint32_t)leaf);
                             if (status != MINIMAX_H3_OK) return status;
                         } else {
-                            const minimax_h3_m3_tree_node *leaf_node = &nodes[leaf];
-                            uint16_t y;
-                            uint16_t x;
-                            for (y = 0u; y < leaf_node->patch_h; ++y) {
-                                for (x = 0u; x < leaf_node->patch_w; ++x) {
-                                    size_t row;
-                                    minimax_h3_status status =
-                                        minimax_h3_m3_tree_leaf_row(
-                                            geometry, layout, leaf_node, y, x,
-                                            &row);
-                                    if (status != MINIMAX_H3_OK) return status;
-                                    if (row >= MINIMAX_H3_M3_TREE_SUMMARY_ENTRY) {
-                                        return MINIMAX_H3_OVERFLOW;
-                                    }
-                                    status = route_emit(writer, (uint32_t)row);
-                                    if (status != MINIMAX_H3_OK) return status;
-                                }
-                            }
+                            minimax_h3_status status = emit_exact_leaf(
+                                geometry, layout, &nodes[leaf], writer);
+                            if (status != MINIMAX_H3_OK) return status;
                         }
                     }
                 }
             }
         }
     }
+    return MINIMAX_H3_OK;
+}
+
+static minimax_h3_status build_one_frame_safe_route(
+    const minimax_h3_geometry *geometry,
+    const minimax_h3_t2va_layout *layout,
+    const minimax_h3_m3_tree_node *nodes,
+    const minimax_h3_m3_tree_plan *plan,
+    size_t query_leaf,
+    route_writer *writer) {
+    size_t leaves_per_frame = (size_t)plan->tile_rows * plan->tile_columns;
+    size_t query_local_leaf = query_leaf % leaves_per_frame;
+    size_t query_tile_y = query_local_leaf / plan->tile_columns;
+    size_t query_tile_x = query_local_leaf % plan->tile_columns;
+    size_t frame;
+
+    for (frame = 0u; frame < geometry->video_latent_frames; ++frame) {
+        size_t frame_leaf_start = frame * leaves_per_frame;
+        size_t selected_leaves[2];
+        size_t selected_leaf_count = select_nearest_leaf(
+            frame_leaf_start, leaves_per_frame, plan->tile_columns,
+            query_tile_y, query_tile_x, selected_leaves);
+        size_t leaf;
+        for (leaf = frame_leaf_start;
+             leaf < frame_leaf_start + leaves_per_frame; ++leaf) {
+            minimax_h3_status status;
+            if (route_selected(leaf, selected_leaves, selected_leaf_count)) {
+                status = emit_exact_leaf(geometry, layout, &nodes[leaf], writer);
+            } else {
+                status = route_emit(writer,
+                    MINIMAX_H3_M3_TREE_SUMMARY_ENTRY | (uint32_t)leaf);
+            }
+            if (status != MINIMAX_H3_OK) return status;
+        }
+    }
+    return MINIMAX_H3_OK;
+}
+
+static minimax_h3_status route_entry_count_with_builder(
+    const minimax_h3_geometry *geometry,
+    const minimax_h3_t2va_layout *layout,
+    const minimax_h3_m3_tree_node *nodes,
+    const minimax_h3_m3_tree_plan *plan,
+    minimax_h3_status (*builder)(const minimax_h3_geometry *,
+                                const minimax_h3_t2va_layout *,
+                                const minimax_h3_m3_tree_node *,
+                                const minimax_h3_m3_tree_plan *, size_t,
+                                route_writer *),
+    size_t *entry_count,
+    size_t *maximum_route_entries) {
+    size_t leaf;
+    size_t total = 0u;
+    size_t maximum = 0u;
+
+    if (geometry == NULL || layout == NULL || nodes == NULL || plan == NULL ||
+        builder == NULL || entry_count == NULL ||
+        maximum_route_entries == NULL) {
+        return MINIMAX_H3_INVALID_ARGUMENT;
+    }
+    for (leaf = 0u; leaf < plan->leaf_count; ++leaf) {
+        route_writer writer = {NULL, 0u, 0u};
+        minimax_h3_status status = builder(
+            geometry, layout, nodes, plan, leaf, &writer);
+        if (status != MINIMAX_H3_OK) return status;
+        if (!checked_add_size(total, writer.count, &total)) {
+            return MINIMAX_H3_OVERFLOW;
+        }
+        if (writer.count > maximum) maximum = writer.count;
+    }
+    if (!checked_add_size(total, geometry->video_rows, &total)) {
+        return MINIMAX_H3_OVERFLOW;
+    }
+    if (geometry->video_rows > maximum) maximum = geometry->video_rows;
+    *entry_count = total;
+    *maximum_route_entries = maximum;
+    return MINIMAX_H3_OK;
+}
+
+static minimax_h3_status routes_make_with_builder(
+    const minimax_h3_geometry *geometry,
+    const minimax_h3_t2va_layout *layout,
+    const minimax_h3_m3_tree_node *nodes,
+    const minimax_h3_m3_tree_plan *plan,
+    minimax_h3_status (*builder)(const minimax_h3_geometry *,
+                                const minimax_h3_t2va_layout *,
+                                const minimax_h3_m3_tree_node *,
+                                const minimax_h3_m3_tree_plan *, size_t,
+                                route_writer *),
+    uint32_t *offsets,
+    size_t offset_capacity,
+    uint32_t *entries,
+    size_t entry_capacity) {
+    route_writer writer = {entries, entry_capacity, 0u};
+    size_t leaf;
+
+    if (geometry == NULL || layout == NULL || nodes == NULL || plan == NULL ||
+        builder == NULL || offsets == NULL || entries == NULL) {
+        return MINIMAX_H3_INVALID_ARGUMENT;
+    }
+    if (offset_capacity < plan->leaf_count + 2u) {
+        return MINIMAX_H3_INSUFFICIENT_CAPACITY;
+    }
+    for (leaf = 0u; leaf < plan->leaf_count; ++leaf) {
+        minimax_h3_status status;
+        if (writer.count > UINT32_MAX) return MINIMAX_H3_OVERFLOW;
+        offsets[leaf] = (uint32_t)writer.count;
+        status = builder(geometry, layout, nodes, plan, leaf, &writer);
+        if (status != MINIMAX_H3_OK) return status;
+    }
+    if (writer.count > UINT32_MAX) return MINIMAX_H3_OVERFLOW;
+    offsets[plan->leaf_count] = (uint32_t)writer.count;
+    for (size_t row = layout->video_start; row < layout->sequence_rows; ++row) {
+        minimax_h3_status status;
+        if (row >= MINIMAX_H3_M3_TREE_SUMMARY_ENTRY) {
+            return MINIMAX_H3_OVERFLOW;
+        }
+        status = route_emit(&writer, (uint32_t)row);
+        if (status != MINIMAX_H3_OK) return status;
+    }
+    if (writer.count > UINT32_MAX) return MINIMAX_H3_OVERFLOW;
+    offsets[plan->leaf_count + 1u] = (uint32_t)writer.count;
     return MINIMAX_H3_OK;
 }
 
@@ -457,27 +586,9 @@ minimax_h3_status minimax_h3_m3_tree_route_entry_count(
     const minimax_h3_m3_tree_plan *plan,
     size_t *entry_count,
     size_t *maximum_route_entries) {
-    size_t leaf;
-    size_t total = 0u;
-    size_t maximum = 0u;
-
-    if (geometry == NULL || layout == NULL || nodes == NULL || plan == NULL ||
-        entry_count == NULL || maximum_route_entries == NULL) {
-        return MINIMAX_H3_INVALID_ARGUMENT;
-    }
-    for (leaf = 0u; leaf < plan->leaf_count; ++leaf) {
-        route_writer writer = {NULL, 0u, 0u};
-        minimax_h3_status status = build_one_route(
-            geometry, layout, nodes, plan, leaf, &writer);
-        if (status != MINIMAX_H3_OK) return status;
-        if (!checked_add_size(total, writer.count, &total)) {
-            return MINIMAX_H3_OVERFLOW;
-        }
-        if (writer.count > maximum) maximum = writer.count;
-    }
-    *entry_count = total;
-    *maximum_route_entries = maximum;
-    return MINIMAX_H3_OK;
+    return route_entry_count_with_builder(
+        geometry, layout, nodes, plan, build_one_route, entry_count,
+        maximum_route_entries);
 }
 
 minimax_h3_status minimax_h3_m3_tree_routes_make(
@@ -489,26 +600,35 @@ minimax_h3_status minimax_h3_m3_tree_routes_make(
     size_t offset_capacity,
     uint32_t *entries,
     size_t entry_capacity) {
-    route_writer writer = {entries, entry_capacity, 0u};
-    size_t leaf;
+    return routes_make_with_builder(
+        geometry, layout, nodes, plan, build_one_route, offsets,
+        offset_capacity, entries, entry_capacity);
+}
 
-    if (geometry == NULL || layout == NULL || nodes == NULL || plan == NULL ||
-        offsets == NULL || entries == NULL) {
-        return MINIMAX_H3_INVALID_ARGUMENT;
-    }
-    if (offset_capacity < plan->leaf_count + 1u) {
-        return MINIMAX_H3_INSUFFICIENT_CAPACITY;
-    }
-    for (leaf = 0u; leaf < plan->leaf_count; ++leaf) {
-        minimax_h3_status status;
-        if (writer.count > UINT32_MAX) return MINIMAX_H3_OVERFLOW;
-        offsets[leaf] = (uint32_t)writer.count;
-        status = build_one_route(geometry, layout, nodes, plan, leaf, &writer);
-        if (status != MINIMAX_H3_OK) return status;
-    }
-    if (writer.count > UINT32_MAX) return MINIMAX_H3_OVERFLOW;
-    offsets[plan->leaf_count] = (uint32_t)writer.count;
-    return MINIMAX_H3_OK;
+minimax_h3_status minimax_h3_m3_tree_frame_safe_route_entry_count(
+    const minimax_h3_geometry *geometry,
+    const minimax_h3_t2va_layout *layout,
+    const minimax_h3_m3_tree_node *nodes,
+    const minimax_h3_m3_tree_plan *plan,
+    size_t *entry_count,
+    size_t *maximum_route_entries) {
+    return route_entry_count_with_builder(
+        geometry, layout, nodes, plan, build_one_frame_safe_route,
+        entry_count, maximum_route_entries);
+}
+
+minimax_h3_status minimax_h3_m3_tree_frame_safe_routes_make(
+    const minimax_h3_geometry *geometry,
+    const minimax_h3_t2va_layout *layout,
+    const minimax_h3_m3_tree_node *nodes,
+    const minimax_h3_m3_tree_plan *plan,
+    uint32_t *offsets,
+    size_t offset_capacity,
+    uint32_t *entries,
+    size_t entry_capacity) {
+    return routes_make_with_builder(
+        geometry, layout, nodes, plan, build_one_frame_safe_route, offsets,
+        offset_capacity, entries, entry_capacity);
 }
 
 minimax_h3_status minimax_h3_m3_tree_query_block_count(
@@ -557,7 +677,7 @@ minimax_h3_status minimax_h3_m3_tree_query_blocks_make(
         if (count > 8u) count = 8u;
         blocks[block].first_row = (uint32_t)row;
         blocks[block].row_count = (uint16_t)count;
-        blocks[block].route_index = 0u;
+        blocks[block].route_index = (uint32_t)plan->leaf_count;
         ++block;
     }
     for (leaf = 0u; leaf < plan->leaf_count; ++leaf) {

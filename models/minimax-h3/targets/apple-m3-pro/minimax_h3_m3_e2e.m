@@ -203,6 +203,9 @@ typedef struct {
 
 typedef struct {
     int enabled;
+    int leaf_summaries_only;
+    uint32_t approximate_step_mask;
+    uint64_t approximate_layer_mask;
     h3_tree_parameters parameters;
     uint32_t query_block_count;
     uint32_t summary_node_count;
@@ -1227,10 +1230,43 @@ static int h3_tree_runtime_build(
         *runtime = result;
         return 0;
     }
-    if (strcmp(mode, "1") != 0 && strcmp(mode, "conservative") != 0) {
+    if (strcmp(mode, "1") != 0 && strcmp(mode, "conservative") != 0 &&
+        strcmp(mode, "quality") != 0) {
         e2e_error(error, error_capacity,
-                  "MINIMAX_H3_TREE_ATTENTION must be 0, 1 or conservative");
+                  "MINIMAX_H3_TREE_ATTENTION must be 0, 1, conservative or quality");
         return 2;
+    }
+    const int frame_safe = strcmp(mode, "quality") == 0;
+    uint32_t approximate_step_mask = frame_safe ? UINT32_C(0x8) : UINT32_MAX;
+    uint64_t approximate_layer_mask = frame_safe
+        ? (UINT64_C(0x3ff) << 40u)
+        : UINT64_MAX;
+    if (frame_safe) {
+        const char *step_mask_text = getenv("MINIMAX_H3_TREE_STEP_MASK");
+        const char *layer_mask_text = getenv("MINIMAX_H3_TREE_LAYER_MASK");
+        char *end = NULL;
+        if (step_mask_text != NULL && step_mask_text[0] != '\0') {
+            errno = 0;
+            unsigned long parsed = strtoul(step_mask_text, &end, 0);
+            if (errno != 0 || end == step_mask_text || *end != '\0' ||
+                parsed > UINT32_MAX) {
+                e2e_error(error, error_capacity,
+                          "MINIMAX_H3_TREE_STEP_MASK is not a uint32 mask");
+                return 2;
+            }
+            approximate_step_mask = (uint32_t)parsed;
+        }
+        if (layer_mask_text != NULL && layer_mask_text[0] != '\0') {
+            errno = 0;
+            unsigned long long parsed = strtoull(layer_mask_text, &end, 0);
+            if (errno != 0 || end == layer_mask_text || *end != '\0') {
+                e2e_error(error, error_capacity,
+                          "MINIMAX_H3_TREE_LAYER_MASK is not a uint64 mask");
+                return 2;
+            }
+            approximate_layer_mask = (uint64_t)parsed &
+                ((UINT64_C(1) << 50u) - UINT64_C(1));
+        }
     }
 
     minimax_h3_geometry geometry;
@@ -1271,9 +1307,13 @@ static int h3_tree_runtime_build(
     if (nodes == NULL ||
         minimax_h3_m3_tree_plan_make(&geometry, &layout, nodes, node_count,
                                      &plan) != MINIMAX_H3_OK ||
-        minimax_h3_m3_tree_route_entry_count(
-            &geometry, &layout, nodes, &plan, &route_entry_count,
-            &maximum_route_entries) != MINIMAX_H3_OK ||
+        (frame_safe
+             ? minimax_h3_m3_tree_frame_safe_route_entry_count(
+                   &geometry, &layout, nodes, &plan, &route_entry_count,
+                   &maximum_route_entries)
+             : minimax_h3_m3_tree_route_entry_count(
+                   &geometry, &layout, nodes, &plan, &route_entry_count,
+                   &maximum_route_entries)) != MINIMAX_H3_OK ||
         plan.exact_count > UINT32_MAX || plan.leaf_count > UINT32_MAX ||
         plan.node_count > UINT32_MAX) {
         e2e_error(error, error_capacity, "cannot compile H3 tree routes");
@@ -1284,17 +1324,21 @@ static int h3_tree_runtime_build(
         e2e_error(error, error_capacity, "H3 tree query plan is too large");
         goto cleanup;
     }
-    route_offsets = calloc(plan.leaf_count + 1u, sizeof(*route_offsets));
+    route_offsets = calloc(plan.leaf_count + 2u, sizeof(*route_offsets));
     route_entries = calloc(route_entry_count, sizeof(*route_entries));
     logical_to_physical = calloc(geometry.sequence_rows,
                                  sizeof(*logical_to_physical));
     query_blocks = calloc(query_block_count, sizeof(*query_blocks));
     if (route_offsets == NULL || route_entries == NULL ||
         logical_to_physical == NULL || query_blocks == NULL ||
-        minimax_h3_m3_tree_routes_make(
-            &geometry, &layout, nodes, &plan, route_offsets,
-            plan.leaf_count + 1u, route_entries, route_entry_count) !=
-            MINIMAX_H3_OK) {
+        (frame_safe
+             ? minimax_h3_m3_tree_frame_safe_routes_make(
+                   &geometry, &layout, nodes, &plan, route_offsets,
+                   plan.leaf_count + 2u, route_entries, route_entry_count)
+             : minimax_h3_m3_tree_routes_make(
+                   &geometry, &layout, nodes, &plan, route_offsets,
+                   plan.leaf_count + 2u, route_entries,
+                   route_entry_count)) != MINIMAX_H3_OK) {
         e2e_error(error, error_capacity, "cannot materialize H3 tree routes");
         goto cleanup;
     }
@@ -1310,7 +1354,7 @@ static int h3_tree_runtime_build(
             query_blocks[block++] = (h3_query_block_gpu) {
                 .first_row = (uint32_t)row,
                 .row_count = (uint32_t)count,
-                .route_index = 0u,
+                .route_index = (uint32_t)plan.leaf_count,
             };
         }
         for (size_t leaf = 0u; leaf < plan.leaf_count; ++leaf) {
@@ -1373,7 +1417,7 @@ static int h3_tree_runtime_build(
                      options:MTLResourceStorageModeShared];
     result.route_offsets = [metal->device
         newBufferWithBytes:route_offsets
-                      length:(plan.leaf_count + 1u) * sizeof(uint32_t)
+                      length:(plan.leaf_count + 2u) * sizeof(uint32_t)
                      options:MTLResourceStorageModeShared];
     result.route_entries = [metal->device
         newBufferWithBytes:route_entries
@@ -1462,13 +1506,20 @@ static int h3_tree_runtime_build(
     result.temporal_node_start = (uint32_t)plan.temporal_node_start;
     result.temporal_node_count = (uint32_t)plan.temporal_node_count;
     result.root_index = (uint32_t)plan.root_index;
+    result.leaf_summaries_only = frame_safe;
+    result.approximate_step_mask = approximate_step_mask;
+    result.approximate_layer_mask = approximate_layer_mask;
     result.enabled = 1;
     fprintf(stderr,
-            "stage=tree-precompile rows=%zu exact_rows=%zu nodes=%zu "
+            "stage=tree-precompile profile=%s rows=%zu exact_rows=%zu nodes=%zu "
             "query_blocks=%zu route_entries=%zu max_route=%zu "
+            "step_mask=0x%08x layer_mask=0x%013llx "
             "tensor_summary_bytes=%zu\n",
-            geometry.sequence_rows, plan.exact_count, plan.node_count,
+            frame_safe ? "quality" : "hierarchical", geometry.sequence_rows,
+            plan.exact_count, plan.node_count,
             query_block_count, route_entry_count, maximum_route_entries,
+            approximate_step_mask,
+            (unsigned long long)approximate_layer_mask,
             tensor_bytes * 4u + summary_bytes * 2u);
     fflush(stderr);
     *runtime = result;
@@ -1523,24 +1574,26 @@ static void h3_tree_attention_encode(
                                                1u, 1u)
                 threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
 
-    [encoder setComputePipelineState:metal->h3_tree_parent_summary];
-    parameters.aggregate_start = tree->frame_node_start;
-    parameters.aggregate_count = tree->frame_node_count;
-    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
-    [encoder dispatchThreadgroups:
-        MTLSizeMake((size_t)tree->frame_node_count * 56u, 1u, 1u)
-                threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
-    parameters.aggregate_start = tree->temporal_node_start;
-    parameters.aggregate_count = tree->temporal_node_count;
-    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
-    [encoder dispatchThreadgroups:
-        MTLSizeMake((size_t)tree->temporal_node_count * 56u, 1u, 1u)
-                threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
-    parameters.aggregate_start = tree->root_index;
-    parameters.aggregate_count = 1u;
-    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
-    [encoder dispatchThreadgroups:MTLSizeMake(56u, 1u, 1u)
-                threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
+    if (!tree->leaf_summaries_only) {
+        [encoder setComputePipelineState:metal->h3_tree_parent_summary];
+        parameters.aggregate_start = tree->frame_node_start;
+        parameters.aggregate_count = tree->frame_node_count;
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
+        [encoder dispatchThreadgroups:
+            MTLSizeMake((size_t)tree->frame_node_count * 56u, 1u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
+        parameters.aggregate_start = tree->temporal_node_start;
+        parameters.aggregate_count = tree->temporal_node_count;
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
+        [encoder dispatchThreadgroups:
+            MTLSizeMake((size_t)tree->temporal_node_count * 56u, 1u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
+        parameters.aggregate_start = tree->root_index;
+        parameters.aggregate_count = 1u;
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
+        [encoder dispatchThreadgroups:MTLSizeMake(56u, 1u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
+    }
 
     parameters = tree->parameters;
     [encoder setComputePipelineState:metal->h3_tree_attention_mma64];
@@ -1576,8 +1629,16 @@ static void h3_dense_attention_mma64(h3_metal *metal,
                                      id<MTLBuffer> key,
                                      id<MTLBuffer> value,
                                      id<MTLBuffer> output,
-                                     uint32_t rows) {
-    if (tree != NULL && tree->enabled) {
+                                     uint32_t rows,
+                                     unsigned layer,
+                                     uint32_t step) {
+    const int approximate =
+        tree != NULL && tree->enabled &&
+        (!tree->leaf_summaries_only ||
+         (step < 32u && layer < 64u &&
+          (tree->approximate_step_mask & (UINT32_C(1) << step)) != 0u &&
+          (tree->approximate_layer_mask & (UINT64_C(1) << layer)) != 0u));
+    if (approximate) {
         h3_tree_attention_encode(tree, metal, encoder, query, key, value,
                                  output, rows);
         return;
@@ -2304,7 +2365,7 @@ static int h3_denoise_block(h3_remote_image *weights,
         return 1;
 
     h3_dense_attention_mma64(metal, tree, encoder, query, key, value,
-                             attended, rows);
+                             attended, rows, layer, step);
     snprintf(name, sizeof(name), "%s.attn.out_proj", prefix);
     if (h3_q4_linear_lora(weights, adapter, metal, encoder, name, attended,
                           lora_scratch, attention_output, rows, error,

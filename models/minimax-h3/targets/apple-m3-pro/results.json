@@ -725,6 +725,106 @@
         "contact_sheet": "artifacts/anime-room-864x480-turbo4/tree-conservative-contact-sheet.png"
       },
       "quality_status": "media structure passed, visual-quality gate regressed; experimental opt-in only and not a replacement for exact attention"
+    },
+    {
+      "name": "experimental-480p-turbo4-frame-safe-late-layer-attention",
+      "status": "single-prompt-ghosting-pass-exact-parity-open",
+      "n_to_n": true,
+      "default_runtime": false,
+      "runtime_switch": "MINIMAX_H3_TREE_ATTENTION=quality",
+      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
+      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+      "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
+      "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
+      "geometry": {"width": 864, "height": 480, "frames": 124, "fps": 24},
+      "seed": 42,
+      "sampling": {"profile": "turbo-v4-step600-ema", "evaluations": 4},
+      "prompt_tokens": 240,
+      "sequence_rows": 15639,
+      "compiled_tree": {
+        "profile": "frame-safe",
+        "exact_conditioning_rows": 654,
+        "nodes": 342,
+        "query_blocks": 307,
+        "route_entries": 1281310,
+        "maximum_route_entries": 14985,
+        "step_mask": "0x00000008",
+        "layer_mask": "0x3ff0000000000",
+        "approximate_attention_calls": 10,
+        "total_attention_calls": 200,
+        "tensor_and_summary_bytes": 906608640,
+        "runtime_summary_policy": "rebuild per-frame leaf K/V summaries only; conditioning and 190 of 200 H3 calls remain exact"
+      },
+      "same_run_late_layer_groups": {
+        "exact_reference_seconds": 92.597490,
+        "frame_safe_seconds": 70.313368,
+        "delta_seconds": -22.284122,
+        "speedup": 1.316926,
+        "reduction_percent": 24.065579
+      },
+      "durations_seconds": {
+        "tokenizer": 0.009389,
+        "metal_setup": 0.040799,
+        "text_download": 4.308655,
+        "text_encode": 4.639853,
+        "transformer_download": 0.0,
+        "turbo_compile": 0.869813,
+        "rope_precompute": 0.001027,
+        "denoise": 1831.966125,
+        "video_download": 0.0,
+        "video_precompute": 0.007414,
+        "video_decode": 481.876037,
+        "audio_download": 0.0,
+        "audio_decode": 13.649289,
+        "mux": 0.535732,
+        "other_measured_runtime": 6.830095,
+        "total": 2344.734228
+      },
+      "comparison_to_earlier_exact_run": {
+        "total_delta_seconds": -73.974009,
+        "runtime_speedup": 1.031549,
+        "runtime_reduction_percent": 3.058410,
+        "denoise_delta_seconds": -66.154372,
+        "denoise_speedup": 1.036111,
+        "denoise_reduction_percent": 3.485257,
+        "warning": "the complete-run difference includes run-to-run variation; use same_run_late_layer_groups to attribute route speed",
+        "peak_footprint_delta_bytes": 481181824,
+        "peak_footprint_increase_percent": 10.835658
+      },
+      "peak_footprint_bytes": 4921907392,
+      "swaps": 0,
+      "output": {
+        "local_run_path": "tmp/minimax-h3-runs/20260817-480p-frame-safe-quality/minimax-h3.mp4",
+        "sha256": "1b648fb8a59aa55998fadf6c122382c2bc827f70477122150823173d4351db33",
+        "bytes": 887547,
+        "duration_seconds": 5.167,
+        "video_codec": "H.264",
+        "video_frames_declared": 124,
+        "video_frames_decoded": 124,
+        "video_source_sha256": "632582d84fd051a4ed5c36a59bb2642e30ae4a609f0c0478882816b333b64265",
+        "audio_codec": "AAC",
+        "audio_sample_rate_hz": 32000,
+        "audio_channels": 2,
+        "audio_source_sha256": "e890f859b7fd528458896e98465e9c6c9210d7c1ee501edbe64aa3922d771a01"
+      },
+      "verification": {
+        "flat_frames": 0,
+        "minimum_luma_range": 181,
+        "mean_luma_range": 215.596774,
+        "maximum_luma_range": 241,
+        "adjacent_frame_differences": 123,
+        "adjacent_difference_yavg_min": 0.042564,
+        "adjacent_difference_yavg_mean": 4.283097,
+        "adjacent_difference_yavg_max": 85.256500,
+        "scene_changes_seconds": [1.541667, 2.583333, 3.916667],
+        "comparison_to_exact_video": {"psnr_db": 32.384649, "ssim": 0.932134},
+        "blur_mean": 5.7687158,
+        "visual_review": "same four shots and scene boundaries as exact; no double exposure in uniform or transition samples",
+        "contact_sheet": "artifacts/anime-room-864x480-turbo4/frame-safe-quality-contact-sheet.png",
+        "transition_sheet": "artifacts/anime-room-864x480-turbo4/frame-safe-quality-transitions.png"
+      },
+      "quality_status": "single-prompt temporal and ghosting gate passed; exact numeric parity, audio listening and multi-prompt quality gate remain open"
     }
   ],
   "commands": {
@@ -733,6 +833,7 @@
     "projection": "make build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib 15485 5 2",
     "n_to_n": "MINIMAX_H3_TEXT_ENCODER_URL=file://$PWD/tmp/minimax-h3-text-encoder.safetensors build/minimax-h3-m3-e2e 'a jeweled hummingbird hovering beside a red orchid, cinematic natural light' models/minimax-h3/targets/apple-m3-pro/artifacts/hummingbird-128x128-euler30 128 128 22 314159",
     "corrected_480p": "MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt",
-    "experimental_tree_480p": "MINIMAX_H3_TREE_ATTENTION=conservative MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-tree-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt"
+    "experimental_tree_480p": "MINIMAX_H3_TREE_ATTENTION=conservative MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-tree-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt",
+    "frame_safe_quality_480p": "MINIMAX_H3_TREE_ATTENTION=quality MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-frame-safe-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt"
   }
 }

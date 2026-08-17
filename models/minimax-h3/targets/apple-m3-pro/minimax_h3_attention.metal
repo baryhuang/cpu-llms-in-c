@@ -2481,7 +2481,7 @@ kernel void minimax_h3_f32_to_bf16(
 kernel void minimax_h3_reorder_bf16_to_f16(
     device const bfloat *input [[buffer(0)]],
     device const uint *logical_to_physical [[buffer(1)]],
-    device half *output [[buffer(2)]],
+    device bfloat *output [[buffer(2)]],
     constant uint &row_count [[buffer(3)]],
     uint index [[thread_position_in_grid]]) {
     const uint row_width = kH3HeadCount * kH3HeadDim;
@@ -2490,11 +2490,11 @@ kernel void minimax_h3_reorder_bf16_to_f16(
     uint logical_row = index / row_width;
     uint column = index - logical_row * row_width;
     uint physical_row = logical_to_physical[logical_row];
-    output[physical_row * row_width + column] = half(float(input[index]));
+    output[physical_row * row_width + column] = input[index];
 }
 
 kernel void minimax_h3_reorder_f16_to_bf16(
-    device const half *input [[buffer(0)]],
+    device const bfloat *input [[buffer(0)]],
     device const uint *logical_to_physical [[buffer(1)]],
     device bfloat *output [[buffer(2)]],
     constant uint &row_count [[buffer(3)]],
@@ -2505,16 +2505,16 @@ kernel void minimax_h3_reorder_f16_to_bf16(
     uint logical_row = index / row_width;
     uint column = index - logical_row * row_width;
     uint physical_row = logical_to_physical[logical_row];
-    output[index] = bfloat(float(input[physical_row * row_width + column]));
+    output[index] = input[physical_row * row_width + column];
 }
 
 kernel void minimax_h3_build_leaf_summaries(
-    device const half4 *keys [[buffer(0)]],
-    device const half4 *values [[buffer(1)]],
+    device const bfloat4 *keys [[buffer(0)]],
+    device const bfloat4 *values [[buffer(1)]],
     device const H3TreeNodeGPU *nodes [[buffer(2)]],
     constant H3TreeParameters &parameters [[buffer(3)]],
-    device half4 *summary_keys [[buffer(4)]],
-    device half4 *summary_values [[buffer(5)]],
+    device bfloat4 *summary_keys [[buffer(4)]],
+    device bfloat4 *summary_values [[buffer(5)]],
     uint lane [[thread_index_in_simdgroup]],
     uint3 group [[threadgroup_position_in_grid]]) {
     uint flat = group.x;
@@ -2534,17 +2534,17 @@ kernel void minimax_h3_build_leaf_summaries(
     }
     float inverse_count = 1.0f / float(leaf.token_count);
     uint output = (leaf_index * kH3HeadCount + head) * kH3HeadHalf4 + lane;
-    summary_keys[output] = half4(key_sum * inverse_count);
-    summary_values[output] = half4(value_sum * inverse_count);
+    summary_keys[output] = bfloat4(key_sum * inverse_count);
+    summary_values[output] = bfloat4(value_sum * inverse_count);
 }
 
 kernel void minimax_h3_build_parent_summaries(
-    device const half4 *input_keys [[buffer(0)]],
-    device const half4 *input_values [[buffer(1)]],
+    device const bfloat4 *input_keys [[buffer(0)]],
+    device const bfloat4 *input_values [[buffer(1)]],
     device const H3TreeNodeGPU *nodes [[buffer(2)]],
     constant H3TreeParameters &parameters [[buffer(3)]],
-    device half4 *summary_keys [[buffer(4)]],
-    device half4 *summary_values [[buffer(5)]],
+    device bfloat4 *summary_keys [[buffer(4)]],
+    device bfloat4 *summary_values [[buffer(5)]],
     uint lane [[thread_index_in_simdgroup]],
     uint3 group [[threadgroup_position_in_grid]]) {
     (void)input_keys;
@@ -2567,8 +2567,8 @@ kernel void minimax_h3_build_parent_summaries(
     }
     float inverse_count = 1.0f / float(node.token_count);
     uint output = (node_index * kH3HeadCount + head) * kH3HeadHalf4 + lane;
-    summary_keys[output] = half4(key_sum * inverse_count);
-    summary_values[output] = half4(value_sum * inverse_count);
+    summary_keys[output] = bfloat4(key_sum * inverse_count);
+    summary_values[output] = bfloat4(value_sum * inverse_count);
 }
 
 inline void h3_online_attention_update(
@@ -2873,26 +2873,26 @@ kernel void minimax_h3_hierarchical_attention_mma(
 }
 
 kernel void minimax_h3_hierarchical_attention_mma64(
-    device const half *queries [[buffer(0)]],
-    device const half *keys [[buffer(1)]],
-    device const half *values [[buffer(2)]],
-    device const half *summary_keys [[buffer(3)]],
-    device const half *summary_values [[buffer(4)]],
+    device const bfloat *queries [[buffer(0)]],
+    device const bfloat *keys [[buffer(1)]],
+    device const bfloat *values [[buffer(2)]],
+    device const bfloat *summary_keys [[buffer(3)]],
+    device const bfloat *summary_values [[buffer(4)]],
     device const float *summary_log_counts [[buffer(5)]],
     device const uint *route_offsets [[buffer(6)]],
     device const uint *route_entries [[buffer(7)]],
     constant H3TreeParameters &parameters [[buffer(8)]],
-    device half *output [[buffer(9)]],
+    device bfloat *output [[buffer(9)]],
     device const H3QueryBlockGPU *query_blocks [[buffer(10)]],
     device float *lse_output [[buffer(11)]],
     uint tid [[thread_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]],
     uint simdgroup_index [[simdgroup_index_in_threadgroup]],
     uint3 group [[threadgroup_position_in_grid]]) {
-    threadgroup half key_tile[8 * kH3HeadDim];
-    threadgroup half value_tile[8 * kH3HeadDim];
+    threadgroup bfloat key_tile[8 * kH3HeadDim];
+    threadgroup float value_tile[8 * kH3HeadDim];
     threadgroup float score_tiles[8 * 8 * 8];
-    threadgroup half probability_tiles[8 * 8 * 8];
+    threadgroup float probability_tiles[8 * 8 * 8];
     threadgroup float row_maximum[64];
     threadgroup float row_denominator[64];
     threadgroup float key_log_weight[8];
@@ -2904,11 +2904,11 @@ kernel void minimax_h3_hierarchical_attention_mma64(
     uint route_count = route_end - route_start;
     uint candidate_count = parameters.exact_rows + route_count;
     uint candidate_blocks = (candidate_count + 7u) / 8u;
-    simdgroup_half8x8 query_fragments[16];
+    simdgroup_bfloat8x8 query_fragments[16];
 
     for (uint dimension_fragment = 0u; dimension_fragment < 16u;
          ++dimension_fragment) {
-        device const half *query_pointer =
+        device const bfloat *query_pointer =
             queries + ((query_block.first_row + query_base) * kH3HeadCount +
                        head) * kH3HeadDim + dimension_fragment * 8u;
         if (query_base < query_block.row_count) {
@@ -2916,7 +2916,7 @@ kernel void minimax_h3_hierarchical_attention_mma64(
                            kH3HeadCount * kH3HeadDim);
         } else {
             query_fragments[dimension_fragment] =
-                make_filled_simdgroup_matrix<half, 8, 8>(0.0h);
+                make_filled_simdgroup_matrix<bfloat, 8, 8>(bfloat(0.0f));
         }
     }
     if (tid < 64u) {
@@ -2942,7 +2942,7 @@ kernel void minimax_h3_hierarchical_attention_mma64(
                     (index * kH3HeadCount + head) * kH3HeadDim + dimension;
                 key_tile[linear] = summary ? summary_keys[source] : keys[source];
             } else {
-                key_tile[linear] = 0.0h;
+                key_tile[linear] = bfloat(0.0f);
             }
         }
         if (tid < 8u) {
@@ -2963,7 +2963,7 @@ kernel void minimax_h3_hierarchical_attention_mma64(
             make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
         for (uint dimension_fragment = 0u; dimension_fragment < 16u;
              ++dimension_fragment) {
-            simdgroup_half8x8 key_fragment;
+            simdgroup_bfloat8x8 key_fragment;
             simdgroup_load(key_fragment,
                            key_tile + dimension_fragment * 8u, kH3HeadDim,
                            0u, true);
@@ -3009,10 +3009,10 @@ kernel void minimax_h3_hierarchical_attention_mma64(
     }
     simdgroup_barrier(mem_flags::mem_threadgroup);
 
-    simdgroup_half8x8 accumulators[16];
+    simdgroup_float8x8 accumulators[16];
     for (uint fragment_index = 0u; fragment_index < 16u; ++fragment_index) {
         accumulators[fragment_index] =
-            make_filled_simdgroup_matrix<half, 8, 8>(0.0h);
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
     }
     for (uint candidate_block = 0u; candidate_block < candidate_blocks;
          ++candidate_block) {
@@ -3033,8 +3033,8 @@ kernel void minimax_h3_hierarchical_attention_mma64(
                 value_tile[linear] =
                     summary ? summary_values[source] : values[source];
             } else {
-                key_tile[linear] = 0.0h;
-                value_tile[linear] = 0.0h;
+                key_tile[linear] = bfloat(0.0f);
+                value_tile[linear] = 0.0f;
             }
         }
         if (tid < 8u) {
@@ -3055,7 +3055,7 @@ kernel void minimax_h3_hierarchical_attention_mma64(
             make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
         for (uint dimension_fragment = 0u; dimension_fragment < 16u;
              ++dimension_fragment) {
-            simdgroup_half8x8 key_fragment;
+            simdgroup_bfloat8x8 key_fragment;
             simdgroup_load(key_fragment,
                            key_tile + dimension_fragment * 8u, kH3HeadDim,
                            0u, true);
@@ -3067,7 +3067,7 @@ kernel void minimax_h3_hierarchical_attention_mma64(
             score_tiles + simdgroup_index * 64u;
         simdgroup_store(scores, score_tile, 8u);
         simdgroup_barrier(mem_flags::mem_threadgroup);
-        threadgroup half *probability_tile =
+        threadgroup float *probability_tile =
             probability_tiles + simdgroup_index * 64u;
         for (uint probability = lane; probability < 64u; probability += 32u) {
             uint query_in_simdgroup = probability / 8u;
@@ -3078,19 +3078,19 @@ kernel void minimax_h3_hierarchical_attention_mma64(
                 candidate < candidate_count) {
                 float score = score_tile[probability] * kH3AttentionScale +
                               key_log_weight[key_in_block];
-                probability_tile[probability] = half(
+                probability_tile[probability] =
                     exp(score - row_maximum[local_query]) /
-                    row_denominator[local_query]);
+                    row_denominator[local_query];
             } else {
-                probability_tile[probability] = 0.0h;
+                probability_tile[probability] = 0.0f;
             }
         }
         simdgroup_barrier(mem_flags::mem_threadgroup);
-        simdgroup_half8x8 probability_fragment;
+        simdgroup_float8x8 probability_fragment;
         simdgroup_load(probability_fragment, probability_tile, 8u);
         for (uint fragment_index = 0u; fragment_index < 16u;
              ++fragment_index) {
-            simdgroup_half8x8 value_fragment;
+            simdgroup_float8x8 value_fragment;
             simdgroup_load(value_fragment,
                            value_tile + fragment_index * 8u, kH3HeadDim);
             simdgroup_multiply_accumulate(
@@ -3100,22 +3100,31 @@ kernel void minimax_h3_hierarchical_attention_mma64(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    if (query_base < query_block.row_count) {
-        device half *output_pointer =
-            output + ((query_block.first_row + query_base) * kH3HeadCount +
-                      head) * kH3HeadDim;
-        for (uint fragment_index = 0u; fragment_index < 16u;
-             ++fragment_index) {
-            simdgroup_store(accumulators[fragment_index],
-                            output_pointer + fragment_index * 8u,
-                            kH3HeadCount * kH3HeadDim);
+    for (uint fragment_index = 0u; fragment_index < 16u;
+         ++fragment_index) {
+        threadgroup float *spill = score_tiles + simdgroup_index * 64u;
+        simdgroup_store(accumulators[fragment_index], spill, 8u);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint linear = tid; linear < 512u; linear += 256u) {
+            uint output_simdgroup = linear / 64u;
+            uint in_tile = linear - output_simdgroup * 64u;
+            uint query_in_simdgroup = in_tile / 8u;
+            uint column = in_tile - query_in_simdgroup * 8u;
+            uint local_query = output_simdgroup * 8u + query_in_simdgroup;
+            if (local_query < query_block.row_count) {
+                uint destination =
+                    ((query_block.first_row + local_query) * kH3HeadCount +
+                     head) * kH3HeadDim + fragment_index * 8u + column;
+                output[destination] = bfloat(score_tiles[linear]);
+            }
         }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 }
 
 kernel void minimax_h3_copy_first_output(
-    device const half *input [[buffer(0)]],
-    device half *output [[buffer(1)]],
+    device const bfloat *input [[buffer(0)]],
+    device bfloat *output [[buffer(1)]],
     uint index [[thread_position_in_grid]]) {
     if (index < kH3HeadDim) output[index] = input[index];
 }

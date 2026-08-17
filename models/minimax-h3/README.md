@@ -4,11 +4,13 @@ Status: the portable C graph rules and Apple M3 Pro runtime are implemented
 through tokenizer, streamed 50-layer Qwen conditioner, 50-block H3 denoiser,
 Video VAE, Audio VAE and media mux. The exact-attention real-weight
 864×480×124 Turbo-4 run completed in 2,418.708 seconds with a 4.136 GiB
-runtime peak physical footprint and zero swaps. A compiled-tree attention
-experiment completed the same N-to-N workload in 1,489.401 seconds with a
-4.592 GiB peak. It preserved the four requested shot categories but increased
-ghosting and temporal instability, so exact attention remains the default.
-Official full-precision parity and the speed target remain open.
+runtime peak physical footprint and zero swaps. The aggressive compiled tree
+reached 1,489.401 seconds but failed the visual gate. A frame-safe late-layer
+profile completed in 2,344.734 seconds, kept the exact run's three scene cuts
+and removed the rejected tree's ghosting signature; its exact-video
+differential is PSNR 32.385 dB / SSIM 0.932134. Exact attention remains the
+default until the quality result repeats across more prompts. Official
+full-precision parity and the speed target remain open.
 
 | N-to-N milestone | Affected stage | Affected-stage time before → after | 480p N-to-N time | Why time changed | Evidence |
 |---|---|---:|---:|---|---|
@@ -21,12 +23,20 @@ Official full-precision parity and the speed target remain open.
 | Current full validation | Full graph measurement; no new optimization | VAE: 528.169950 projected → **487.273811 s measured** (−40.896139); all other stages: 1,907.577705 → 1,931.434426 s (+23.856721) | **2,418.708237 s** (−17.039418 vs projection; **3.843×** vs baseline) | Replace one-task linear scaling with a complete measurement; the net projection difference is not claimed as optimization | measured complete run |
 | Exact BF16 direct output + four-layer H3 command groups | H3 dense-attention storage and command submission | Attention: 5,024.974042 → 5,012.634167 ms per call; scratch: 448,401,408 → 0 B; 128² smoke denoise: 17.407398 → 17.147884 s | full 480p N-to-N not remeasured; no projection claimed | Spill FP32 fragments into otherwise dead score-tile storage, write BF16 directly, and wait once per four layers | 112,100,352/112,100,352 irregular-input BF16 values identical; smoke MP4/audio hashes identical |
 | Experimental compiled tree attention | H3 dense attention | **1,898.120497 → 974.544700 s measured** (−923.575797 s; 1.948×) | **1,489.401301 s** (−929.306936; **1.624×** vs exact run; **6.241×** vs baseline) | Compile fixed geometry into a row permutation, 342 summary nodes, 307 query blocks and 140,284 route entries; update only dynamic K/V summaries on Metal | measured complete N-to-N; functional pass, visual-quality regression; not default |
+| Frame-safe last-step/layers 40–49 | H3 attention in 10 of 200 block/evaluation calls | same-run late-layer groups **92.597490 → 70.313368 s** (−22.284122; 1.317×); complete denoise **1,898.120497 → 1,831.966125 s** versus the earlier run | **2,344.734228 s** (−73.974009; 1.032× versus earlier exact run) | Keep conditioning exact; use only per-frame leaf summaries; anchor the first three Turbo evaluations and layers 0–39 of the last evaluation to exact | measured complete N-to-N; exact three scene cuts retained; no reviewed transition ghosting; exact parity and prompt-suite gate open |
 
 The tree row is not an exact-model speedup claim. It changes the attention
 approximation and requires an explicit `MINIMAX_H3_TREE_ATTENTION=conservative`
 opt-in. It decoded 124/124 frames with zero flat frames, but scene detections
 increased from 3 to 10 and visual review found softer details and stronger
 transition ghosting.
+
+The frame-safe row is also approximate and requires
+`MINIMAX_H3_TREE_ATTENTION=quality`. Its schedule was selected by measured
+Turbo-step and ten-layer sensitivity scans, not assumed from long-schedule
+diffusion results. It uses step mask `0x8` and layer mask
+`0x3ff0000000000`. Override masks exist for calibration; they are not stable
+user-facing performance settings.
 
 ## Latest measured run breakdown
 

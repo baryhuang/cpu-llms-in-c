@@ -110,10 +110,11 @@ static id<MTLComputePipelineState> h3_pipeline(id<MTLDevice> device,
     return [device newComputePipelineStateWithFunction:function error:error];
 }
 
-static float h3_half_value(uint16_t bits) {
-    __fp16 value;
-    memcpy(&value, &bits, sizeof(value));
-    return (float)value;
+static float h3_bfloat_value(uint16_t bits) {
+    uint32_t expanded = (uint32_t)bits << 16u;
+    float value;
+    memcpy(&value, &expanded, sizeof(value));
+    return value;
 }
 
 static float h3_synthetic_value(size_t index, uint32_t seed) {
@@ -234,7 +235,7 @@ static float h3_reference_component(
         float score = 0.0f;
         size_t base = (index * H3_M3_HEADS) * H3_M3_HEAD_DIM;
         for (d = 0u; d < H3_M3_HEAD_DIM; ++d) {
-            float key = is_summary ? h3_half_value(summary_keys[base + d])
+            float key = is_summary ? h3_bfloat_value(summary_keys[base + d])
                                    : h3_synthetic_value(base + d,
                                                         H3_M3_K_SEED);
             score += q[d] * key;
@@ -242,7 +243,7 @@ static float h3_reference_component(
         score *= 0.08838834764831845f;
         if (is_summary) score += summary_log_counts[index];
         float value = is_summary
-                          ? h3_half_value(summary_values[base + dimension])
+                          ? h3_bfloat_value(summary_values[base + dimension])
                           : h3_synthetic_value(base + dimension, H3_M3_V_SEED);
         float next_maximum = fmaxf(maximum, score);
         float old_scale = expf(maximum - next_maximum);
@@ -427,7 +428,7 @@ int minimax_h3_m3_run_attention_benchmark(
         }
         queue = [device newCommandQueue];
         pipelines.initialize = h3_pipeline(device, library,
-                                            @"minimax_h3_initialize_half", &error);
+                                            @"minimax_h3_initialize_bf16", &error);
         pipelines.leaf_summary = h3_pipeline(
             device, library, @"minimax_h3_build_leaf_summaries", &error);
         pipelines.parent_summary = h3_pipeline(
@@ -673,7 +674,7 @@ int minimax_h3_m3_run_attention_benchmark(
                 dimension, route_offsets, route_entries,
                 summary_keys, summary_values,
                 buffers.summary_log_counts.contents);
-            float actual = h3_half_value(metal_output[dimension]);
+            float actual = h3_bfloat_value(metal_output[dimension]);
             float error_value = fabsf(reference - actual);
             if (error_value > measured.max_abs_error_first_head)
                 measured.max_abs_error_first_head = error_value;

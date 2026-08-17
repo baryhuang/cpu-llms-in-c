@@ -31,6 +31,10 @@ int main(void) {
     size_t maximum_route_entries;
     uint32_t *route_offsets;
     uint32_t *route_entries;
+    size_t frame_safe_route_entry_count;
+    size_t frame_safe_maximum_route_entries;
+    uint32_t *frame_safe_route_offsets;
+    uint32_t *frame_safe_route_entries;
     minimax_h3_m3_query_block *query_blocks;
     size_t query_block_count;
     size_t native_text_summary_count;
@@ -118,16 +122,16 @@ int main(void) {
     CHECK(minimax_h3_m3_tree_route_entry_count(
               &geometry, &layout, nodes, &plan, &route_entry_count,
               &maximum_route_entries) == MINIMAX_H3_OK);
-    CHECK(maximum_route_entries <= 548u);
-    route_offsets = calloc(plan.leaf_count + 1u, sizeof(*route_offsets));
+    CHECK(maximum_route_entries == geometry.video_rows);
+    route_offsets = calloc(plan.leaf_count + 2u, sizeof(*route_offsets));
     route_entries = calloc(route_entry_count, sizeof(*route_entries));
     CHECK(route_offsets != NULL && route_entries != NULL);
     if (route_offsets != NULL && route_entries != NULL) {
         CHECK(minimax_h3_m3_tree_routes_make(
                   &geometry, &layout, nodes, &plan, route_offsets,
-                  plan.leaf_count + 1u, route_entries, route_entry_count) ==
+                  plan.leaf_count + 2u, route_entries, route_entry_count) ==
               MINIMAX_H3_OK);
-        CHECK(route_offsets[plan.leaf_count] == route_entry_count);
+        CHECK(route_offsets[plan.leaf_count + 1u] == route_entry_count);
         for (leaf_index = 0u; leaf_index < plan.leaf_count; ++leaf_index) {
             size_t entry;
             size_t represented_video_rows = 0u;
@@ -146,6 +150,56 @@ int main(void) {
             }
             CHECK(represented_video_rows == geometry.video_rows);
         }
+        CHECK(route_offsets[plan.leaf_count + 1u] -
+                  route_offsets[plan.leaf_count] == geometry.video_rows);
+        for (size_t entry = route_offsets[plan.leaf_count];
+             entry < route_offsets[plan.leaf_count + 1u]; ++entry) {
+            CHECK(route_entries[entry] ==
+                  layout.video_start + entry - route_offsets[plan.leaf_count]);
+        }
+    }
+
+    CHECK(minimax_h3_m3_tree_frame_safe_route_entry_count(
+              &geometry, &layout, nodes, &plan,
+              &frame_safe_route_entry_count,
+              &frame_safe_maximum_route_entries) == MINIMAX_H3_OK);
+    CHECK(frame_safe_maximum_route_entries == geometry.video_rows);
+    frame_safe_route_offsets = calloc(plan.leaf_count + 2u,
+                                      sizeof(*frame_safe_route_offsets));
+    frame_safe_route_entries = calloc(frame_safe_route_entry_count,
+                                      sizeof(*frame_safe_route_entries));
+    CHECK(frame_safe_route_offsets != NULL &&
+          frame_safe_route_entries != NULL);
+    if (frame_safe_route_offsets != NULL &&
+        frame_safe_route_entries != NULL) {
+        CHECK(minimax_h3_m3_tree_frame_safe_routes_make(
+                  &geometry, &layout, nodes, &plan,
+                  frame_safe_route_offsets, plan.leaf_count + 2u,
+                  frame_safe_route_entries,
+                  frame_safe_route_entry_count) == MINIMAX_H3_OK);
+        CHECK(frame_safe_route_offsets[plan.leaf_count + 1u] ==
+              frame_safe_route_entry_count);
+        for (leaf_index = 0u; leaf_index < plan.leaf_count; ++leaf_index) {
+            size_t entry;
+            size_t represented_video_rows = 0u;
+            size_t exact_leaf_rows = 0u;
+            for (entry = frame_safe_route_offsets[leaf_index];
+                 entry < frame_safe_route_offsets[leaf_index + 1u]; ++entry) {
+                uint32_t encoded = frame_safe_route_entries[entry];
+                if ((encoded & MINIMAX_H3_M3_TREE_SUMMARY_ENTRY) != 0u) {
+                    size_t node = encoded & ~MINIMAX_H3_M3_TREE_SUMMARY_ENTRY;
+                    CHECK(node < plan.leaf_count);
+                    represented_video_rows += nodes[node].token_count;
+                } else {
+                    CHECK(encoded >= layout.video_start &&
+                          encoded < layout.sequence_rows);
+                    ++represented_video_rows;
+                    ++exact_leaf_rows;
+                }
+            }
+            CHECK(represented_video_rows == geometry.video_rows);
+            CHECK(exact_leaf_rows > 0u);
+        }
     }
 
     CHECK(minimax_h3_m3_tree_query_block_count(
@@ -161,7 +215,7 @@ int main(void) {
                   query_block_count) == MINIMAX_H3_OK);
         CHECK(query_blocks[0].first_row == 0u &&
               query_blocks[0].row_count == 8u &&
-              query_blocks[0].route_index == 0u);
+              query_blocks[0].route_index == plan.leaf_count);
         CHECK(query_blocks[62].first_row == 496u &&
               query_blocks[62].row_count == 4u);
         for (size_t query_block = 63u; query_block < query_block_count;
@@ -242,6 +296,8 @@ int main(void) {
     free(seen);
     free(route_offsets);
     free(route_entries);
+    free(frame_safe_route_offsets);
+    free(frame_safe_route_entries);
     free(query_blocks);
     free(native_route_offsets);
     free(native_route_entries);

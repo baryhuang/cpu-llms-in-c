@@ -98,7 +98,10 @@ minimax_h3_status minimax_h3_m3_tree_leaf_row(
  * Compile one locality seed route per video leaf. Each route partitions the
  * complete video domain into exact token rows and non-overlapping summary
  * nodes. Runtime centroid checks may replace these routes without changing the
- * attention ABI. Offsets has leaf_count + 1 entries.
+ * attention ABI. Video queries use routes [0, leaf_count). Conditioning
+ * queries use route leaf_count, which contains every video row exactly so
+ * joint text/audio state is never conditioned on an arbitrary video leaf.
+ * Offsets therefore has leaf_count + 2 entries.
  */
 minimax_h3_status minimax_h3_m3_tree_route_entry_count(
     const minimax_h3_geometry *geometry,
@@ -109,6 +112,32 @@ minimax_h3_status minimax_h3_m3_tree_route_entry_count(
     size_t *maximum_route_entries);
 
 minimax_h3_status minimax_h3_m3_tree_routes_make(
+    const minimax_h3_geometry *geometry,
+    const minimax_h3_t2va_layout *layout,
+    const minimax_h3_m3_tree_node *nodes,
+    const minimax_h3_m3_tree_plan *plan,
+    uint32_t *offsets,
+    size_t offset_capacity,
+    uint32_t *entries,
+    size_t entry_capacity);
+
+/*
+ * Quality-first route: never average keys or values across frames.  For every
+ * query leaf, the two nearest spatial leaves are expanded exactly in every
+ * latent frame; every other region remains a separate per-frame leaf
+ * summary.  The conditioning route is the same exact all-video route used by
+ * the hierarchical plan.  This costs more than the temporal tree but removes
+ * its cross-frame value mixing, the primary source of double exposure.
+ */
+minimax_h3_status minimax_h3_m3_tree_frame_safe_route_entry_count(
+    const minimax_h3_geometry *geometry,
+    const minimax_h3_t2va_layout *layout,
+    const minimax_h3_m3_tree_node *nodes,
+    const minimax_h3_m3_tree_plan *plan,
+    size_t *entry_count,
+    size_t *maximum_route_entries);
+
+minimax_h3_status minimax_h3_m3_tree_frame_safe_routes_make(
     const minimax_h3_geometry *geometry,
     const minimax_h3_t2va_layout *layout,
     const minimax_h3_m3_tree_node *nodes,

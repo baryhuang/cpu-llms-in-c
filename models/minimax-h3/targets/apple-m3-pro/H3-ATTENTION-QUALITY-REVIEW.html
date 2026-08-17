@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MiniMax-H3 frame-safe attention review</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 32px auto; max-width: 1180px; padding: 0 24px; color: #17202a; line-height: 1.45; }
+    h1, h2 { border-bottom: 2px solid #202a35; padding-bottom: 8px; }
+    table { border-collapse: collapse; width: 100%; margin: 14px 0 28px; }
+    th, td { border: 1px solid #c9d1d9; padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #eef2f6; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .pass { color: #137333; font-weight: 700; }
+    .open { color: #9a6700; font-weight: 700; }
+    code { background: #f2f4f7; padding: 1px 4px; }
+    img { display: block; width: 100%; height: auto; border: 1px solid #c9d1d9; margin: 12px 0 28px; }
+  </style>
+</head>
+<body>
+  <h1>MiniMax-H3 frame-safe attention review</h1>
+  <p><span class="pass">Ghosting gate: pass on the pinned 480p prompt.</span>
+     <span class="open">Exact parity and multi-prompt gate: open.</span>
+     Exact attention remains the default.</p>
+
+  <h2>1. Input and execution</h2>
+  <table>
+    <tr><th>Field</th><th>Value</th></tr>
+    <tr><td>Prompt</td><td><a href="artifacts/anime-room-864x480-turbo4/prompt.txt">942-byte Chinese four-shot prompt</a>; 240 tokens</td></tr>
+    <tr><td>Geometry</td><td>864×480, 124 frames, 24 fps</td></tr>
+    <tr><td>Sampler</td><td>Turbo v4-step600 EMA, four evaluations, seed 42</td></tr>
+    <tr><td>Packed sequence</td><td>15,639 rows; 654 text/audio conditioning rows</td></tr>
+    <tr><td>Runtime</td><td>C graph/runtime, Objective-C Metal bridge, precompiled Metal kernels; no Python inference framework</td></tr>
+    <tr><td>Candidate switch</td><td><code>MINIMAX_H3_TREE_ATTENTION=quality</code></td></tr>
+    <tr><td>Approximate calls</td><td>Step mask <code>0x8</code>; layer mask <code>0x3ff0000000000</code>; 10 of 200 H3 attention calls</td></tr>
+  </table>
+
+  <h2>2. Optimization sequence</h2>
+  <table>
+    <tr><th>Change</th><th>Stage</th><th>Reason</th><th>Measured result</th></tr>
+    <tr><td>Conditioning route correction</td><td>Joint attention</td><td>Text/audio queries previously inherited video route 0; they now attend all video rows exactly.</td><td>Semantic bug removed.</td></tr>
+    <tr><td>BF16/FP32 restoration</td><td>Tree attention</td><td>Remove unintended BF16→FP16 conversion and FP16 probability/PV accumulation.</td><td>Matches exact path precision contract.</td></tr>
+    <tr><td>Per-frame leaf summaries</td><td>Video K/V</td><td>Never average values across frames; exact-expand the same spatial neighborhood in every latent frame.</td><td>Old temporal double-exposure mechanism removed.</td></tr>
+    <tr><td>Turbo-step scan</td><td>Denoise schedule</td><td>Few-step H3 cannot inherit a uniform sparse schedule from long diffusion runs.</td><td>Step 4 was least sensitive; steps 1–3 remain exact.</td></tr>
+    <tr><td>Ten-layer scan</td><td>H3 layers</td><td>Measured sensitivity decreases toward the block suffix.</td><td>Layers 40–49 selected; layers 0–39 remain exact.</td></tr>
+  </table>
+
+  <h2>3. Timing</h2>
+  <table>
+    <tr><th>Metric</th><th class="num">Earlier exact</th><th class="num">Frame-safe</th><th>Finding</th></tr>
+    <tr><td>Last-step layers 40–49, adjacent same-run groups</td><td class="num">92.597490 s</td><td class="num">70.313368 s</td><td>22.284122 s less; 1.316926×</td></tr>
+    <tr><td>H3 denoise</td><td class="num">1,898.120497 s</td><td class="num">1,831.966125 s</td><td>Earlier-run comparison includes run-to-run variation.</td></tr>
+    <tr><td>Video VAE</td><td class="num">487.273811 s</td><td class="num">481.876037 s</td><td>Unchanged algorithm.</td></tr>
+    <tr><td>Full N-to-N</td><td class="num">2,418.708237 s</td><td class="num">2,344.734228 s</td><td>73.974009 s less; 1.031549×.</td></tr>
+    <tr><td>Peak physical footprint</td><td class="num">4,440,725,568 B</td><td class="num">4,921,907,392 B</td><td>+481,181,824 B; tree buffers remain a cost.</td></tr>
+  </table>
+
+  <h2>4. Visual and temporal gate</h2>
+  <table>
+    <tr><th>Metric</th><th class="num">Exact</th><th class="num">Frame-safe</th><th class="num">Rejected tree</th></tr>
+    <tr><td>Scene changes, threshold 0.25</td><td class="num">3</td><td class="num pass">3, same timestamps</td><td class="num">10</td></tr>
+    <tr><td>Adjacent-frame mean luma difference</td><td class="num">4.495795</td><td class="num pass">4.283097</td><td class="num">9.814484</td></tr>
+    <tr><td>Mean frame luma range</td><td class="num">206.258065</td><td class="num">215.596774</td><td class="num">212.250000</td></tr>
+    <tr><td>Blur mean</td><td class="num">5.686310</td><td class="num">5.768716</td><td class="num">5.749247</td></tr>
+    <tr><td>PSNR / SSIM versus exact</td><td class="num">reference</td><td class="num">32.384649 dB / 0.932134</td><td class="num">13.456034 dB / 0.659932</td></tr>
+  </table>
+  <p>The candidate preserves all three exact cut times: 1.541667, 2.583333 and
+     3.916667 seconds. Uniform and boundary samples show the same four shots,
+     composition and subject identity, without the rejected route's double
+     exposure. The candidate is not numerically lossless.</p>
+
+  <h2>5. Uniform samples</h2>
+  <p>Exact is left; frame-safe is right.</p>
+  <img src="artifacts/anime-room-864x480-turbo4/frame-safe-quality-contact-sheet.png" alt="Exact and frame-safe uniform samples">
+
+  <h2>6. Scene-boundary samples</h2>
+  <p>Exact is above; frame-safe is below. Each row contains five frames around a detected cut.</p>
+  <img src="artifacts/anime-room-864x480-turbo4/frame-safe-quality-transitions.png" alt="Exact and frame-safe transition samples">
+
+  <h2>7. Next compiler boundary</h2>
+  <p>Expand the safe fraction with offline per-layer/head/step teacher profiles,
+     online content-aware selection, and first-order correction for unselected
+     blocks. Relevant primary sources: <a href="https://arxiv.org/abs/2602.01077">PISA</a>,
+     <a href="https://arxiv.org/abs/2603.05503">CalibAtt</a>,
+     <a href="https://arxiv.org/abs/2603.18636">SVOO</a>,
+     <a href="https://arxiv.org/abs/2605.23445">DFSAttn</a>, and
+     <a href="https://arxiv.org/abs/2607.24027">Sol-Attn</a>.</p>
+</body>
+</html>

@@ -6,8 +6,10 @@ VAE and MP4 mux. The exact-attention 864×480×124 Turbo-4 path completed in
 2,418.708 seconds with a 4.136 GiB runtime peak footprint and zero swaps. An
 opt-in compiled-tree experiment completed the same workload in 1,489.401
 seconds with a 4.592 GiB peak, but introduced visible softness and transition
-ghosting. Exact attention remains the default; official full-precision parity
-and the speed target remain open.
+ghosting. A quality-first profile completed in 2,344.734 seconds with a 4.584
+GiB peak and retained the exact run's three scene cuts without reviewed double
+exposure. Exact attention remains the default pending a multi-prompt gate;
+official full-precision parity and the speed target remain open.
 
 ## N-to-N optimization timeline
 
@@ -22,6 +24,7 @@ and the speed target remain open.
 | Full current N-to-N validation | Full graph measurement; no new optimization | VAE: 528.169950 projected → **487.273811 s measured** (−40.896139); all other stages: 1,907.577705 → 1,931.434426 s (+23.856721) | **2,418.708237 s**; −17.039418 vs projection; **3.843×** | Replace single-task linear scaling with a complete run; the net projection difference is not claimed as an optimization | measured complete N-to-N |
 | Exact BF16 direct output + four-layer H3 command groups | H3 dense-attention storage and command submission | Attention: 5,024.974042 → 5,012.634167 ms/call; FP32 scratch: 448,401,408 → 0 B; 128² denoise: 17.407398 → 17.147884 s | full 480p N-to-N not remeasured; no projection claimed | Reuse the kernel's dead score-tile region as an FP32 fragment spill, emit BF16 directly and submit four layers per command buffer | all 112,100,352 irregular-input BF16 outputs and smoke media hashes identical |
 | Experimental compiled tree attention | H3 dense attention | **1,898.120497 → 974.544700 s measured**; −923.575797 s; 1.948× | **1,489.401301 s**; −929.306936; **1.624×** vs exact; **6.241×** vs baseline | Compile geometry, row order, tree nodes, routes and query blocks once; rebuild only K/V summaries on Metal | measured complete N-to-N; functional pass, visual regression; opt-in only |
+| Frame-safe late-layer attention | H3 attention in step 4, layers 40–49 only | same-run three late groups **92.597490 → 70.313368 s**; −22.284122 s; 1.317× | **2,344.734228 s**; −73.974009 s; **1.032×** vs earlier exact run | Keep conditioning exact; never merge K/V across frames; retain per-frame leaf summaries and exact temporal spatial neighbors; exact-anchor 190/200 attention calls | measured complete N-to-N; scene and transition ghosting gate passed; exact parity and prompt-suite gate open |
 
 ### Latest measured run breakdown
 
@@ -76,6 +79,50 @@ changes instead of the exact run's 3, adjacent-frame mean difference rises
 from 4.494335 to 9.814484, and visual review finds softer detail and stronger
 transition ghosting. The path therefore requires
 `MINIMAX_H3_TREE_ATTENTION=conservative` and is not selected by default.
+
+### Frame-safe late-layer run breakdown
+
+| Stage | Seconds | Runtime share | Change from earlier exact run |
+|---|---:|---:|---:|
+| Tokenizer | 0.009389 | <0.001% | +0.001691 s |
+| Metal setup | 0.040799 | 0.002% | −0.002913 s |
+| Text image access | 4.308655 | 0.184% | −0.385231 s |
+| 50-layer text conditioner | 4.639853 | 0.198% | +0.072431 s |
+| Turbo AdaLN compile | 0.869813 | 0.037% | +0.001696 s |
+| H3 RoPE precompute | 0.001027 | <0.001% | +0.000031 s |
+| **H3 denoise** | **1,831.966125** | **78.131%** | **−66.154372 s** |
+| Video VAE precompute | 0.007414 | <0.001% | −0.000497 s |
+| **Video VAE decode** | **481.876037** | **20.551%** | −5.397774 s |
+| Audio VAE decode | 13.649289 | 0.582% | −0.110788 s |
+| H.264/AAC mux | 0.535732 | 0.023% | −0.135489 s |
+| Other measured runtime | 6.830095 | 0.291% | −1.862794 s |
+| **Model runtime** | **2,344.734228** | **100%** | **−73.974009 s; 1.031549×** |
+
+This run used `MINIMAX_H3_TREE_ATTENTION=quality`: step mask `0x8` and
+50-layer mask `0x3ff0000000000`. The first three Turbo evaluations and layers
+0–39 of the last evaluation used the original exact BF16 kernel. Only the last
+ten attention calls used the frame-safe route. Their adjacent same-run exact
+groups took 92.597490 seconds; the routed groups took 70.313368 seconds, a
+22.284122-second or 24.066% reduction. The larger 66.154372-second denoise
+difference against the earlier full run includes run-to-run variation and is
+not attributed entirely to the route.
+
+| Quality gate | Exact | Frame-safe | Rejected temporal tree |
+|---|---:|---:|---:|
+| Scene changes at threshold 0.25 | 3: 1.541667, 2.583333, 3.916667 s | **same three times** | 10 |
+| Adjacent-frame luma difference, mean | 4.495795 | **4.283097** | 9.814484 |
+| Frame luma range, mean | 206.258065 | 215.596774 | 212.250000 |
+| Blur mean | 5.686310 | 5.768716 | 5.749247 |
+| Versus exact video | reference | PSNR 32.384649 dB; SSIM 0.932134 | PSNR 13.456034 dB; SSIM 0.659932 |
+| Reviewed result | four aligned shots; no double exposure | **same cuts and composition; no reviewed transition ghosting** | softness, double exposure and extra cuts |
+
+The [uniform contact sheet](artifacts/anime-room-864x480-turbo4/frame-safe-quality-contact-sheet.png)
+places exact on the left and frame-safe on the right. The
+[transition sheet](artifacts/anime-room-864x480-turbo4/frame-safe-quality-transitions.png)
+places exact above frame-safe for five frames around each scene boundary.
+This single-prompt ghosting gate passes; exact numeric parity, audio listening
+and a multi-prompt quality suite remain open. Exact attention therefore remains
+the default.
 
 Intermediate N-to-N values are projections, not hidden full runs. Each uses
 the valid baseline's measured 1,907.577705 seconds outside Video VAE plus 105
@@ -173,17 +220,40 @@ projection/MLP work are now the next optimization boundaries.
 |---|---|---|---|
 | Direct exact BF16 output | pipeline is built from the offline metallib; no graph-dependent table | MMA64 attention writes BF16 from FP32 fragments | 5,024.974042 → 5,012.634167 ms/call; 448,401,408 B scratch removed; bit identical |
 | Four-layer command groups | fixed 50-layer schedule determines 13 groups | one encoder and synchronization per group instead of three per layer | 128² denoise 17.407398 → 17.147884 s; complete video/audio hashes identical |
-| Row permutation | fixed text/audio/video geometry maps logical rows to tree-major physical rows once | three parallel BF16→F16 reorder kernels per block | reused across all 200 block/evaluation calls |
+| Row permutation | fixed text/audio/video geometry maps logical rows to tree-major physical rows once | three parallel BF16→BF16 reorder kernels per routed block | reused by the selected block/evaluation calls |
 | Tree and routes | 342 nodes, 307 query blocks, 140,284 route entries and log token counts are compiled once | no route construction or graph traversal in the denoise loop | maximum route length 548 entries instead of 15,639 dense keys |
 | K/V summaries | topology and reduction ranges are fixed | leaf, frame, temporal and root summaries are rebuilt for each dynamic layer | approximate attention remains responsive to the current hidden state |
 | Tree attention | query block and route offsets are fixed | `simdgroup_matrix` QK tiles, online softmax and V accumulation on the M3 GPU | H3 denoise 1,898.120497 → 974.544700 s, with failed visual-quality gate |
+| Conditioning route correction | conditioning route index is compiled after the video-leaf routes | text/audio queries attend every video row exactly | removes the prior accidental use of video route 0 for all conditioning queries |
+| BF16/FP32 restoration | exact and approximate buffers share one BF16 execution image | BF16 Q/K/V with FP32 score, softmax and V accumulation | removes an unintended BF16→FP16 conversion and FP16 probability/PV accumulation from the experiment |
+| Frame-safe routes | every latent frame retains separate leaf summaries; two spatial neighbors per frame are exact | no frame, temporal-group or root summary is dispatched | removes cross-frame value averaging, the direct double-exposure mechanism |
+| Exact anchors | step/layer masks are emitted with the fixed four-step graph | original exact kernel handles 190/200 attention calls | measured step scan selected step 4; ten-layer scan selected layers 40–49 |
 
 The compiler does not precompute values that depend on a denoise hidden state.
 It precomputes the topology, storage layout and execution schedule, then emits
 Metal kernels for the remaining reductions and attention. The current route is
 geometry-only. The measured quality regression shows that the next version
 must compile teacher-calibrated routes or multiple learned centroids rather
-than merely increasing geometric locality.
+than merely increasing geometric locality. The quality profile is the first
+bounded correction: it fixes conditioning semantics and arithmetic, removes
+all cross-frame summaries, then uses exact step/layer anchors. It solves the
+measured ghosting failure but exposes only a small safe fraction of the graph.
+
+The next route compiler is constrained by current training-free sparse-video
+work, not copied from one framework implementation:
+
+| 2026 result | Constraint used here |
+|---|---|
+| [PISA](https://arxiv.org/abs/2602.01077) | rejected regions need approximation or correction, not keep/drop pruning; add first-order block compensation after the zero-order path is stable |
+| [CalibAtt](https://arxiv.org/abs/2603.05503) | compile sparsity per layer, head and diffusion timestep from an offline teacher; the measured Turbo step/layer masks are the first local instance |
+| [SVOO](https://arxiv.org/abs/2603.18636) | layer sparsity is heterogeneous; combine offline layer profiles with online query/key content rather than one geometry route |
+| [DFSAttn](https://arxiv.org/abs/2605.23445) | preserve spatial locality during token ordering and cache masks only with adaptive refresh |
+| [Sol-Attn](https://arxiv.org/abs/2607.24027) | select and correct inside online softmax so proxy-score materialization and fixed top-k budgets do not erase the theoretical gain |
+
+MiniMax-H3 Turbo has four evaluations, not the dozens used by many diffusion
+experiments. The local sensitivity scan found step 4 materially safer than
+steps 1–3; a paper's uniform denoise schedule is therefore not transferred to
+this target without measurement.
 
 The earlier same-size attempt incorrectly decoded all 37 video latents as one
 sequence. It produced 38 non-flat frames followed by 86 flat gray frames. The
@@ -529,13 +599,15 @@ An optimization is not enabled in the release path until both gates pass.
 | Full pre-gate Q4 branch cache plan | 4,682,664,000 bytes for 50 layers × 2 branches × 15,485 rows; layout/offset test passes |
 | W4 projection primitive | one 5,376→14,336 projection: 618.205 ms for 15,485 rows or 194.602 ms for 4,646 rows; not a block time |
 | Sparse projection seed | first reusable evaluation, central layer band: Q 3,054 rows, K/V 3,420 rows, MLP 2,583 rows; 18.370% of dense projection MACs |
-| Dense H3 trajectory quality | not measured; the 49.893 ms route is not release-enabled |
+| Aggressive H3 trajectory quality | measured at 480p; 10 instead of 3 scene cuts, adjacent-frame luma 9.814 versus 4.496 exact; rejected |
+| Frame-safe H3 trajectory quality | measured at 480p; same three scene cuts, adjacent-frame luma 4.283, PSNR 32.385 dB / SSIM 0.932134 versus exact; single-prompt pass, prompt-suite gate open |
 | Full Metal transformer | real-weight 50-block × 30-interval path completed at 32×32×22 after changing the residual stream from FP16 to BF16 |
 | Video and audio decoders | real-weight Video VAE and Audio VAE completed; H.264 + WAV mux produced a playable MP4 |
 | Free-prompt conditioner | real 15-token prompt completed all 50 streamed Q8 layers and the full N-to-N media path |
 | Free-prompt output verification | 22/22 video frames, stereo audio non-silent, coarse prompt response visible; reference-quality parity open |
 | Corrected 480p N-to-N run | 864×480×124 Turbo-4 completed in 2,418.708 s; 4.136 GiB runtime peak physical footprint; zero swaps; 3.843× over the pre-optimization baseline |
 | Corrected 480p media verification | 124/124 decoded frames, 0 flat frames, three detected cuts forming four prompt-aligned shots; no sampled tile or temporal-chunk break |
+| Frame-safe 480p N-to-N run | 2,344.734 s; 4.584 GiB peak; same-run selected groups 92.597 → 70.313 s; exact remains default |
 
 ## Attention experiment
 
