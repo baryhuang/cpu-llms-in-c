@@ -62,6 +62,7 @@ The Hugging Face repository repeats components under multiple workflow layouts. 
 | Precompute fixed prompt embeddings | a deployment profile may pin the complete prompt | removes Qwen from that artifact's target-time path |
 | Precompute fixed-schedule AdaLN outputs | all sampling timesteps and modality IDs are known at compile time | removes the timestep MLP, curve interpolation and block AdaLN projections from target execution |
 | Static packed layout and RoPE | canvas, frame count, text-row count and workflow determine every row coordinate | no graph construction, row scatter or position-grid allocation at target time |
+| Static Video VAE bindings and RoPE | the 36-layer decoder reuses one weight graph and one position grid for every same-shaped spatial tile | bind tensor offsets and generate rotary coefficients once before tile execution |
 | No CFG branch | H3 is guidance-distilled | one forward per denoise evaluation |
 | Online exact attention | dense score matrices are not model outputs | preserves dense attention without allocating `S x S` scores |
 

@@ -5,6 +5,7 @@ using namespace metal;
 constant uint kH3HeadCount = 56;
 constant uint kH3HeadDim = 128;
 constant uint kH3HeadHalf4 = 32;
+constant uint kH3RopeFrequencySlots = 48;
 constant float kH3AttentionScale = 0.08838834764831845f;
 constant uint kH3SummaryBit = 0x80000000u;
 constant float kH3AliasFilter[12] = {
@@ -106,6 +107,48 @@ kernel void minimax_h3_initialize_half(
     if (index >= element_count) return;
     int value = int((index * 13u + seed) % 17u) - 8;
     output[index] = half(float(value) * 0.0625f);
+}
+
+kernel void minimax_h3_initialize_half_irregular(
+    device half *output [[buffer(0)]],
+    constant uint &element_count [[buffer(1)]],
+    constant uint &seed [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= element_count) return;
+    uint bits = index * 747796405u + seed * 2891336453u + 277803737u;
+    bits = ((bits >> ((bits >> 28u) + 4u)) ^ bits) * 277803737u;
+    bits = (bits >> 22u) ^ bits;
+    int centered = int(bits % 2001u) - 1000;
+    output[index] = half(float(centered) * 0.000731f);
+}
+
+kernel void minimax_h3_initialize_bf16(
+    device bfloat *output [[buffer(0)]],
+    constant uint &element_count [[buffer(1)]],
+    constant uint &seed [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= element_count) return;
+    int value = int((index * 13u + seed) % 17u) - 8;
+    output[index] = bfloat(float(value) * 0.0625f);
+}
+
+/* The H3 packed layout and MM-RoPE frequencies are fixed for an execution
+ * artifact.  Build the 48 unique (cos, sin) pairs per row once instead of
+ * evaluating pow/cos/sin independently for Q and K in every head and block. */
+kernel void minimax_h3_build_rope_f32(
+    device const float *positions [[buffer(0)]],
+    device float2 *rotary [[buffer(1)]],
+    constant uint &row_count [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    uint count = row_count * kH3RopeFrequencySlots;
+    if (index >= count) return;
+    uint row = index / kH3RopeFrequencySlots;
+    uint frequency_slot = index - row * kH3RopeFrequencySlots;
+    uint axis = frequency_slot / 16u;
+    uint frequency = frequency_slot - axis * 16u;
+    float inverse_frequency = pow(10000.0f, -float(frequency) / 16.0f);
+    float angle = positions[row * 3u + axis] * inverse_frequency;
+    rotary[index] = float2(cos(angle), sin(angle));
 }
 
 kernel void minimax_h3_initialize_q4(
@@ -869,6 +912,204 @@ kernel void minimax_h3_dense_f16(
     }
 }
 
+/* ViT3D decoder projection path.  One threadgroup evaluates a 32x64 output
+ * tile, reusing every 8x8 activation fragment across eight output fragments.
+ * The source weights are [output, input], so the matrix load transposes each
+ * 8x8 weight fragment in place.  Accumulation remains FP32 and the public
+ * activation boundary remains FP16. */
+kernel void minimax_h3_dense_f16_mma(
+    device const half *input [[buffer(0)]],
+    device const half *weights [[buffer(1)]],
+    device const half *bias [[buffer(2)]],
+    device half *output [[buffer(3)]],
+    constant H3DenseParameters &parameters [[buffer(4)]],
+    constant uint &has_bias [[buffer(5)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup float spill[32 * 64];
+    uint output_row0 = group.x * 64u;
+    uint batch0 = group.y * 32u;
+    uint batch_row0 = batch0 + simdgroup_index * 8u;
+    uint spill_row0 = simdgroup_index * 8u;
+    simdgroup_float8x8 accumulators[8];
+    for (uint fragment_index = 0u; fragment_index < 8u; ++fragment_index)
+        accumulators[fragment_index] =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+
+    for (uint column = 0u; column < parameters.columns; column += 8u) {
+        simdgroup_half8x8 activation;
+        simdgroup_load(activation,
+                       input + batch_row0 * parameters.input_stride + column,
+                       parameters.input_stride);
+        for (uint fragment_index = 0u; fragment_index < 8u;
+             ++fragment_index) {
+            simdgroup_half8x8 weight;
+            simdgroup_load(
+                weight,
+                weights + (output_row0 + fragment_index * 8u) *
+                              parameters.columns + column,
+                parameters.columns, 0u, true);
+            simdgroup_multiply_accumulate(accumulators[fragment_index],
+                                           activation, weight,
+                                           accumulators[fragment_index]);
+        }
+    }
+    for (uint fragment_index = 0u; fragment_index < 8u; ++fragment_index)
+        simdgroup_store(accumulators[fragment_index],
+                        spill + spill_row0 * 64u + fragment_index * 8u, 64u);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint value = 0u; value < 16u; ++value) {
+        uint linear = tid * 16u + value;
+        uint batch_row = batch0 + (linear >> 6u);
+        uint matrix_row = output_row0 + (linear & 63u);
+        if (batch_row < parameters.batch && matrix_row < parameters.rows) {
+            float result = spill[linear];
+            if (has_bias != 0u) result += float(bias[matrix_row]);
+            output[batch_row * parameters.rows + matrix_row] = half(result);
+        }
+    }
+}
+
+/* The four simdgroups process different activation rows but the same 64
+ * output channels.  Stage 64x32 weights once per threadgroup so the four
+ * matrix streams do not issue duplicate device-memory reads. */
+kernel void minimax_h3_dense_f16_mma_weight_tiled(
+    device const half *input [[buffer(0)]],
+    device const half *weights [[buffer(1)]],
+    device const half *bias [[buffer(2)]],
+    device half *output [[buffer(3)]],
+    constant H3DenseParameters &parameters [[buffer(4)]],
+    constant uint &has_bias [[buffer(5)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup half weight_tile[64 * 32];
+    threadgroup float spill[32 * 64];
+    uint output_row0 = group.x * 64u;
+    uint batch0 = group.y * 32u;
+    uint batch_row0 = batch0 + simdgroup_index * 8u;
+    uint spill_row0 = simdgroup_index * 8u;
+    simdgroup_float8x8 accumulators[8];
+    for (uint fragment_index = 0u; fragment_index < 8u; ++fragment_index)
+        accumulators[fragment_index] =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+
+    for (uint column0 = 0u; column0 < parameters.columns; column0 += 32u) {
+        for (uint index = tid; index < 64u * 32u; index += 128u) {
+            uint output_offset = index >> 5u;
+            uint column_offset = index & 31u;
+            weight_tile[index] =
+                weights[(output_row0 + output_offset) * parameters.columns +
+                        column0 + column_offset];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint column_offset = 0u; column_offset < 32u;
+             column_offset += 8u) {
+            simdgroup_half8x8 activation;
+            simdgroup_load(
+                activation,
+                input + batch_row0 * parameters.input_stride + column0 +
+                    column_offset,
+                parameters.input_stride);
+            for (uint fragment_index = 0u; fragment_index < 8u;
+                 ++fragment_index) {
+                simdgroup_half8x8 weight;
+                simdgroup_load(
+                    weight,
+                    weight_tile + fragment_index * 8u * 32u + column_offset,
+                    32u, 0u, true);
+                simdgroup_multiply_accumulate(accumulators[fragment_index],
+                                               activation, weight,
+                                               accumulators[fragment_index]);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    for (uint fragment_index = 0u; fragment_index < 8u; ++fragment_index)
+        simdgroup_store(accumulators[fragment_index],
+                        spill + spill_row0 * 64u + fragment_index * 8u, 64u);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint value = 0u; value < 16u; ++value) {
+        uint linear = tid * 16u + value;
+        uint batch_row = batch0 + (linear >> 6u);
+        uint matrix_row = output_row0 + (linear & 63u);
+        if (batch_row < parameters.batch && matrix_row < parameters.rows) {
+            float result = spill[linear];
+            if (has_bias != 0u) result += float(bias[matrix_row]);
+            output[batch_row * parameters.rows + matrix_row] = half(result);
+        }
+    }
+}
+
+kernel void minimax_h3_dense_f16_mma_weight_tiled_b64(
+    device const half *input [[buffer(0)]],
+    device const half *weights [[buffer(1)]],
+    device const half *bias [[buffer(2)]],
+    device half *output [[buffer(3)]],
+    constant H3DenseParameters &parameters [[buffer(4)]],
+    constant uint &has_bias [[buffer(5)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup half weight_tile[64 * 32];
+    threadgroup float spill[64 * 64];
+    uint output_row0 = group.x * 64u;
+    uint batch0 = group.y * 64u;
+    uint batch_row0 = batch0 + simdgroup_index * 8u;
+    uint spill_row0 = simdgroup_index * 8u;
+    simdgroup_float8x8 accumulators[8];
+    for (uint fragment_index = 0u; fragment_index < 8u; ++fragment_index)
+        accumulators[fragment_index] =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    for (uint column0 = 0u; column0 < parameters.columns; column0 += 32u) {
+        for (uint index = tid; index < 64u * 32u; index += 256u) {
+            uint output_offset = index >> 5u;
+            uint column_offset = index & 31u;
+            weight_tile[index] =
+                weights[(output_row0 + output_offset) * parameters.columns +
+                        column0 + column_offset];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint column_offset = 0u; column_offset < 32u;
+             column_offset += 8u) {
+            simdgroup_half8x8 activation;
+            simdgroup_load(
+                activation,
+                input + batch_row0 * parameters.input_stride + column0 +
+                    column_offset,
+                parameters.input_stride);
+            for (uint fragment_index = 0u; fragment_index < 8u;
+                 ++fragment_index) {
+                simdgroup_half8x8 weight;
+                simdgroup_load(
+                    weight,
+                    weight_tile + fragment_index * 8u * 32u + column_offset,
+                    32u, 0u, true);
+                simdgroup_multiply_accumulate(accumulators[fragment_index],
+                                               activation, weight,
+                                               accumulators[fragment_index]);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    for (uint fragment_index = 0u; fragment_index < 8u; ++fragment_index)
+        simdgroup_store(accumulators[fragment_index],
+                        spill + spill_row0 * 64u + fragment_index * 8u, 64u);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint value = 0u; value < 16u; ++value) {
+        uint linear = tid * 16u + value;
+        uint batch_row = batch0 + (linear >> 6u);
+        uint matrix_row = output_row0 + (linear & 63u);
+        if (batch_row < parameters.batch && matrix_row < parameters.rows) {
+            float result = spill[linear];
+            if (has_bias != 0u) result += float(bias[matrix_row]);
+            output[batch_row * parameters.rows + matrix_row] = half(result);
+        }
+    }
+}
+
 kernel void minimax_h3_rms_f16(
     device const half *input [[buffer(0)]],
     device const half *weight [[buffer(1)]],
@@ -949,9 +1190,27 @@ kernel void minimax_h3_scaled_residual_f16(
                            float(update[index]) * float(scale[column]));
 }
 
+/* The ViT3D coordinates are identical for every 256x256 spatial tile and
+ * every transformer layer.  Compile the 24 complex rotary coefficients per
+ * row once, rather than evaluating pow/cos/sin for 32 heads x 36 layers. */
+kernel void minimax_h3_build_video_rope_f32(
+    device const float *positions [[buffer(0)]],
+    device float2 *rotary [[buffer(1)]],
+    constant uint &rows [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= rows * 24u) return;
+    uint row = index / 24u;
+    uint half_dimension = index - row * 24u;
+    uint axis = half_dimension / 8u;
+    uint frequency = half_dimension - axis * 8u;
+    float angle = positions[row * 3u + axis] *
+                  pow(100.0f, -float(frequency) / 8.0f);
+    rotary[index] = float2(cos(angle), sin(angle));
+}
+
 kernel void minimax_h3_video_prepare_qkv(
     device const half *projected [[buffer(0)]],
-    device const float *positions [[buffer(1)]],
+    device const float2 *rotary [[buffer(1)]],
     device half *query [[buffer(2)]],
     device half *key [[buffer(3)]],
     device half *value [[buffer(4)]],
@@ -986,15 +1245,14 @@ kernel void minimax_h3_video_prepare_qkv(
     k *= ki;
     if (tid < 48u) {
         uint half_dimension = tid < 24u ? tid : tid - 24u;
-        uint axis = half_dimension / 8u;
-        uint frequency = half_dimension % 8u;
         uint peer = tid < 24u ? tid + 24u : tid - 24u;
-        float angle = positions[row * 3u + axis] *
-                      pow(100.0f, -float(frequency) / 8.0f);
+        float2 coefficient = rotary[row * 24u + half_dimension];
         float q_peer = q_values[peer] * qi;
         float k_peer = k_values[peer] * ki;
-        q = q * cos(angle) + (tid < 24u ? -q_peer : q_peer) * sin(angle);
-        k = k * cos(angle) + (tid < 24u ? -k_peer : k_peer) * sin(angle);
+        q = q * coefficient.x +
+            (tid < 24u ? -q_peer : q_peer) * coefficient.y;
+        k = k * coefficient.x +
+            (tid < 24u ? -k_peer : k_peer) * coefficient.y;
     }
     uint destination = (row * 32u + head) * 64u + tid;
     query[destination] = half(q);
@@ -1036,6 +1294,131 @@ kernel void minimax_h3_video_attention(
     }
     output[qbase + lane] = half(accum0 / denominator);
     output[qbase + lane + 32u] = half(accum1 / denominator);
+}
+
+/* Eight query rows from one head share a 32-row K/V tile.  The online
+ * softmax still visits keys in exactly the original row order; only the
+ * source of the FP16 K/V load changes from device to threadgroup memory. */
+kernel void minimax_h3_video_attention_tiled8(
+    device const half *query [[buffer(0)]],
+    device const half *key [[buffer(1)]],
+    device const half *value [[buffer(2)]],
+    device half *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup half shared_key[32u * 64u];
+    threadgroup half shared_value[32u * 64u];
+    uint query_tile = group.x / 32u;
+    uint head = group.x - query_tile * 32u;
+    uint query_row = query_tile * 8u + simdgroup_index;
+    bool active = query_row < rows;
+    uint qbase = (query_row * 32u + head) * 64u;
+    float q0 = active ? float(query[qbase + lane]) : 0.0f;
+    float q1 = active ? float(query[qbase + lane + 32u]) : 0.0f;
+    float accum0 = 0.0f;
+    float accum1 = 0.0f;
+    float maximum = -INFINITY;
+    float denominator = 0.0f;
+    for (uint row0 = 0u; row0 < rows; row0 += 32u) {
+        uint tile_rows = min(32u, rows - row0);
+        uint tile_values = tile_rows * 64u;
+        for (uint index = tid; index < tile_values; index += 256u) {
+            uint local_row = index >> 6u;
+            uint column = index & 63u;
+            uint source = ((row0 + local_row) * 32u + head) * 64u + column;
+            shared_key[index] = key[source];
+            shared_value[index] = value[source];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (active) {
+            for (uint local_row = 0u; local_row < tile_rows; ++local_row) {
+                uint local_base = local_row * 64u;
+                float partial =
+                    q0 * float(shared_key[local_base + lane]) +
+                    q1 * float(shared_key[local_base + lane + 32u]);
+                float score = simd_sum(partial) * 0.125f;
+                float next = max(maximum, score);
+                float old_scale = exp(maximum - next);
+                float new_scale = exp(score - next);
+                accum0 = accum0 * old_scale +
+                         float(shared_value[local_base + lane]) * new_scale;
+                accum1 = accum1 * old_scale +
+                         float(shared_value[local_base + lane + 32u]) *
+                             new_scale;
+                denominator = denominator * old_scale + new_scale;
+                maximum = next;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (active) {
+        output[qbase + lane] = half(accum0 / denominator);
+        output[qbase + lane + 32u] = half(accum1 / denominator);
+    }
+}
+
+kernel void minimax_h3_video_attention_tiled16(
+    device const half *query [[buffer(0)]],
+    device const half *key [[buffer(1)]],
+    device const half *value [[buffer(2)]],
+    device half *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup half shared_key[32u * 64u];
+    threadgroup half shared_value[32u * 64u];
+    uint query_tile = group.x / 32u;
+    uint head = group.x - query_tile * 32u;
+    uint query_row = query_tile * 16u + simdgroup_index;
+    bool active = query_row < rows;
+    uint qbase = (query_row * 32u + head) * 64u;
+    float q0 = active ? float(query[qbase + lane]) : 0.0f;
+    float q1 = active ? float(query[qbase + lane + 32u]) : 0.0f;
+    float accum0 = 0.0f;
+    float accum1 = 0.0f;
+    float maximum = -INFINITY;
+    float denominator = 0.0f;
+    for (uint row0 = 0u; row0 < rows; row0 += 32u) {
+        uint tile_rows = min(32u, rows - row0);
+        uint tile_values = tile_rows * 64u;
+        for (uint index = tid; index < tile_values; index += 512u) {
+            uint local_row = index >> 6u;
+            uint column = index & 63u;
+            uint source = ((row0 + local_row) * 32u + head) * 64u + column;
+            shared_key[index] = key[source];
+            shared_value[index] = value[source];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (active) {
+            for (uint local_row = 0u; local_row < tile_rows; ++local_row) {
+                uint local_base = local_row * 64u;
+                float partial =
+                    q0 * float(shared_key[local_base + lane]) +
+                    q1 * float(shared_key[local_base + lane + 32u]);
+                float score = simd_sum(partial) * 0.125f;
+                float next = max(maximum, score);
+                float old_scale = exp(maximum - next);
+                float new_scale = exp(score - next);
+                accum0 = accum0 * old_scale +
+                         float(shared_value[local_base + lane]) * new_scale;
+                accum1 = accum1 * old_scale +
+                         float(shared_value[local_base + lane + 32u]) *
+                             new_scale;
+                denominator = denominator * old_scale + new_scale;
+                maximum = next;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (active) {
+        output[qbase + lane] = half(accum0 / denominator);
+        output[qbase + lane + 32u] = half(accum1 / denominator);
+    }
 }
 
 kernel void minimax_h3_audio_conv1d_f32(
@@ -1501,11 +1884,12 @@ kernel void minimax_h3_prepare_qkv(
     device const half *projected [[buffer(0)]],
     device const ushort *query_norm [[buffer(1)]],
     device const ushort *key_norm [[buffer(2)]],
-    device const float *positions [[buffer(3)]],
+    device const float2 *rotary [[buffer(3)]],
     device half *query [[buffer(4)]],
     device half *key [[buffer(5)]],
     device half *value [[buffer(6)]],
     constant uint &row_count [[buffer(7)]],
+    constant uint &apply_rotary [[buffer(8)]],
     uint tid [[thread_index_in_threadgroup]],
     uint3 group [[threadgroup_position_in_grid]]) {
     threadgroup float source_values[128];
@@ -1535,18 +1919,14 @@ kernel void minimax_h3_prepare_qkv(
         float inverse = rsqrt(squared[0] / float(kH3HeadDim) + 1e-5f);
         float x = source_values[tid] * inverse *
                   h3_bfloat_to_float(norm[tid]);
-        if (tid < 96u) {
+        if (apply_rotary != 0u && tid < 96u) {
             uint frequency_slot = tid % 48u;
-            uint axis = frequency_slot / 16u;
-            uint frequency = frequency_slot - axis * 16u;
             uint peer = tid < 48u ? tid + 48u : tid - 48u;
             float peer_value = source_values[peer] * inverse *
                                h3_bfloat_to_float(norm[peer]);
-            float inverse_frequency = pow(10000.0f,
-                -float(frequency) / 16.0f);
-            float angle = positions[row * 3u + axis] * inverse_frequency;
+            float2 angle = rotary[row * kH3RopeFrequencySlots + frequency_slot];
             float rotated = tid < 48u ? -peer_value : peer_value;
-            x = x * cos(angle) + rotated * sin(angle);
+            x = x * angle.x + rotated * angle.y;
         }
         uint destination = (row * kH3HeadCount + head) * kH3HeadDim + tid;
         if (is_query) {
@@ -1561,7 +1941,10 @@ kernel void minimax_h3_prepare_qkv(
     }
 }
 
-kernel void minimax_h3_prepare_qkv_bf16(
+/* Differential oracle for the precomputed MM-RoPE path.  This retains the
+ * former per-head transcendental evaluation and is not used by production
+ * inference. */
+kernel void minimax_h3_prepare_qkv_bf16_reference(
     device const bfloat *projected [[buffer(0)]],
     device const ushort *query_norm [[buffer(1)]],
     device const ushort *key_norm [[buffer(2)]],
@@ -1611,6 +1994,67 @@ kernel void minimax_h3_prepare_qkv_bf16(
             float angle = positions[row * 3u + axis] * inverse_frequency;
             float rotated = tid < 48u ? -peer_value : peer_value;
             x = x * cos(angle) + rotated * sin(angle);
+        }
+        uint destination = (row * kH3HeadCount + head) * kH3HeadDim + tid;
+        if (is_query) {
+            query[destination] = bfloat(x);
+        } else {
+            key[destination] = bfloat(x);
+            uint value_base = row * (3u * kH3HeadCount * kH3HeadDim) +
+                              2u * kH3HeadCount * kH3HeadDim +
+                              head * kH3HeadDim;
+            value[destination] = projected[value_base + tid];
+        }
+    }
+}
+
+kernel void minimax_h3_prepare_qkv_bf16(
+    device const bfloat *projected [[buffer(0)]],
+    device const ushort *query_norm [[buffer(1)]],
+    device const ushort *key_norm [[buffer(2)]],
+    device const float2 *rotary [[buffer(3)]],
+    device bfloat *query [[buffer(4)]],
+    device bfloat *key [[buffer(5)]],
+    device bfloat *value [[buffer(6)]],
+    constant uint &row_count [[buffer(7)]],
+    constant uint &apply_rotary [[buffer(8)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup float source_values[128];
+    threadgroup float squared[256];
+    uint row = group.x;
+    uint encoded_head = group.y;
+    bool is_query = encoded_head < kH3HeadCount;
+    uint head = is_query ? encoded_head : encoded_head - kH3HeadCount;
+    if (row >= row_count || head >= kH3HeadCount) return;
+    uint slab = is_query ? 0u : kH3HeadCount * kH3HeadDim;
+    uint source_base = row * (3u * kH3HeadCount * kH3HeadDim) + slab +
+                       head * kH3HeadDim;
+    float sum = 0.0f;
+    if (tid < kH3HeadDim) {
+        float x = float(projected[source_base + tid]);
+        source_values[tid] = x;
+        sum = x * x;
+    }
+    squared[tid] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = 128u; stride != 0u; stride >>= 1u) {
+        if (tid < stride) squared[tid] += squared[tid + stride];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid < kH3HeadDim) {
+        device const ushort *norm = is_query ? query_norm : key_norm;
+        float inverse = rsqrt(squared[0] / float(kH3HeadDim) + 1e-5f);
+        float x = source_values[tid] * inverse *
+                  h3_bfloat_to_float(norm[tid]);
+        if (apply_rotary != 0u && tid < 96u) {
+            uint frequency_slot = tid % 48u;
+            uint peer = tid < 48u ? tid + 48u : tid - 48u;
+            float peer_value = source_values[peer] * inverse *
+                               h3_bfloat_to_float(norm[peer]);
+            float2 angle = rotary[row * kH3RopeFrequencySlots + frequency_slot];
+            float rotated = tid < 48u ? -peer_value : peer_value;
+            x = x * angle.x + rotated * angle.y;
         }
         uint destination = (row * kH3HeadCount + head) * kH3HeadDim + tid;
         if (is_query) {

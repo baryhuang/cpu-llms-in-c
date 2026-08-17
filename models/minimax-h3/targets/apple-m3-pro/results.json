@@ -25,7 +25,12 @@
     "repository_commit": "EvolvingLMMs-Lab/MacOS-H3-Speedrun@db22d300423e04d44f217bd3858147964c7b8c5c",
     "dependency_commit": "yshenaw/ComfyUI-SolAttn-MPS@886f4b9b8598b2d17445eef659a8ef28cf04d0d4",
     "device": "Apple M3 Ultra",
-    "attention_ms": 59.53
+    "attention_ms": 59.53,
+    "published_sampling_profiles": [
+      {"name": "Turbo 4 Fast", "steps": 4},
+      {"name": "Turbo 6 Balanced", "steps": 6},
+      {"name": "Quality 20", "steps": 20}
+    ]
   },
   "experiments": [
     {
@@ -202,6 +207,76 @@
     },
     "summary_projection_identity": "For bias-free H3 K/V, W*mean(normalized hidden) equals mean(W*normalized hidden).",
     "quality_status": "one real Q4/BF16 projection boundary passes; complete block and trajectory gates remain open"
+  },
+  "video_vae_optimization": {
+    "scope": "real 2.604B-parameter ViT3D Video VAE on Apple M3 Pro",
+    "architecture": {
+      "layers": 36,
+      "hidden": 2048,
+      "heads": 32,
+      "head_dimension": 64,
+      "ffn_pair_width": 8192,
+      "reference_tile": {"pixels": [256, 256], "latent_frames": 7, "tokens": 1792, "rows_with_registers": 1797},
+      "corrected_480p_schedule": {"temporal_chunks": 7, "spatial_tiles_per_chunk": 15, "transformer_block_calls": 3780},
+      "dense_mac_per_row_per_block": 67108864,
+      "corrected_480p_dense_mac": 455847696138240
+    },
+    "exact_precompute_and_runtime": [
+      "one no-copy Metal buffer for each complete mapped weight image",
+      "438 Video VAE tensor bindings resolved once before the tile loop",
+      "24 complex ViT3D RoPE coefficients per row generated once per tile geometry",
+      "four transformer blocks encoded per command buffer instead of one",
+      "64 activation rows and 64 output channels per FP16 simdgroup-matrix tile",
+      "32 K/V rows shared by eight attention queries in threadgroup memory"
+    ],
+    "one_256_tile_22_frame_component": {
+      "command": "build/minimax-h3-m3-e2e --video-vae-smoke OUTPUT_DIR 256 256 22",
+      "scalar_gemm_and_scalar_attention_seconds": 68.619048,
+      "optimized_seconds": 5.030190,
+      "speedup": 13.641443,
+      "optimized_peak_footprint_bytes": 318146368,
+      "quality_against_scalar": {"psnr_db": 66.821340, "ssim": 0.999875},
+      "boundary": "deterministic synthetic latent through real weights; not prompt-to-media E2E"
+    },
+    "kernel_measurements": {
+      "attention_rows_1797": {
+        "reference_gpu_ms": 63.254375,
+        "tiled8_gpu_ms": 45.424225,
+        "speedup": 1.392525,
+        "differing_fp16_values": 0,
+        "rejected_tiled16_gpu_ms": 62.300242
+      },
+      "w1_rows_1797_output_16384_input_2048": {
+        "scalar_gpu_ms": 932.992583,
+        "mma32_gpu_ms": 55.722931,
+        "mma64_weight_tiled_gpu_ms": 37.685250,
+        "mma64_vs_scalar": 24.757467,
+        "mma64_differing_from_mma32_fp16_values": 0
+      }
+    },
+    "tile_geometry_experiment": {
+      "geometry": {"width": 256, "height": 480, "frames": 22},
+      "reference_256_height_tiles": 3,
+      "reference_seconds": 14.152762,
+      "candidate_272_height_tiles": 2,
+      "candidate_seconds": 10.268616,
+      "speedup": 1.378254,
+      "quality_against_256_tile_oracle": {"psnr_db": 46.319993, "ssim": 0.993609},
+      "status": "experimental; not enabled by default pending perceptual review"
+    },
+    "metal_api_decisions": {
+      "metallib": "enabled; MSL is compiled to AIR and metallib at build time",
+      "binary_archive": "rejected as default: 36.619 ms setup with archive versus 32.106 ms without on this run",
+      "indirect_command_buffer": "not yet useful: four-block grouping makes CPU encode time negligible relative to GPU work; constants must first move from setBytes to buffers",
+      "metal4_machine_learning": "not a deployment option on the pinned macOS 15.7.3 runtime; SDK declarations require macOS 26",
+      "mps": "benchmark oracle only; production path remains custom MSL"
+    },
+    "corrected_480p_projection_not_measured": {
+      "default_256_tile_seconds": 528.169950,
+      "experimental_272_tile_seconds": 326.679080,
+      "method": "single real-weight tile time multiplied by 7 temporal chunks and 15 or 8 spatial tiles; excludes cache, overlap and thermal effects",
+      "status": "projection only; a new 480p N-to-N measurement is required"
+    }
   },
   "real_weight_runs": [
     {

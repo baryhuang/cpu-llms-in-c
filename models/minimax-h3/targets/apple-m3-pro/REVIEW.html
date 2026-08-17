@@ -130,7 +130,40 @@
   </table>
   <figure><img src="artifacts/anime-room-864x480-turbo4/before-temporal-chunking-contact-sheet.png" alt="Failed output before temporal chunking"><figcaption>Pre-fix output: content ends after frame 37 and the remaining timeline is flat gray.</figcaption></figure>
 
-  <h2>5. Peer comparison boundary</h2>
+  <h2>5. Post-benchmark Video VAE component work</h2>
+  <p class="open">These measurements were made after the formal 480p run. They do not replace the 9,294.870-second N-to-N record.</p>
+  <p>The component command sends deterministic latent data through the real 2.604B-parameter, 36-layer Video VAE. One 256×256×22 task contains 1,797 transformer rows. Verification time is separate from the duration column.</p>
+  <table>
+    <thead><tr><th>Increment</th><th class="num">Video VAE seconds</th><th class="num">Increment</th><th>Verification</th></tr></thead>
+    <tbody>
+      <tr><td>Scalar GEMM + scalar-query attention on the current prebound graph</td><td class="num">68.619048</td><td class="num">baseline</td><td>finite 22-frame output</td></tr>
+      <tr><td>32-row FP16 simdgroup-matrix GEMM</td><td class="num">6.824399</td><td class="num">10.055×</td><td>PSNR 66.821 dB; SSIM 0.999875 versus scalar</td></tr>
+      <tr><td>Eight-query, 32-key tiled exact attention</td><td class="num">6.281185</td><td class="num">1.086×</td><td>22/22 PPM frames bit identical to prior row</td></tr>
+      <tr><td>32-row shared-weight GEMM</td><td class="num">6.068952</td><td class="num">1.035×</td><td>22/22 frames bit identical</td></tr>
+      <tr><td>64-row shared-weight GEMM</td><td class="num"><strong>5.030190</strong></td><td class="num"><strong>1.207×</strong></td><td>22/22 frames bit identical</td></tr>
+      <tr><td><strong>Current versus scalar compute reference</strong></td><td class="num">—</td><td class="num"><strong>13.641×</strong></td><td>PSNR 66.821 dB; SSIM 0.999875</td></tr>
+    </tbody>
+  </table>
+  <table>
+    <thead><tr><th>Precomputed or Metal path</th><th>Measured decision</th></tr></thead>
+    <tbody>
+      <tr><td>Whole checkpoint buffer + 438 static VAE tensor bindings</td><td class="pass">Enabled; exact final-frame/audio regression</td></tr>
+      <tr><td>24 complex ViT3D RoPE values per row</td><td class="pass">Generated once per geometry; exact frame regression</td></tr>
+      <tr><td>8-query attention</td><td class="pass">63.254 → 45.424 ms; 0/3,680,256 FP16 values differ</td></tr>
+      <tr><td>16-query attention</td><td>62.300 ms; rejected because lower occupancy removes the reuse gain</td></tr>
+      <tr><td>W1 batch-64 MMA</td><td class="pass">932.993 → 37.685 ms; bit identical to batch-32 MMA</td></tr>
+      <tr><td>Metal binary archive</td><td>36.619 ms setup versus 32.106 ms without; retained as an experiment, disabled by default</td></tr>
+      <tr><td>272-pixel vertical VAE tile</td><td>14.153 → 10.269 s on 256×480×22; PSNR 46.320 dB, SSIM 0.993609; experimental</td></tr>
+    </tbody>
+  </table>
+  <pre>make minimax-h3-m3-e2e
+build/minimax-h3-m3-e2e --video-vae-smoke OUTPUT_DIR 256 256 22
+
+make minimax-h3-m3-vae-gemm-bench
+make minimax-h3-m3-vae-attention-bench</pre>
+  <p>Scaling the measured one-tile values gives 528.170 seconds for the formal 7×15 256-tile VAE graph and 326.679 seconds for an experimental 7×8 272-tile graph. Both are projections, not measured 480p runtimes.</p>
+
+  <h2>6. Peer comparison boundary</h2>
   <table>
     <thead><tr><th>Record</th><th>Device / precision</th><th>Workload</th><th class="num">Time</th><th>Conclusion</th></tr></thead>
     <tbody>
@@ -141,17 +174,17 @@
   </table>
   <p>The repository's 49.893 ms tree-attention primitive is a synthetic approximate-route result. It was not enabled in this run because real-weight trajectory quality is still open.</p>
 
-  <h2>6. Next measured work</h2>
+  <h2>7. Next measured work</h2>
   <table>
     <thead><tr><th>Order</th><th>Change</th><th>Reason from this run</th><th>Required gate</th></tr></thead>
     <tbody>
-      <tr><td>1</td><td>Batch same-shaped Video VAE tiles</td><td>Serial Video VAE is 79.477% of runtime</td><td>Pixel/frame differential plus the same seam and temporal-boundary review</td></tr>
+      <tr><td>1</td><td>Offline-pack 64×32 Video VAE weight tiles and prototype quality-gated FlashAttention</td><td>The current component is 13.641× faster, but projected 480p VAE time still exceeds the peer total</td><td>Kernel differential, complete frame metrics and seam/temporal-boundary review</td></tr>
       <tr><td>2</td><td>Integrate tree attention behind a dense fallback</td><td>Dense attention is 1,126.361 s across 200 calls</td><td>Per-layer error, fixed-seed trajectory and final media comparison</td></tr>
       <tr><td>3</td><td>Validate sparse projection/MLP schedules</td><td>Dense QKV/output + MLP consume 744.612 s</td><td>Real-weight layer and four-evaluation trajectory quality</td></tr>
     </tbody>
   </table>
 
-  <h2>7. Exact reproduction</h2>
+  <h2>8. Exact reproduction</h2>
   <pre>make minimax-h3-m3-e2e
 
 h3_prompt_text=$(cat models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt)

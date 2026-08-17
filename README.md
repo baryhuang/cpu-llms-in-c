@@ -27,6 +27,13 @@ Every performance claim belongs to one exact model revision and one exact target
 | Whisper small.en | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, mixed Q4/Q8 encoder and cached decoder | 11 s audio in **45.0 s**, 251 MiB RSS, zero swap; 0/22 word errors on the pinned JFK sample | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [raw results](models/whisper-small.en/targets/a113x/results.json) |
 | Gemma 4 E2B | Unpinned two-vCPU x86-64 development machine | Legacy restricted C artifact | 0.598 token/s, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [raw results](models/gemma-4-e2b/results.json) |
 
+The formal MiniMax-H3 480p result predates the current Video VAE kernels. On
+one real-weight 256×256×22 VAE component, scalar compute takes 68.619 seconds
+and the current simdgroup-matrix/tiled-attention path takes 5.030 seconds
+(13.641×; PSNR 66.821 dB, SSIM 0.999875). This is a component result, not a
+replacement 480p N-to-N claim; the [target record](models/minimax-h3/targets/apple-m3-pro/README.md#video-vae-structure-and-optimization)
+keeps measurements and projections separate.
+
 Gemma is the early restricted artifact and accepts only its compiled test
 inputs. Qwen3.5, Qwen3.8, Whisper and MiniMax-H3 execute their full model
 paths; task behavior is selected by input or prompt rather than compiled
@@ -128,7 +135,7 @@ Model execution stays in the resident C/Metal process. The Python server is an o
 
 | Area | Concrete work |
 |---|---|
-| MiniMax-H3 / Apple Silicon | batch same-shaped Video VAE tiles; validate tree attention and sparse projections against the corrected 480p dense trajectory |
+| MiniMax-H3 / Apple Silicon | offline-pack 64×32 VAE weight tiles, build a quality-gated FlashAttention-style VAE kernel, and validate sparse H3 projections against the corrected 480p dense trajectory |
 | Qwen3.8 / Apple Silicon | fused batched prefill, DeltaNet scheduling, attention kernels, sampling and streaming overlap |
 | Low-cost Arm CPUs | NEON kernels, recurrent-state layout, cache-aware thread partitioning and memory probes |
 | New model support | add a model directory, independent numerical oracle, packed format and generic C runtime |

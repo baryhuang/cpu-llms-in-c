@@ -96,6 +96,115 @@ sequence. It produced 38 non-flat frames followed by 86 flat gray frames. The
 released seven-latent, stride-five overlapping schedule removes that failure,
 at the cost of increasing Video VAE time from 5,342.026 to 7,387.292 seconds.
 
+## Video VAE structure and optimization
+
+The formal 7,387.292-second Video VAE number above predates the kernels in
+this section. A new 480p N-to-N run has not been completed. Component results
+below use the real 2.604B-parameter Video VAE and deterministic latents; they
+are not prompt-to-media results.
+
+| VAE property | Value |
+|---|---:|
+| Decoder graph | 3D convolutional input followed by a ViT3D decoder |
+| Transformer layers | 36 |
+| Hidden / heads / head dimension | 2,048 / 32 / 64 |
+| FF pair width | 8,192; `w1` emits 16,384 values for SwiGLU |
+| Per-block dense work | 67,108,864 MAC per sequence row |
+| Reference spatial task | 256×256 pixels; 7 latent frames; 1,792 tokens + 4 registers + 1 suffix = 1,797 rows |
+| Corrected 480p graph | 7 temporal chunks × 15 spatial tiles × 36 layers = 3,780 block calls |
+| Corrected 480p dense work | 455,847,696,138,240 MAC |
+
+### Exact compile-time and runtime reductions
+
+| Change | Target behavior | Correctness status |
+|---|---|---|
+| Whole-image Metal view | one no-copy `MTLBuffer` per mapped checkpoint instead of one buffer object per tensor use | exact; final smoke frames and audio unchanged |
+| Static bindings | resolve 438 Video VAE weight offsets once, before the chunk/tile loop | exact |
+| ViT3D RoPE table | build 24 `(cos,sin)` pairs per row once for the fixed tile geometry; reuse for 32 heads × 36 layers × all same-shaped tiles | exact; frames unchanged |
+| Command grouping | encode four transformer layers per command buffer instead of waiting after every layer | exact; frames unchanged |
+| FP16 matrix kernel | 64 activation rows × 64 output channels; eight simdgroups share one 64×32 weight tile; FP32 accumulation and FP16 public boundary | same result as the 32-row MMA kernel bit for bit |
+| Attention K/V tile | eight query rows share 32 K/V rows in threadgroup memory while visiting keys in the original order | all 3,680,256 FP16 outputs match the scalar-query kernel bit for bit |
+
+The whole-image view also applies to H3. On the same 32×32 Turbo-4 smoke,
+denoise fell from 17.122752 to 7.571732 seconds because the runtime stopped
+creating thousands of repeated tensor-backed Metal resources. This is a
+resource-binding reduction, not a model approximation.
+
+### Measured component increments
+
+Command:
+
+```sh
+make minimax-h3-m3-e2e
+build/minimax-h3-m3-e2e --video-vae-smoke OUTPUT_DIR 256 256 22
+```
+
+| 256×256×22 real-weight VAE path | Seconds | Increment | Output gate |
+|---|---:|---:|---|
+| Scalar GEMM + scalar-query attention on the current prebound graph | 68.619048 | baseline | finite 22-frame output |
+| 32-row simdgroup-matrix GEMM | 6.824399 | 10.055× | versus scalar: PSNR 66.821 dB, SSIM 0.999875 |
+| + eight-query tiled attention | 6.281185 | 1.086× | 22/22 PPM frames bit identical to prior row |
+| + 32-row shared-weight GEMM | 6.068952 | 1.035× | 22/22 PPM frames bit identical |
+| + 64-row shared-weight GEMM | **5.030190** | **1.207×** | 22/22 PPM frames bit identical |
+| **Current versus scalar compute reference** | — | **13.641×** | PSNR 66.821 dB, SSIM 0.999875 |
+
+The actual 1,797-row kernel boundaries explain the remaining time:
+
+| Kernel | Reference | Selected | Speedup | Differential |
+|---|---:|---:|---:|---:|
+| Video attention | 63.254 ms scalar-query | 45.424 ms, 8 queries/group | 1.393× | 0 / 3,680,256 FP16 values differ |
+| `w1`, 1,797×2,048→1,797×16,384 | 932.993 ms scalar | 37.685 ms, batch-64 MMA | 24.757× | 0 values differ from batch-32 MMA |
+| 16-query attention candidate | 63.254 ms | 62.300 ms | 1.015× | rejected: occupancy loss removes the reuse gain |
+
+### Tile geometry is a separate approximation
+
+The released decoder uses 256-pixel tiles. For a 256×480×22 component test,
+compiling the vertical tile to 272 pixels changes three tiles into two because
+`272 + 272 - 64 = 480`.
+
+| Layout | Tasks | Seconds | Comparison to 256-tile oracle |
+|---|---:|---:|---|
+| 256-pixel vertical tile | 3 | 14.152762 | oracle |
+| 272-pixel vertical tile | 2 | 10.268616 | 1.378×; PSNR 46.320 dB; SSIM 0.993609 |
+
+This candidate is not enabled by default. At 864×480, 272×272 tiles would
+reduce each temporal chunk from 15 tasks to 8. Multiplying measured one-tile
+times projects 528.170 seconds for the exact 256 layout and 326.679 seconds
+for the experimental 272 layout. These are projections, not a new 480p
+measurement; thermal, cache, overlap and final media review remain unmeasured.
+
+### Metal API decisions
+
+| API or mechanism | Decision on this target |
+|---|---|
+| Offline `.air` → `.metallib` | enabled; all MSL is compiled at build time |
+| [`MTLBinaryArchive`](https://developer.apple.com/documentation/metal/mtlbinaryarchive) | reproducible compiler target retained, but default loading rejected: 36.619 ms setup with the archive versus 32.106 ms without it |
+| [`MTLIndirectCommandBuffer`](https://developer.apple.com/documentation/metal/mtlindirectcomputecommand) | valid for the fixed 36-layer graph, but not yet useful: four-layer grouping makes CPU encoding negligible; every `setBytes` constant must first move into a persistent buffer |
+| Argument buffers | useful only after the graph becomes ICB-driven; one whole-image buffer already removes the repeated resource-object cost |
+| Metal 4 tensors / ML encoder | not a deployment option on the pinned macOS 15.7.3 machine; the installed SDK declares these APIs for macOS 26; [Metal 4 introduces tensors and an ML encoder](https://developer.apple.com/videos/play/wwdc2025/205/) |
+| MPS | benchmark oracle only; production remains custom MSL with a minimal Objective-C bridge |
+| VideoToolbox | next media-output target: encode finalized temporal chunks without writing 124 PPM files |
+
+The next exact compiler experiment is an offline 64×32 tiled weight image so
+the selected GEMM reads each staged weight tile sequentially. Approximate
+experiments are per-channel/groupwise W8 VAE weights and 272×272 spatial
+geometry; both require decoded-media gates. Folding latent mean/std,
+`post_quant_conv` and `x_embedder` is also possible, but removes the current
+FP16 boundary and therefore needs a differential rather than an algebra-only
+claim.
+
+Audio VAE is lower priority. It is a 151.327M-parameter F32 BigVGAN-style
+decoder with seven upsampling stages; the formal 480p run spent 13.531 seconds
+there, 0.146% of total time. Its direct convolution, alias/Snake activation
+and residual operations can be tiled and fused in Metal after the Video VAE
+and denoiser cease to dominate.
+
+The external peer publishes three sampling profiles: Turbo 4 Fast, Turbo 6
+Balanced and non-Turbo Quality 20. The comparable front-page sample uses four
+denoise evaluations; six and twenty steps are quality modes, not the baseline
+for the 192-second sample. See
+[`MacOS-H3-Speedrun`](https://github.com/EvolvingLMMs-Lab/MacOS-H3-Speedrun#选择配置).
+
 ## Initial 128×128 N-to-N gate
 
 The historical media and records are under

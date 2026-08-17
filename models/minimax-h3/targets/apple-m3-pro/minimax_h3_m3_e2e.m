@@ -96,6 +96,7 @@ typedef struct {
     void *mapping;
     size_t mapping_bytes;
     size_t file_padding;
+    void *whole_buffer;
     double download_seconds;
 } h3_remote_image;
 
@@ -112,9 +113,15 @@ typedef struct {
 } h3_affine_binding;
 
 typedef struct {
+    h3_tensor_binding weight;
+    h3_tensor_binding bias;
+} h3_dense_binding;
+
+typedef struct {
     __strong id<MTLDevice> device;
     __strong id<MTLCommandQueue> queue;
     __strong id<MTLLibrary> library;
+    __strong id<MTLBinaryArchive> pipeline_archive;
     __strong id<MTLComputePipelineState> q4;
     __strong id<MTLComputePipelineState> q4_bf16;
     __strong id<MTLComputePipelineState> q8;
@@ -128,6 +135,7 @@ typedef struct {
     __strong id<MTLComputePipelineState> dense_f32_bf16_to_f32;
     __strong id<MTLComputePipelineState> dense_f32_bf16_activation;
     __strong id<MTLComputePipelineState> dense_f16;
+    __strong id<MTLComputePipelineState> dense_f16_mma_weight_tiled_b64;
     __strong id<MTLComputePipelineState> rms_plain;
     __strong id<MTLComputePipelineState> rms_adaln;
     __strong id<MTLComputePipelineState> rms_plain_bf16;
@@ -142,19 +150,26 @@ typedef struct {
     __strong id<MTLComputePipelineState> residual_bf16;
     __strong id<MTLComputePipelineState> qwen_prepare;
     __strong id<MTLComputePipelineState> qwen_attention;
+    __strong id<MTLComputePipelineState> h3_rope;
     __strong id<MTLComputePipelineState> h3_prepare;
     __strong id<MTLComputePipelineState> h3_attention;
     __strong id<MTLComputePipelineState> h3_prepare_bf16;
     __strong id<MTLComputePipelineState> h3_attention_bf16;
     __strong id<MTLComputePipelineState> h3_attention_mma64_bf16;
     __strong id<MTLComputePipelineState> f32_to_bf16;
+    __strong id<MTLComputePipelineState> video_rope;
     __strong id<MTLComputePipelineState> video_prepare;
     __strong id<MTLComputePipelineState> video_attention;
+    __strong id<MTLComputePipelineState> video_attention_tiled;
     __strong id<MTLComputePipelineState> audio_conv;
     __strong id<MTLComputePipelineState> audio_conv_transpose;
     __strong id<MTLComputePipelineState> audio_alias;
     __strong id<MTLComputePipelineState> audio_residual;
     __strong id<MTLComputePipelineState> audio_average3;
+    int reference_vae_gemm;
+    int reference_vae_attention;
+    int pipeline_archive_hit;
+    double setup_seconds;
 } h3_metal;
 
 static void e2e_error(char *error, size_t capacity, const char *format, ...) {
@@ -272,6 +287,11 @@ static int h3_remote_image_open(const char *filename,
 
 static void h3_remote_image_close(h3_remote_image *image) {
     if (image == NULL) return;
+    if (image->whole_buffer != NULL) {
+        id whole_buffer = (__bridge_transfer id)image->whole_buffer;
+        image->whole_buffer = NULL;
+        (void)whole_buffer;
+    }
     if (image->mapping != NULL) munmap(image->mapping, image->mapping_bytes);
     minimax_h3_remote_safetensors_close(&image->remote);
     memset(image, 0, sizeof(*image));
@@ -279,12 +299,23 @@ static void h3_remote_image_close(h3_remote_image *image) {
 
 static id<MTLComputePipelineState> h3_pipeline(id<MTLDevice> device,
                                                id<MTLLibrary> library,
+                                               id<MTLBinaryArchive> archive,
                                                NSString *name,
                                                NSError **error) {
     id<MTLFunction> function = [library newFunctionWithName:name];
-    return function != nil
-               ? [device newComputePipelineStateWithFunction:function error:error]
-               : nil;
+    if (function == nil) return nil;
+    if (archive == nil)
+        return [device newComputePipelineStateWithFunction:function
+                                                       error:error];
+    MTLComputePipelineDescriptor *descriptor =
+        [MTLComputePipelineDescriptor new];
+    descriptor.label = name;
+    descriptor.computeFunction = function;
+    descriptor.binaryArchives = @[ archive ];
+    return [device newComputePipelineStateWithDescriptor:descriptor
+                                                 options:MTLPipelineOptionNone
+                                              reflection:nil
+                                                   error:error];
 }
 
 static int h3_metal_open(const char *path,
@@ -293,6 +324,15 @@ static int h3_metal_open(const char *path,
                          size_t error_capacity) {
     h3_metal result;
     memset((void *)&result, 0, sizeof(result));
+    double setup_started = e2e_now();
+    const char *reference_vae_gemm = getenv("MINIMAX_H3_REFERENCE_VAE_GEMM");
+    result.reference_vae_gemm = reference_vae_gemm != NULL &&
+                                strcmp(reference_vae_gemm, "1") == 0;
+    const char *reference_vae_attention =
+        getenv("MINIMAX_H3_REFERENCE_VAE_ATTENTION");
+    result.reference_vae_attention =
+        reference_vae_attention != NULL &&
+        strcmp(reference_vae_attention, "1") == 0;
     NSError *error = nil;
     result.device = MTLCreateSystemDefaultDevice();
     if (result.device != nil) {
@@ -300,10 +340,26 @@ static int h3_metal_open(const char *path,
             [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]
                                                 error:&error];
         result.queue = [result.device newCommandQueue];
+        NSString *archive_path = [[[NSString stringWithUTF8String:path]
+            stringByDeletingPathExtension]
+            stringByAppendingPathExtension:@"mtlarchive"];
+        const char *use_archive = getenv("MINIMAX_H3_USE_PIPELINE_ARCHIVE");
+        if (use_archive != NULL && strcmp(use_archive, "1") == 0 &&
+            [[NSFileManager defaultManager] fileExistsAtPath:archive_path]) {
+            MTLBinaryArchiveDescriptor *archive_descriptor =
+                [MTLBinaryArchiveDescriptor new];
+            archive_descriptor.url = [NSURL fileURLWithPath:archive_path];
+            NSError *archive_error = nil;
+            result.pipeline_archive =
+                [result.device newBinaryArchiveWithDescriptor:archive_descriptor
+                                                        error:&archive_error];
+            result.pipeline_archive_hit = result.pipeline_archive != nil;
+        }
     }
 #define H3_PIPE(field, name)                                                   \
     result.field = result.library != nil                                      \
-        ? h3_pipeline(result.device, result.library, @name, &error)            \
+        ? h3_pipeline(result.device, result.library, result.pipeline_archive, \
+                      @name, &error)                                          \
         : nil
     H3_PIPE(q4, "minimax_h3_q4_gemm_bf16_meta");
     H3_PIPE(q4_bf16, "minimax_h3_q4_gemm_bf16_activation");
@@ -325,6 +381,8 @@ static int h3_metal_open(const char *path,
     H3_PIPE(dense_f32_bf16_activation,
             "minimax_h3_dense_f32_bf16_activation");
     H3_PIPE(dense_f16, "minimax_h3_dense_f16");
+    H3_PIPE(dense_f16_mma_weight_tiled_b64,
+            "minimax_h3_dense_f16_mma_weight_tiled_b64");
     H3_PIPE(rms_plain, "minimax_h3_rms_plain");
     H3_PIPE(rms_adaln, "minimax_h3_rms_adaln");
     H3_PIPE(rms_plain_bf16, "minimax_h3_rms_plain_bf16");
@@ -339,6 +397,7 @@ static int h3_metal_open(const char *path,
     H3_PIPE(residual_bf16, "minimax_h3_gated_residual_bf16");
     H3_PIPE(qwen_prepare, "minimax_h3_qwen_prepare_qkv");
     H3_PIPE(qwen_attention, "minimax_h3_qwen_causal_attention");
+    H3_PIPE(h3_rope, "minimax_h3_build_rope_f32");
     H3_PIPE(h3_prepare, "minimax_h3_prepare_qkv");
     H3_PIPE(h3_attention, "minimax_h3_hierarchical_attention");
     H3_PIPE(h3_prepare_bf16, "minimax_h3_prepare_qkv_bf16");
@@ -346,8 +405,11 @@ static int h3_metal_open(const char *path,
     H3_PIPE(h3_attention_mma64_bf16,
             "minimax_h3_dense_attention_mma64_bf16");
     H3_PIPE(f32_to_bf16, "minimax_h3_f32_to_bf16");
+    H3_PIPE(video_rope, "minimax_h3_build_video_rope_f32");
     H3_PIPE(video_prepare, "minimax_h3_video_prepare_qkv");
     H3_PIPE(video_attention, "minimax_h3_video_attention");
+    H3_PIPE(video_attention_tiled,
+            "minimax_h3_video_attention_tiled8");
     H3_PIPE(audio_conv, "minimax_h3_audio_conv1d_f32");
     H3_PIPE(audio_conv_transpose, "minimax_h3_audio_conv_transpose1d_f32");
     H3_PIPE(audio_alias, "minimax_h3_audio_alias_snake_f32");
@@ -365,6 +427,7 @@ static int h3_metal_open(const char *path,
         result.dense_f32_bf16_to_f32 == nil ||
         result.dense_f32_bf16_activation == nil ||
         result.dense_f16 == nil ||
+        result.dense_f16_mma_weight_tiled_b64 == nil ||
         result.rms_plain == nil || result.rms_adaln == nil ||
         result.rms_plain_bf16 == nil || result.rms_adaln_bf16 == nil ||
         result.silu_pair == nil ||
@@ -373,11 +436,13 @@ static int h3_metal_open(const char *path,
         result.silu_split == nil || result.silu_split_bf16 == nil ||
         result.residual == nil || result.residual_bf16 == nil ||
         result.qwen_prepare == nil || result.qwen_attention == nil ||
+        result.h3_rope == nil ||
         result.h3_prepare == nil || result.h3_attention == nil ||
         result.h3_prepare_bf16 == nil || result.h3_attention_bf16 == nil ||
         result.h3_attention_mma64_bf16 == nil ||
-        result.f32_to_bf16 == nil ||
+        result.f32_to_bf16 == nil || result.video_rope == nil ||
         result.video_prepare == nil || result.video_attention == nil ||
+        result.video_attention_tiled == nil ||
         result.audio_conv == nil || result.audio_conv_transpose == nil ||
         result.audio_alias == nil || result.audio_residual == nil ||
         result.audio_average3 == nil) {
@@ -386,6 +451,10 @@ static int h3_metal_open(const char *path,
                   description != NULL ? description : "missing pipeline");
         return 1;
     }
+    result.setup_seconds = e2e_now() - setup_started;
+    fprintf(stderr, "stage=metal-setup pipeline_archive=%s seconds=%.6f\n",
+            result.pipeline_archive_hit ? "hit" : "miss",
+            result.setup_seconds);
     *metal = result;
     return 0;
 }
@@ -413,9 +482,39 @@ static int h3_bind_tensor(h3_remote_image *image,
     if (minimax_h3_remote_safetensors_find(&image->remote, name, &tensor,
                                             error, error_capacity) != 0)
         return 1;
+    long page_value = sysconf(_SC_PAGESIZE);
+    if (page_value <= 0) {
+        e2e_error(error, error_capacity, "cannot query VM page size");
+        return 1;
+    }
+    size_t page = (size_t)page_value;
+    if (image->whole_buffer == NULL && page != 0u &&
+        image->mapping_bytes <= SIZE_MAX - (page - 1u)) {
+        size_t whole_length =
+            (image->mapping_bytes + page - 1u) & ~(page - 1u);
+        if (whole_length <= metal->device.maxBufferLength) {
+            id<MTLBuffer> whole = [metal->device
+                newBufferWithBytesNoCopy:image->mapping
+                                  length:whole_length
+                                 options:MTLResourceStorageModeShared
+                             deallocator:^(__unused void *pointer,
+                                           __unused NSUInteger bytes) {}];
+            if (whole != nil)
+                image->whole_buffer = (__bridge_retained void *)whole;
+        }
+    }
+    if (image->whole_buffer != NULL) {
+        uint64_t offset = (uint64_t)image->file_padding + tensor.data_start;
+        if (offset <= NSUIntegerMax && offset <= image->mapping_bytes &&
+            tensor.data_length <= image->mapping_bytes - (size_t)offset) {
+            binding->tensor = tensor;
+            binding->buffer = (__bridge id<MTLBuffer>)image->whole_buffer;
+            binding->offset = (NSUInteger)offset;
+            return 0;
+        }
+    }
     uintptr_t address = (uintptr_t)image->mapping + image->file_padding +
                         (uintptr_t)tensor.data_start;
-    size_t page = (size_t)sysconf(_SC_PAGESIZE);
     uintptr_t page_address = address & ~(uintptr_t)(page - 1u);
     size_t offset = (size_t)(address - page_address);
     uint64_t needed = (uint64_t)offset + tensor.data_length;
@@ -772,32 +871,50 @@ static int h3_q4_linear_lora(h3_remote_image *image,
     return 0;
 }
 
-static int h3_dense_linear(h3_remote_image *image,
-                           h3_metal *metal,
-                           id<MTLComputeCommandEncoder> encoder,
-                           const char *prefix,
-                           id<MTLBuffer> input,
-                           id<MTLBuffer> output,
-                           uint32_t batch,
-                           uint32_t input_stride,
-                           char *error,
-                           size_t error_capacity) {
+static int h3_dense_bind(h3_remote_image *image,
+                         h3_metal *metal,
+                         const char *prefix,
+                         h3_dense_binding *binding,
+                         char *error,
+                         size_t error_capacity) {
     char name[192];
-    h3_tensor_binding weight = { {0}, nil, 0u };
-    h3_tensor_binding bias = { {0}, nil, 0u };
     snprintf(name, sizeof(name), "%s.weight", prefix);
-    if (h3_bind_tensor(image, metal, name, &weight, error, error_capacity) != 0)
+    if (h3_bind_tensor(image, metal, name, &binding->weight, error,
+                       error_capacity) != 0)
         return 1;
     snprintf(name, sizeof(name), "%s.bias", prefix);
-    if (h3_bind_tensor(image, metal, name, &bias, error, error_capacity) != 0)
+    if (h3_bind_tensor(image, metal, name, &binding->bias, error,
+                       error_capacity) != 0)
         return 1;
+    h3_tensor_binding weight = binding->weight;
+    h3_tensor_binding bias = binding->bias;
     if (weight.tensor.rank != 2u || bias.tensor.rank != 1u ||
         weight.tensor.shape[0] != bias.tensor.shape[0] ||
-        weight.tensor.shape[1] > input_stride ||
         (strcmp(weight.tensor.dtype, "BF16") != 0 &&
          strcmp(weight.tensor.dtype, "F32") != 0 &&
          strcmp(weight.tensor.dtype, "F16") != 0)) {
         e2e_error(error, error_capacity, "invalid dense tensor: %s", prefix);
+        return 1;
+    }
+    return 0;
+}
+
+static int h3_dense_linear_bound(const h3_dense_binding *binding,
+                                 h3_metal *metal,
+                                 id<MTLComputeCommandEncoder> encoder,
+                                 id<MTLBuffer> input,
+                                 id<MTLBuffer> output,
+                                 uint32_t batch,
+                                 uint32_t input_stride,
+                                 char *error,
+                                 size_t error_capacity) {
+    h3_tensor_binding weight = binding->weight;
+    h3_tensor_binding bias = binding->bias;
+    if (weight.tensor.shape[1] > input_stride) {
+        e2e_error(error, error_capacity,
+                  "dense input stride %u is smaller than %llu columns",
+                  input_stride,
+                  (unsigned long long)weight.tensor.shape[1]);
         return 1;
     }
     h3_dense_parameters parameters = {
@@ -809,7 +926,14 @@ static int h3_dense_linear(h3_remote_image *image,
     uint32_t has_bias = 1u;
     id<MTLComputePipelineState> pipeline = metal->dense_f32;
     if (strcmp(weight.tensor.dtype, "BF16") == 0) pipeline = metal->dense_bf16;
-    if (strcmp(weight.tensor.dtype, "F16") == 0) pipeline = metal->dense_f16;
+    int f16_mma = !metal->reference_vae_gemm &&
+                  strcmp(weight.tensor.dtype, "F16") == 0 &&
+                  parameters.rows % 64u == 0u &&
+                  parameters.columns % 64u == 0u;
+    if (strcmp(weight.tensor.dtype, "F16") == 0) {
+        pipeline = f16_mma ? metal->dense_f16_mma_weight_tiled_b64
+                           : metal->dense_f16;
+    }
     [encoder setComputePipelineState:pipeline];
     [encoder setBuffer:input offset:0 atIndex:0];
     h3_set(encoder, weight, 1);
@@ -817,9 +941,15 @@ static int h3_dense_linear(h3_remote_image *image,
     [encoder setBuffer:output offset:0 atIndex:3];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4];
     [encoder setBytes:&has_bias length:sizeof(has_bias) atIndex:5];
-    uint32_t groups = batch * parameters.rows;
-    [encoder dispatchThreadgroups:MTLSizeMake((groups + 3u) / 4u, 1u, 1u)
-                threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
+    if (f16_mma) {
+        [encoder dispatchThreadgroups:
+            MTLSizeMake(parameters.rows / 64u, (batch + 63u) / 64u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
+    } else {
+        uint32_t groups = batch * parameters.rows;
+        [encoder dispatchThreadgroups:MTLSizeMake((groups + 3u) / 4u, 1u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
+    }
     return 0;
 }
 
@@ -1589,7 +1719,8 @@ static int h3_prepare_attention(h3_remote_image *weights,
                                 id<MTLComputeCommandEncoder> encoder,
                                 const char *prefix,
                                 id<MTLBuffer> projected,
-                                id<MTLBuffer> positions,
+                                id<MTLBuffer> rotary,
+                                uint32_t apply_rotary,
                                 id<MTLBuffer> query,
                                 id<MTLBuffer> key,
                                 id<MTLBuffer> value,
@@ -1611,11 +1742,12 @@ static int h3_prepare_attention(h3_remote_image *weights,
     [encoder setBuffer:projected offset:0 atIndex:0];
     h3_set(encoder, q_norm, 1);
     h3_set(encoder, k_norm, 2);
-    [encoder setBuffer:positions offset:0 atIndex:3];
+    [encoder setBuffer:rotary offset:0 atIndex:3];
     [encoder setBuffer:query offset:0 atIndex:4];
     [encoder setBuffer:key offset:0 atIndex:5];
     [encoder setBuffer:value offset:0 atIndex:6];
     [encoder setBytes:&rows length:sizeof(rows) atIndex:7];
+    [encoder setBytes:&apply_rotary length:sizeof(apply_rotary) atIndex:8];
     [encoder dispatchThreadgroups:MTLSizeMake(rows, 112u, 1u)
                 threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
     return 0;
@@ -1657,7 +1789,7 @@ static int h3_plain_block(h3_remote_image *weights,
         goto failed;
     snprintf(projection, sizeof(projection), "%s.attn", prefix);
     if (h3_prepare_attention(weights, metal, encoder, projection, qkv,
-                             positions, query, key, value, rows, error,
+                             positions, 0u, query, key, value, rows, error,
                              error_capacity) != 0)
         goto failed;
     h3_dense_attention(metal, encoder, query, key, value, attended, rows);
@@ -1743,7 +1875,7 @@ static int h3_denoise_block(h3_remote_image *weights,
         goto qkv_failed;
     snprintf(name, sizeof(name), "%s.attn", prefix);
     if (h3_prepare_attention(weights, metal, encoder, name, qkv, positions,
-                             query, key, value, rows, error,
+                             1u, query, key, value, rows, error,
                              error_capacity) != 0)
         goto qkv_failed;
     [encoder endEncoding];
@@ -2224,6 +2356,7 @@ static int h3_transformer_run(const uint16_t *text_states,
                               h3_latents *latents,
                               double *download_seconds,
                               double *turbo_compile_seconds,
+                              double *rope_precompute_seconds,
                               double *denoise_seconds,
                               size_t *peak_footprint,
                               char *error,
@@ -2233,6 +2366,7 @@ static int h3_transformer_run(const uint16_t *text_states,
     h3_remote_image adapter = {0};
     h3_turbo_cache turbo_cache = {0};
     *turbo_compile_seconds = 0.0;
+    *rope_precompute_seconds = 0.0;
     int status = 1;
     uint32_t latent_height = options->height / 16u;
     uint32_t latent_width = options->width / 16u;
@@ -2350,6 +2484,9 @@ static int h3_transformer_run(const uint16_t *text_states,
                                                            options:MTLResourceStorageModeShared];
     id<MTLBuffer> positions = [metal->device
         newBufferWithLength:(size_t)rows * 3u * 4u options:MTLResourceStorageModeShared];
+    id<MTLBuffer> rotary = [metal->device
+        newBufferWithLength:(size_t)rows * 48u * 2u * sizeof(float)
+                    options:MTLResourceStorageModePrivate];
     id<MTLBuffer> row_indices = [metal->device newBufferWithLength:rows
                                                            options:MTLResourceStorageModeShared];
     id<MTLBuffer> final_indices = [metal->device newBufferWithLength:rows
@@ -2385,6 +2522,7 @@ static int h3_transformer_run(const uint16_t *text_states,
         attention_fp32_scratch == nil || attention_output == nil ||
         lora_scratch == nil ||
         fc1 == nil || gated == nil || mlp_output == nil || positions == nil ||
+        rotary == nil ||
         row_indices == nil || final_indices == nil || zero == nil || text_input == nil ||
         text_hidden == nil || video_input == nil || audio_input == nil ||
         video_hidden == nil || audio_hidden == nil || video_velocity == nil ||
@@ -2445,6 +2583,26 @@ static int h3_transformer_run(const uint16_t *text_states,
             final_index_values[row] = 0u;
         }
         temporal += (5.0 / 3.0) * span[frame % 5u];
+    }
+
+    {
+        double rope_started = e2e_now();
+        id<MTLCommandBuffer> command = [metal->queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        [encoder setComputePipelineState:metal->h3_rope];
+        [encoder setBuffer:positions offset:0 atIndex:0];
+        [encoder setBuffer:rotary offset:0 atIndex:1];
+        [encoder setBytes:&rows length:sizeof(rows) atIndex:2];
+        [encoder dispatchThreads:MTLSizeMake((size_t)rows * 48u, 1u, 1u)
+                 threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
+        [encoder endEncoding];
+        if (h3_wait(command, error, error_capacity) != 0) goto cleanup;
+        *rope_precompute_seconds = e2e_now() - rope_started;
+        fprintf(stderr,
+                "stage=rope-precompute rows=%u bytes=%zu seconds=%.6f\n",
+                rows, (size_t)rows * 48u * 2u * sizeof(float),
+                *rope_precompute_seconds);
+        fflush(stderr);
     }
 
     {
@@ -2603,7 +2761,7 @@ static int h3_transformer_run(const uint16_t *text_states,
                                  key, value, attended, attention_fp32_scratch,
                                  attention_output, lora_scratch, fc1, gated,
                                  mlp_output,
-                                 positions, rows,
+                                 rotary, rows,
                                  error, error_capacity) != 0) {
                 free(video);
                 free(audio);
@@ -2775,123 +2933,169 @@ cleanup:
     return status;
 }
 
-static int h3_video_rms(h3_remote_image *weights,
-                        h3_metal *metal,
-                        id<MTLComputeCommandEncoder> encoder,
-                        const char *name,
-                        id<MTLBuffer> input,
-                        id<MTLBuffer> output,
-                        uint32_t rows,
-                        char *error,
-                        size_t error_capacity) {
-    h3_tensor_binding weight = { {0}, nil, 0u };
-    if (h3_bind_tensor(weights, metal, name, &weight, error,
-                       error_capacity) != 0)
+typedef struct {
+    h3_tensor_binding norm1;
+    h3_dense_binding qkv;
+    h3_dense_binding attention_output;
+    h3_tensor_binding scale1;
+    h3_tensor_binding norm2;
+    h3_dense_binding w1;
+    h3_dense_binding w2;
+    h3_tensor_binding scale2;
+} h3_video_block_binding;
+
+typedef struct {
+    h3_dense_binding x_embedder;
+    h3_video_block_binding blocks[36];
+    h3_tensor_binding norm_out_weight;
+    h3_tensor_binding norm_out_bias;
+    h3_dense_binding projection_out;
+} h3_video_model_binding;
+
+static int h3_video_bind_weights(h3_remote_image *weights,
+                                 h3_metal *metal,
+                                 h3_video_model_binding *model,
+                                 char *error,
+                                 size_t error_capacity) {
+    char base[160];
+    char name[192];
+    if (h3_dense_bind(weights, metal, "decoder.x_embedder",
+                      &model->x_embedder, error, error_capacity) != 0)
         return 1;
+    for (unsigned layer = 0u; layer < 36u; ++layer) {
+        h3_video_block_binding *block = &model->blocks[layer];
+        snprintf(base, sizeof(base), "decoder.transformer_blocks.%u", layer);
+#define H3_VIDEO_BIND_TENSOR(field, suffix)                                  \
+        do {                                                                 \
+            snprintf(name, sizeof(name), "%s.%s", base, suffix);            \
+            if (h3_bind_tensor(weights, metal, name, &block->field, error,   \
+                               error_capacity) != 0)                         \
+                return 1;                                                    \
+        } while (0)
+#define H3_VIDEO_BIND_DENSE(field, suffix)                                   \
+        do {                                                                 \
+            snprintf(name, sizeof(name), "%s.%s", base, suffix);            \
+            if (h3_dense_bind(weights, metal, name, &block->field, error,    \
+                              error_capacity) != 0)                          \
+                return 1;                                                    \
+        } while (0)
+        H3_VIDEO_BIND_TENSOR(norm1, "norm1.weight");
+        H3_VIDEO_BIND_DENSE(qkv, "attn.to_qkv");
+        H3_VIDEO_BIND_DENSE(attention_output, "attn.to_out");
+        H3_VIDEO_BIND_TENSOR(scale1, "scale1");
+        H3_VIDEO_BIND_TENSOR(norm2, "norm2.weight");
+        H3_VIDEO_BIND_DENSE(w1, "ff.w1");
+        H3_VIDEO_BIND_DENSE(w2, "ff.w2");
+        H3_VIDEO_BIND_TENSOR(scale2, "scale2");
+#undef H3_VIDEO_BIND_DENSE
+#undef H3_VIDEO_BIND_TENSOR
+    }
+    if (h3_bind_tensor(weights, metal, "decoder.norm_out.weight",
+                       &model->norm_out_weight, error, error_capacity) != 0 ||
+        h3_bind_tensor(weights, metal, "decoder.norm_out.bias",
+                       &model->norm_out_bias, error, error_capacity) != 0 ||
+        h3_dense_bind(weights, metal, "decoder.proj_out",
+                      &model->projection_out, error, error_capacity) != 0)
+        return 1;
+    return 0;
+}
+
+static void h3_video_rms_bound(const h3_tensor_binding *weight,
+                               h3_metal *metal,
+                               id<MTLComputeCommandEncoder> encoder,
+                               id<MTLBuffer> input,
+                               id<MTLBuffer> output,
+                               uint32_t rows) {
     h3_norm_parameters parameters = {
         .rows = rows, .columns = 2048u, .epsilon = 1e-5f,
     };
     [encoder setComputePipelineState:metal->rms_f16];
     [encoder setBuffer:input offset:0 atIndex:0];
-    h3_set(encoder, weight, 1);
+    h3_set(encoder, *weight, 1);
     [encoder setBuffer:output offset:0 atIndex:2];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
     [encoder dispatchThreadgroups:MTLSizeMake(rows, 1u, 1u)
                 threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
-    return 0;
 }
 
-static int h3_video_scaled_residual(h3_remote_image *weights,
-                                    h3_metal *metal,
-                                    id<MTLComputeCommandEncoder> encoder,
-                                    const char *scale_name,
-                                    id<MTLBuffer> hidden,
-                                    id<MTLBuffer> update,
-                                    uint32_t rows,
-                                    char *error,
-                                    size_t error_capacity) {
-    h3_tensor_binding scale = { {0}, nil, 0u };
-    if (h3_bind_tensor(weights, metal, scale_name, &scale, error,
-                       error_capacity) != 0)
-        return 1;
+static void h3_video_scaled_residual_bound(
+    const h3_tensor_binding *scale,
+    h3_metal *metal,
+    id<MTLComputeCommandEncoder> encoder,
+    id<MTLBuffer> hidden,
+    id<MTLBuffer> update,
+    uint32_t rows) {
     uint32_t columns = 2048u;
     [encoder setComputePipelineState:metal->scaled_residual_f16];
     [encoder setBuffer:hidden offset:0 atIndex:0];
     [encoder setBuffer:update offset:0 atIndex:1];
-    h3_set(encoder, scale, 2);
+    h3_set(encoder, *scale, 2);
     [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
     [encoder setBytes:&columns length:sizeof(columns) atIndex:4];
     [encoder dispatchThreads:MTLSizeMake((size_t)rows * columns, 1u, 1u)
              threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
-    return 0;
 }
 
-static int h3_video_block(h3_remote_image *weights,
-                          h3_metal *metal,
-                          unsigned layer,
-                          id<MTLBuffer> hidden,
-                          id<MTLBuffer> normalized,
-                          id<MTLBuffer> qkv,
-                          id<MTLBuffer> query,
-                          id<MTLBuffer> key,
-                          id<MTLBuffer> value,
-                          id<MTLBuffer> attended,
-                          id<MTLBuffer> attention_output,
-                          id<MTLBuffer> fc1,
-                          id<MTLBuffer> gated,
-                          id<MTLBuffer> mlp_output,
-                          id<MTLBuffer> positions,
-                          uint32_t rows,
-                          char *error,
-                          size_t error_capacity) {
-    char base[160];
-    char name[192];
-    snprintf(base, sizeof(base), "decoder.transformer_blocks.%u", layer);
-    id<MTLCommandBuffer> command = [metal->queue commandBuffer];
-    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
-    snprintf(name, sizeof(name), "%s.norm1.weight", base);
-    if (h3_video_rms(weights, metal, encoder, name, hidden, normalized, rows,
-                     error, error_capacity) != 0)
-        goto failed;
-    snprintf(name, sizeof(name), "%s.attn.to_qkv", base);
-    if (h3_dense_linear(weights, metal, encoder, name, normalized, qkv, rows,
-                        2048u, error, error_capacity) != 0)
-        goto failed;
+static int h3_video_block_encode(
+    const h3_video_block_binding *block,
+    h3_metal *metal,
+    id<MTLComputeCommandEncoder> encoder,
+    id<MTLBuffer> hidden,
+    id<MTLBuffer> normalized,
+    id<MTLBuffer> qkv,
+    id<MTLBuffer> query,
+    id<MTLBuffer> key,
+    id<MTLBuffer> value,
+    id<MTLBuffer> attended,
+    id<MTLBuffer> attention_output,
+    id<MTLBuffer> fc1,
+    id<MTLBuffer> gated,
+    id<MTLBuffer> mlp_output,
+    id<MTLBuffer> rotary,
+    uint32_t rows,
+    char *error,
+    size_t error_capacity) {
+    h3_video_rms_bound(&block->norm1, metal, encoder, hidden, normalized,
+                       rows);
+    if (h3_dense_linear_bound(&block->qkv, metal, encoder, normalized, qkv,
+                              rows, 2048u, error, error_capacity) != 0)
+        return 1;
     [encoder setComputePipelineState:metal->video_prepare];
     [encoder setBuffer:qkv offset:0 atIndex:0];
-    [encoder setBuffer:positions offset:0 atIndex:1];
+    [encoder setBuffer:rotary offset:0 atIndex:1];
     [encoder setBuffer:query offset:0 atIndex:2];
     [encoder setBuffer:key offset:0 atIndex:3];
     [encoder setBuffer:value offset:0 atIndex:4];
     [encoder setBytes:&rows length:sizeof(rows) atIndex:5];
     [encoder dispatchThreadgroups:MTLSizeMake(rows, 32u, 1u)
                 threadsPerThreadgroup:MTLSizeMake(64u, 1u, 1u)];
-    [encoder setComputePipelineState:metal->video_attention];
+    [encoder setComputePipelineState:metal->reference_vae_attention
+                                         ? metal->video_attention
+                                         : metal->video_attention_tiled];
     [encoder setBuffer:query offset:0 atIndex:0];
     [encoder setBuffer:key offset:0 atIndex:1];
     [encoder setBuffer:value offset:0 atIndex:2];
     [encoder setBuffer:attended offset:0 atIndex:3];
     [encoder setBytes:&rows length:sizeof(rows) atIndex:4];
-    [encoder dispatchThreadgroups:MTLSizeMake(rows * 32u, 1u, 1u)
-                threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
-    snprintf(name, sizeof(name), "%s.attn.to_out", base);
-    if (h3_dense_linear(weights, metal, encoder, name, attended,
-                        attention_output, rows, 2048u, error,
-                        error_capacity) != 0)
-        goto failed;
-    snprintf(name, sizeof(name), "%s.scale1", base);
-    if (h3_video_scaled_residual(weights, metal, encoder, name, hidden,
-                                 attention_output, rows, error,
-                                 error_capacity) != 0)
-        goto failed;
-    snprintf(name, sizeof(name), "%s.norm2.weight", base);
-    if (h3_video_rms(weights, metal, encoder, name, hidden, normalized, rows,
-                     error, error_capacity) != 0)
-        goto failed;
-    snprintf(name, sizeof(name), "%s.ff.w1", base);
-    if (h3_dense_linear(weights, metal, encoder, name, normalized, fc1, rows,
-                        2048u, error, error_capacity) != 0)
-        goto failed;
+    if (metal->reference_vae_attention) {
+        [encoder dispatchThreadgroups:MTLSizeMake(rows * 32u, 1u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
+    } else {
+        [encoder dispatchThreadgroups:
+            MTLSizeMake(((rows + 7u) / 8u) * 32u, 1u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
+    }
+    if (h3_dense_linear_bound(&block->attention_output, metal, encoder,
+                              attended, attention_output, rows, 2048u, error,
+                              error_capacity) != 0)
+        return 1;
+    h3_video_scaled_residual_bound(&block->scale1, metal, encoder, hidden,
+                                   attention_output, rows);
+    h3_video_rms_bound(&block->norm2, metal, encoder, hidden, normalized,
+                       rows);
+    if (h3_dense_linear_bound(&block->w1, metal, encoder, normalized, fc1,
+                              rows, 2048u, error, error_capacity) != 0)
+        return 1;
     uint32_t width = 8192u;
     [encoder setComputePipelineState:metal->silu_split];
     [encoder setBuffer:fc1 offset:0 atIndex:0];
@@ -2900,20 +3104,12 @@ static int h3_video_block(h3_remote_image *weights,
     [encoder setBytes:&width length:sizeof(width) atIndex:3];
     [encoder dispatchThreads:MTLSizeMake((size_t)rows * width, 1u, 1u)
              threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
-    snprintf(name, sizeof(name), "%s.ff.w2", base);
-    if (h3_dense_linear(weights, metal, encoder, name, gated, mlp_output,
-                        rows, 8192u, error, error_capacity) != 0)
-        goto failed;
-    snprintf(name, sizeof(name), "%s.scale2", base);
-    if (h3_video_scaled_residual(weights, metal, encoder, name, hidden,
-                                 mlp_output, rows, error,
-                                 error_capacity) != 0)
-        goto failed;
-    [encoder endEncoding];
-    return h3_wait(command, error, error_capacity);
-failed:
-    [encoder endEncoding];
-    return 1;
+    if (h3_dense_linear_bound(&block->w2, metal, encoder, gated, mlp_output,
+                              rows, 8192u, error, error_capacity) != 0)
+        return 1;
+    h3_video_scaled_residual_bound(&block->scale2, metal, encoder, hidden,
+                                   mlp_output, rows);
+    return 0;
 }
 
 static const uint16_t *h3_f16_tensor_pointer(h3_remote_image *image,
@@ -3021,15 +3217,16 @@ typedef struct {
 } h3_video_tile_plan;
 
 static int h3_video_make_tile_plan(uint32_t length,
+                                   uint32_t tile_size,
                                    h3_video_tile_plan *plan,
                                    char *error,
                                    size_t error_capacity) {
-    const uint32_t tile_size = 256u;
     const uint32_t minimum_overlap = 64u;
     memset(plan, 0, sizeof(*plan));
-    if (length == 0u || length % 16u != 0u) {
+    if (length == 0u || length % 16u != 0u || tile_size < 128u ||
+        tile_size % 16u != 0u) {
         e2e_error(error, error_capacity,
-                  "VAE tile dimension must be a positive multiple of 16");
+                  "VAE axis and tile size must be valid multiples of 16");
         return 1;
     }
     if (length <= tile_size) {
@@ -3072,6 +3269,7 @@ static int h3_video_decode(const h3_latents *latents,
                            char *frame_directory,
                            size_t frame_directory_capacity,
                            double *download_seconds,
+                           double *precompute_seconds,
                            double *seconds,
                            size_t *peak_footprint,
                            char *error,
@@ -3088,6 +3286,7 @@ static int h3_video_decode(const h3_latents *latents,
     float *clip_rgb = NULL;
     float *tile_storage_a = NULL;
     float *tile_storage_b = NULL;
+    h3_video_model_binding model = {0};
     double started = e2e_now();
     /* The released VAE is temporally decoded in overlapping clips and uses
      * 256-pixel spatial tiles with at least 64 pixels of overlap.  With
@@ -3108,11 +3307,19 @@ static int h3_video_decode(const h3_latents *latents,
         return 1;
     }
     uint32_t chunk_count = pseudo_tokens / chunk_stride - 1u;
+    uint32_t tile_height = 256u;
+    uint32_t tile_width = 256u;
+    const char *tile_height_text = getenv("MINIMAX_H3_VAE_TILE_HEIGHT");
+    const char *tile_width_text = getenv("MINIMAX_H3_VAE_TILE_WIDTH");
+    if (tile_height_text != NULL)
+        tile_height = (uint32_t)strtoul(tile_height_text, NULL, 10);
+    if (tile_width_text != NULL)
+        tile_width = (uint32_t)strtoul(tile_width_text, NULL, 10);
     h3_video_tile_plan y_plan;
     h3_video_tile_plan x_plan;
-    if (h3_video_make_tile_plan(options->height, &y_plan, error,
+    if (h3_video_make_tile_plan(options->height, tile_height, &y_plan, error,
                                 error_capacity) != 0 ||
-        h3_video_make_tile_plan(options->width, &x_plan, error,
+        h3_video_make_tile_plan(options->width, tile_width, &x_plan, error,
                                 error_capacity) != 0) {
         h3_remote_image_close(&vae);
         return 1;
@@ -3122,7 +3329,8 @@ static int h3_video_decode(const h3_latents *latents,
     uint32_t maximum_tokens = chunk_latent_frames * maximum_latent_height *
                               maximum_latent_width;
     uint32_t maximum_rows = maximum_tokens + 5u;
-    uint32_t maximum_padded = (maximum_rows + 31u) & ~31u;
+    uint32_t maximum_padded = (maximum_rows + 63u) & ~63u;
+    double precompute_started = e2e_now();
     size_t hidden_bytes = (size_t)maximum_padded * 2048u * 2u;
     id<MTLBuffer> latent_input = [metal->device
         newBufferWithLength:(size_t)maximum_tokens * 24u * 2u options:MTLResourceStorageModeShared];
@@ -3150,15 +3358,57 @@ static int h3_video_decode(const h3_latents *latents,
                                                            options:MTLResourceStorageModeShared];
     id<MTLBuffer> positions = [metal->device
         newBufferWithLength:(size_t)maximum_rows * 3u * 4u options:MTLResourceStorageModeShared];
+    id<MTLBuffer> rotary = [metal->device
+        newBufferWithLength:(size_t)maximum_rows * 24u * 2u * sizeof(float)
+                    options:MTLResourceStorageModePrivate];
     id<MTLBuffer> pixels = [metal->device
         newBufferWithLength:(size_t)maximum_tokens * 3072u * 2u options:MTLResourceStorageModeShared];
     if (latent_input == nil || hidden == nil || normalized == nil || qkv == nil ||
         query == nil || key == nil || value == nil || attended == nil ||
         attention_output == nil || fc1 == nil || gated == nil ||
-        mlp_output == nil || positions == nil || pixels == nil) {
+        mlp_output == nil || positions == nil || rotary == nil ||
+        pixels == nil) {
         e2e_error(error, error_capacity, "video VAE activation allocation failed");
         goto cleanup;
     }
+    if (h3_video_bind_weights(&vae, metal, &model, error,
+                              error_capacity) != 0)
+        goto cleanup;
+    {
+        float *pos = positions.contents;
+        for (uint32_t frame = 0u; frame < chunk_latent_frames; ++frame)
+            for (uint32_t y = 0u; y < maximum_latent_height; ++y)
+                for (uint32_t x = 0u; x < maximum_latent_width; ++x) {
+                    uint32_t token =
+                        (frame * maximum_latent_height + y) *
+                            maximum_latent_width + x;
+                    pos[token * 3u] = (float)(
+                        (2.0 * ((frame + 0.5) / chunk_latent_frames) - 1.0) *
+                        6.283185307179586);
+                    pos[token * 3u + 1u] = (float)(
+                        (2.0 * ((y + 0.5) / maximum_latent_height) - 1.0) *
+                        6.283185307179586);
+                    pos[token * 3u + 2u] = (float)(
+                        (2.0 * ((x + 0.5) / maximum_latent_width) - 1.0) *
+                        6.283185307179586);
+                }
+        memset(pos + (size_t)maximum_tokens * 3u, 0,
+               5u * 3u * sizeof(float));
+        id<MTLCommandBuffer> command = [metal->queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder =
+            [command computeCommandEncoder];
+        [encoder setComputePipelineState:metal->video_rope];
+        [encoder setBuffer:positions offset:0 atIndex:0];
+        [encoder setBuffer:rotary offset:0 atIndex:1];
+        [encoder setBytes:&maximum_rows length:sizeof(maximum_rows) atIndex:2];
+        [encoder dispatchThreads:MTLSizeMake((size_t)maximum_rows * 24u, 1u,
+                                             1u)
+                 threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
+        [encoder endEncoding];
+        if (h3_wait(command, error, error_capacity) != 0) goto cleanup;
+    }
+    *precompute_seconds = e2e_now() - precompute_started;
+    started = e2e_now();
     minimax_h3_remote_tensor mean_tensor, std_tensor, pqw_tensor, pqb_tensor;
     const uint16_t *mean = h3_f16_tensor_pointer(&vae, "latents_mean",
         &mean_tensor, error, error_capacity);
@@ -3264,10 +3514,10 @@ static int h3_video_decode(const h3_latents *latents,
                         [metal->queue commandBuffer];
                     id<MTLComputeCommandEncoder> encoder =
                         [command computeCommandEncoder];
-                    if (h3_dense_linear(&vae, metal, encoder,
-                                        "decoder.x_embedder", latent_input,
-                                        hidden, tokens, 24u, error,
-                                        error_capacity) != 0) {
+                    if (h3_dense_linear_bound(
+                            &model.x_embedder, metal, encoder, latent_input,
+                            hidden, tokens, 24u, error,
+                            error_capacity) != 0) {
                         [encoder endEncoding];
                         goto cleanup;
                     }
@@ -3278,53 +3528,42 @@ static int h3_video_decode(const h3_latents *latents,
                 memcpy((uint16_t *)hidden.contents +
                            (size_t)tokens * 2048u,
                        registers, 4u * 2048u * 2u);
-                float *pos = positions.contents;
-                for (uint32_t frame = 0u; frame < chunk_latent_frames;
-                     ++frame)
-                    for (uint32_t y = 0u; y < tile_latent_height; ++y)
-                        for (uint32_t x = 0u; x < tile_latent_width; ++x) {
-                            uint32_t token =
-                                (frame * tile_latent_height + y) *
-                                    tile_latent_width + x;
-                            pos[token * 3u] = (float)(
-                                (2.0 * ((frame + 0.5) /
-                                        chunk_latent_frames) -
-                                 1.0) *
-                                6.283185307179586);
-                            pos[token * 3u + 1u] = (float)(
-                                (2.0 * ((y + 0.5) / tile_latent_height) -
-                                 1.0) *
-                                6.283185307179586);
-                            pos[token * 3u + 2u] = (float)(
-                                (2.0 * ((x + 0.5) / tile_latent_width) -
-                                 1.0) *
-                                6.283185307179586);
+                if (rows != maximum_rows) {
+                    e2e_error(error, error_capacity,
+                              "video VAE tile geometry changed within a run");
+                    goto cleanup;
+                }
+                /* Four ViT3D blocks per command buffer keeps each submission
+                 * below a long-running GPU watchdog interval while removing
+                 * 27 of the former 36 CPU waits per tile. */
+                for (unsigned layer0 = 0u; layer0 < 36u; layer0 += 4u) {
+                    id<MTLCommandBuffer> command =
+                        [metal->queue commandBuffer];
+                    id<MTLComputeCommandEncoder> encoder =
+                        [command computeCommandEncoder];
+                    unsigned layer_end = layer0 + 4u < 36u
+                                             ? layer0 + 4u
+                                             : 36u;
+                    for (unsigned layer = layer0; layer < layer_end; ++layer)
+                        if (h3_video_block_encode(
+                                &model.blocks[layer], metal, encoder, hidden,
+                                normalized, qkv, query, key, value, attended,
+                                attention_output, fc1, gated, mlp_output,
+                                rotary, rows, error, error_capacity) != 0) {
+                            [encoder endEncoding];
+                            goto cleanup;
                         }
-                memset(pos + (size_t)tokens * 3u, 0,
-                       5u * 3u * sizeof(float));
-                for (unsigned layer = 0u; layer < 36u; ++layer) {
-                    if (h3_video_block(
-                            &vae, metal, layer, hidden, normalized, qkv,
-                            query, key, value, attended, attention_output, fc1,
-                            gated, mlp_output, positions, rows, error,
-                            error_capacity) != 0)
+                    [encoder endEncoding];
+                    if (h3_wait(command, error, error_capacity) != 0)
                         goto cleanup;
                     fprintf(stderr,
                             "stage=video-decode chunk=%u/%u tile=%u,%u/%u,%u "
                             "layer=%u/36 footprint=%zu\n",
                             chunk + 1u, chunk_count, tile_y + 1u, tile_x + 1u,
-                            y_plan.count, x_plan.count, layer + 1u,
+                            y_plan.count, x_plan.count, layer_end,
                             e2e_footprint());
                 }
                 {
-                    h3_tensor_binding weight = { {0}, nil, 0u };
-                    h3_tensor_binding bias = { {0}, nil, 0u };
-                    if (h3_bind_tensor(&vae, metal,
-                                       "decoder.norm_out.weight", &weight,
-                                       error, error_capacity) != 0 ||
-                        h3_bind_tensor(&vae, metal, "decoder.norm_out.bias",
-                                       &bias, error, error_capacity) != 0)
-                        goto cleanup;
                     h3_norm_parameters parameters = {
                         .rows = rows,
                         .columns = 2048u,
@@ -3336,8 +3575,8 @@ static int h3_video_decode(const h3_latents *latents,
                         [command computeCommandEncoder];
                     [encoder setComputePipelineState:metal->layernorm_f16];
                     [encoder setBuffer:hidden offset:0 atIndex:0];
-                    h3_set(encoder, weight, 1);
-                    h3_set(encoder, bias, 2);
+                    h3_set(encoder, model.norm_out_weight, 1);
+                    h3_set(encoder, model.norm_out_bias, 2);
                     [encoder setBuffer:normalized offset:0 atIndex:3];
                     [encoder setBytes:&parameters
                                length:sizeof(parameters)
@@ -3345,10 +3584,10 @@ static int h3_video_decode(const h3_latents *latents,
                     [encoder dispatchThreadgroups:MTLSizeMake(rows, 1u, 1u)
                                 threadsPerThreadgroup:MTLSizeMake(256u, 1u,
                                                                  1u)];
-                    if (h3_dense_linear(&vae, metal, encoder,
-                                        "decoder.proj_out", normalized,
-                                        pixels, tokens, 2048u, error,
-                                        error_capacity) != 0) {
+                    if (h3_dense_linear_bound(
+                            &model.projection_out, metal, encoder, normalized,
+                            pixels, tokens, 2048u, error,
+                            error_capacity) != 0) {
                         [encoder endEncoding];
                         goto cleanup;
                     }
@@ -3980,9 +4219,12 @@ int minimax_h3_m3_run_downstream_smoke(
         if (h3_metal_open(options->metallib_path, &metal, error,
                           error_capacity) != 0)
             return 1;
+        measured.metal_setup_seconds = metal.setup_seconds;
+        measured.pipeline_archive_hit = metal.pipeline_archive_hit;
         if (h3_transformer_run(fixed_state, 1u, options, &metal, &generated,
                                &measured.transformer_download_seconds,
                                &measured.turbo_compile_seconds,
+                               &measured.rope_precompute_seconds,
                                &measured.denoise_seconds,
                                &measured.peak_footprint_bytes, error,
                                error_capacity) != 0)
@@ -3998,6 +4240,7 @@ int minimax_h3_m3_run_downstream_smoke(
         char frames[1024];
         if (h3_video_decode(&generated, options, &metal, frames,
                             sizeof(frames), &measured.video_download_seconds,
+                            &measured.video_precompute_seconds,
                             &measured.video_decode_seconds,
                             &measured.peak_footprint_bytes, error,
                             error_capacity) != 0) {
@@ -4035,6 +4278,93 @@ int minimax_h3_m3_run_downstream_smoke(
     }
 }
 
+int minimax_h3_m3_run_video_vae_smoke(
+    const minimax_h3_m3_e2e_options *options,
+    minimax_h3_m3_e2e_result *result,
+    char *error,
+    size_t error_capacity) {
+    if (options == NULL || result == NULL || options->metallib_path == NULL ||
+        options->output_directory == NULL || options->width == 0u ||
+        options->height == 0u || options->width % 16u != 0u ||
+        options->height % 16u != 0u || options->frames < 22u ||
+        (options->frames - 5u) % 17u != 0u) {
+        e2e_error(error, error_capacity, "invalid Video VAE smoke options");
+        return 2;
+    }
+    @autoreleasepool {
+        h3_metal metal;
+        minimax_h3_m3_e2e_result measured;
+        memset(&measured, 0, sizeof(measured));
+        struct rusage usage_start;
+        struct rusage usage_end;
+        getrusage(RUSAGE_SELF, &usage_start);
+        double total_started = e2e_now();
+        if (h3_metal_open(options->metallib_path, &metal, error,
+                          error_capacity) != 0)
+            return 1;
+        measured.metal_setup_seconds = metal.setup_seconds;
+        measured.pipeline_archive_hit = metal.pipeline_archive_hit;
+        h3_latents latents = {
+            .video_latent_frames =
+                ((options->frames - 5u) / 17u) * 5u + 2u,
+            .latent_height = options->height / 16u,
+            .latent_width = options->width / 16u,
+        };
+        size_t video_values = (size_t)24u * latents.video_latent_frames *
+                              latents.latent_height * latents.latent_width;
+        latents.video = malloc(video_values * sizeof(float));
+        if (latents.video == NULL) {
+            e2e_error(error, error_capacity,
+                      "cannot allocate deterministic Video VAE input");
+            return 1;
+        }
+        uint64_t state = options->seed != 0u
+                             ? options->seed
+                             : UINT64_C(0x9e3779b97f4a7c15);
+        for (size_t index = 0u; index < video_values; ++index) {
+            state ^= state >> 12u;
+            state ^= state << 25u;
+            state ^= state >> 27u;
+            uint32_t sample =
+                (uint32_t)((state * UINT64_C(2685821657736338717)) >> 40u);
+            latents.video[index] =
+                ((float)sample / 16777215.0f - 0.5f) * 0.5f;
+        }
+        if (mkdir(options->output_directory, 0755) != 0 && errno != EEXIST) {
+            free(latents.video);
+            e2e_error(error, error_capacity,
+                      "cannot create Video VAE smoke directory");
+            return 1;
+        }
+        char frames[1024];
+        if (h3_video_decode(&latents, options, &metal, frames,
+                            sizeof(frames), &measured.video_download_seconds,
+                            &measured.video_precompute_seconds,
+                            &measured.video_decode_seconds,
+                            &measured.peak_footprint_bytes, error,
+                            error_capacity) != 0) {
+            free(latents.video);
+            return 1;
+        }
+        free(latents.video);
+        measured.sequence_rows =
+            (size_t)latents.video_latent_frames * latents.latent_height *
+            latents.latent_width;
+        snprintf(measured.video_path, sizeof(measured.video_path), "%s",
+                 frames);
+        snprintf(measured.output_path, sizeof(measured.output_path), "%s",
+                 frames);
+        measured.total_seconds = e2e_now() - total_started;
+        getrusage(RUSAGE_SELF, &usage_end);
+        measured.process_user_seconds = e2e_timeval(usage_end.ru_utime) -
+                                        e2e_timeval(usage_start.ru_utime);
+        measured.process_system_seconds = e2e_timeval(usage_end.ru_stime) -
+                                          e2e_timeval(usage_start.ru_stime);
+        *result = measured;
+        return 0;
+    }
+}
+
 int minimax_h3_m3_run_e2e(const minimax_h3_m3_e2e_options *options,
                           minimax_h3_m3_e2e_result *result,
                           char *error,
@@ -4057,6 +4387,8 @@ int minimax_h3_m3_run_e2e(const minimax_h3_m3_e2e_options *options,
         if (h3_metal_open(options->metallib_path, &metal, error,
                           error_capacity) != 0)
             return 1;
+        measured.metal_setup_seconds = metal.setup_seconds;
+        measured.pipeline_archive_hit = metal.pipeline_archive_hit;
         double tokenizer_started = e2e_now();
         qwen38_tokenizer *tokenizer = qwen38_tokenizer_open(
             options->tokenizer_image_path, error, error_capacity);
@@ -4090,6 +4422,7 @@ int minimax_h3_m3_run_e2e(const minimax_h3_m3_e2e_options *options,
                                &generated,
                                &measured.transformer_download_seconds,
                                &measured.turbo_compile_seconds,
+                               &measured.rope_precompute_seconds,
                                &measured.denoise_seconds,
                                &measured.peak_footprint_bytes, error,
                                error_capacity) != 0) {
@@ -4111,6 +4444,7 @@ int minimax_h3_m3_run_e2e(const minimax_h3_m3_e2e_options *options,
         if (h3_video_decode(&generated, options, &metal, frame_directory,
                             sizeof(frame_directory),
                             &measured.video_download_seconds,
+                            &measured.video_precompute_seconds,
                             &measured.video_decode_seconds,
                             &measured.peak_footprint_bytes, error,
                             error_capacity) != 0) {
