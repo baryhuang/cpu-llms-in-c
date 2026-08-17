@@ -306,6 +306,10 @@ struct qwen38_m3_model {
     int mtp_hidden_source;
     uint32_t mtp_adaptive_depth;
     float mtp_accept_ema;
+    /* Caller-owned context view for lookup drafting (see header). */
+    const uint32_t *mtp_ctx;
+    uint32_t mtp_ctx_count;
+    uint32_t mtp_lookup_cooldown;
 };
 
 static void decode_error(char *message, size_t capacity_value,
@@ -1878,7 +1882,7 @@ static void encode_snapshot_blit(Q38DecodeRuntime *r,
  * additionally replays and re-refreshes. */
 static int fused_step_submit(qwen38_m3_model *model, uint32_t depth,
                              uint32_t position, id<MTLBuffer> hidden,
-                             NSUInteger hidden_offset,
+                             NSUInteger hidden_offset, int gpu_drafts,
                              char *error_message,
                              size_t error_message_capacity) {
     Q38DecodeRuntime *r = (__bridge Q38DecodeRuntime *)model->runtime;
@@ -1893,6 +1897,7 @@ static int fused_step_submit(qwen38_m3_model *model, uint32_t depth,
         id<MTLCommandBuffer> command = [r->queue commandBuffer];
         id<MTLComputeCommandEncoder> encoder =
             [command computeCommandEncoder];
+        if (gpu_drafts)
         for (uint32_t i = 0; i < depth; ++i) {
             encode_mtp_pass(r, encoder, 1, i, position + i,
                             i == 0 ? hidden : r->final_normalized,
@@ -2375,6 +2380,38 @@ int qwen38_m3_model_mtp_open(
     }
 }
 
+void qwen38_m3_model_mtp_context(qwen38_m3_model *model,
+                                 const uint32_t *tokens, uint32_t count) {
+    if (model == NULL) return;
+    model->mtp_ctx = tokens;
+    model->mtp_ctx_count = count;
+}
+
+/* Latest context position whose four-token suffix matches (ctx[n-3],
+ * ctx[n-2], ctx[n-1], pending); followers after it become the draft
+ * chain. A trigram trigger misfires on recurring function words in
+ * free prose (measured ~5% essay loss), so the match is one token
+ * stricter. Returns the follower count placed in drafts (0 = none). */
+static uint32_t lookup_drafts(qwen38_m3_model *model, uint32_t pending,
+                              uint32_t drafts[7]) {
+    const uint32_t *ctx = model->mtp_ctx;
+    uint32_t n = model->mtp_ctx_count;
+    if (ctx == NULL || n < 5) return 0;
+    uint32_t a = ctx[n - 3];
+    uint32_t b = ctx[n - 2];
+    uint32_t c = ctx[n - 1];
+    for (uint32_t r = n - 2; r >= 3; --r) {
+        if (ctx[r] != pending || ctx[r - 1] != c || ctx[r - 2] != b ||
+            ctx[r - 3] != a)
+            continue;
+        uint32_t available = n - 1 - r;
+        uint32_t m = available < 7 ? available : 7;
+        for (uint32_t i = 0; i < m; ++i) drafts[i] = ctx[r + 1 + i];
+        return m;
+    }
+    return 0;
+}
+
 int qwen38_m3_model_mtp_step(
     qwen38_m3_model *model, uint32_t *current_token, uint32_t *position,
     uint32_t emitted[8], uint32_t *emitted_count, int *accepted,
@@ -2393,8 +2430,24 @@ int qwen38_m3_model_mtp_step(
         return 1;
     }
     uint32_t j = *position;
+    if (model->mtp_lookup_cooldown > 0) --model->mtp_lookup_cooldown;
+    uint32_t lookup_tokens[7];
+    uint32_t lookup_depth = 0;
+    /* Lookup only displaces the draft model where its chain is weak;
+     * at high acceptance the model's own chain out-drafts context
+     * copying (measured: code cases lose ~9% when lookup fires there). */
+    if (decode_profile_level() == 0 && model->mtp_lookup_cooldown == 0 &&
+        model->mtp_accept_ema <= 0.70f)
+        lookup_depth = lookup_drafts(model, *current_token,
+                                     lookup_tokens);
     uint32_t depth = r->mtp_depth;
-    if (depth == 0) {
+    if (lookup_depth != 0) {
+        /* Context followers replace the draft chain: the eight-wide
+         * verify costs the same at depth 7 as at depth 2 and a
+         * rejection rolls back for free, so a recurring trigram is
+         * worth a full-width speculative shot with no draft passes. */
+        depth = lookup_depth;
+    } else if (depth == 0) {
         /* Adaptive: a running per-draft acceptance estimate picks the
          * chain length. With the eight-wide MMA verify a marginal chain
          * level costs ~7 ms (draft pass plus ~1.3 ms verify row), so
@@ -2418,14 +2471,24 @@ int qwen38_m3_model_mtp_step(
     int status;
     int fused = decode_profile_level() == 0;
     if (fused) {
-        ((uint32_t *)r->p_token_ids.contents)[0] = tokens[0];
+        uint32_t *slots = r->p_token_ids.contents;
+        slots[0] = tokens[0];
+        if (lookup_depth != 0) {
+            for (uint32_t i = 0; i < depth; ++i) {
+                tokens[i + 1] = lookup_tokens[i];
+                slots[i + 1] = lookup_tokens[i];
+            }
+        }
         status = fused_step_submit(model, depth, j, hidden,
-                                   hidden_offset, error_message,
+                                   hidden_offset, lookup_depth == 0,
+                                   error_message,
                                    error_message_capacity);
         if (status != 0) return status;
-        const uint32_t *drafted = r->p_token_ids.contents;
-        for (uint32_t i = 0; i < depth; ++i)
-            tokens[i + 1] = drafted[i + 1];
+        if (lookup_depth == 0) {
+            const uint32_t *drafted = r->p_token_ids.contents;
+            for (uint32_t i = 0; i < depth; ++i)
+                tokens[i + 1] = drafted[i + 1];
+        }
     } else {
         /* Profiled path: one command buffer per pass so the per-layer
          * profiler stays attributable. Chained drafting: step 1
@@ -2534,10 +2597,18 @@ int qwen38_m3_model_mtp_step(
     *current_token = next_pending;
     *position = j + emit_count;
     model->mtp_hidden_source = (int)emit_count;
-    if (r->mtp_depth == 0)
-        for (uint32_t i = 0; i < depth; ++i)
+    if (lookup_depth != 0) {
+        /* A cold lookup pauses further lookups so misfiring spans do
+         * not repeatedly displace the draft-model chain. */
+        if (accepted_count == 0) model->mtp_lookup_cooldown = 16;
+    } else if (r->mtp_depth == 0) {
+        /* Chain positions past the first reject were never really
+         * tested, so the estimate counts the accepted drafts plus at
+         * most one miss. */
+        for (uint32_t i = 0; i < depth && i <= accepted_count; ++i)
             model->mtp_accept_ema = 0.85f * model->mtp_accept_ema +
                 (i < accepted_count ? 0.15f : 0.0f);
+    }
     return 0;
 }
 

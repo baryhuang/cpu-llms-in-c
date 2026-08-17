@@ -634,6 +634,8 @@ int main(int argc, char **argv) {
                 uint32_t step_emitted[8];
                 uint32_t step_count = 0;
                 int step_accepted = 0;
+                qwen38_m3_model_mtp_context(model, history,
+                                            history_count);
                 if (qwen38_m3_model_mtp_step(
                         model, &pending, &mtp_position, step_emitted,
                         &step_count, &step_accepted, error,

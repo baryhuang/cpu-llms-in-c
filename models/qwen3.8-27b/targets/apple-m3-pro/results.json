@@ -24,80 +24,80 @@
   "mtp_output_parity": "default fast verify: 3/5 five-workload cases token-identical to plain greedy; prose and essay flip one numerical near-tie each onto an alternate fluent greedy continuation; QWEN38_VERIFY_FAST=0 restores 5/5 token-identity (9.81 aggregate e2e); every emitted token remains the argmax of a true model forward"
  },
  "throughput_matrix": {
-  "method": "five-case resident-chat matrix, one process per arm, greedy seed 42; adaptive MTP with replay-free partial accepts, eight-wide half-MMA verify and depth ceiling 7",
+  "method": "five-case resident-chat matrix, one process per arm, greedy seed 42; adaptive MTP with replay-free partial accepts, eight-wide half-MMA verify, depth ceiling 7 and four-gram context-lookup drafting",
   "measured_at": "2026-08-17",
   "cases": [
    {
     "case": "C max2 (code, short)",
     "match": true,
     "tokens": 28,
-    "decode_off": 7.91,
-    "decode_on": 30.37,
-    "wall_off": 4.4,
-    "wall_on": 2.3,
+    "decode_off": 7.19,
+    "decode_on": 33.58,
+    "wall_off": 4.8,
+    "wall_on": 2.0,
     "accepts": "26/4",
-    "e2e_tok_s_off": 6.36,
-    "e2e_tok_s_on": 12.04
+    "e2e_tok_s_off": 5.77,
+    "e2e_tok_s_on": 13.69
    },
    {
     "case": "hash table prose",
     "match": false,
-    "tokens": 524,
-    "decode_off": 7.83,
-    "decode_on": 9.6,
-    "wall_off": 68.4,
-    "wall_on": 55.6,
-    "accepts": "279/247",
-    "e2e_tok_s_off": 7.76,
-    "e2e_tok_s_on": 9.43
+    "tokens": 533,
+    "decode_off": 8.02,
+    "decode_on": 9.96,
+    "wall_off": 66.9,
+    "wall_on": 54.4,
+    "accepts": "310/224",
+    "e2e_tok_s_off": 7.93,
+    "e2e_tok_s_on": 9.79
    },
    {
     "case": "LRUCache (code, long)",
     "match": true,
     "tokens": 1155,
-    "decode_off": 7.98,
-    "decode_on": 14.48,
-    "wall_off": 146.0,
-    "wall_on": 81.4,
-    "accepts": "844/315",
-    "e2e_tok_s_off": 7.91,
-    "e2e_tok_s_on": 14.19
+    "decode_off": 8.0,
+    "decode_on": 14.46,
+    "wall_off": 145.5,
+    "wall_on": 81.5,
+    "accepts": "856/303",
+    "e2e_tok_s_off": 7.94,
+    "e2e_tok_s_on": 14.17
    },
    {
     "case": "virtual memory essay",
     "match": false,
-    "tokens": 1578,
-    "decode_off": 7.81,
-    "decode_on": 9.2,
-    "wall_off": 188.8,
-    "wall_on": 173.2,
-    "accepts": "815/764",
-    "e2e_tok_s_off": 7.75,
-    "e2e_tok_s_on": 9.11
+    "tokens": 1577,
+    "decode_off": 8.04,
+    "decode_on": 9.04,
+    "wall_off": 183.2,
+    "wall_on": 176.1,
+    "accepts": "850/727",
+    "e2e_tok_s_off": 7.99,
+    "e2e_tok_s_on": 8.95
    },
    {
     "case": "notes summary (159-tok prompt)",
     "match": true,
     "tokens": 128,
-    "decode_off": 7.16,
-    "decode_on": 10.94,
-    "wall_off": 21.2,
-    "wall_on": 15.3,
-    "accepts": "82/46",
-    "e2e_tok_s_off": 6.04,
-    "e2e_tok_s_on": 8.36
+    "decode_off": 8.25,
+    "decode_on": 10.75,
+    "wall_off": 18.5,
+    "wall_on": 15.6,
+    "accepts": "84/46",
+    "e2e_tok_s_off": 6.93,
+    "e2e_tok_s_on": 8.23
    }
   ],
   "aggregate": {
    "completion_tokens_plain": 3305,
-   "completion_tokens_mtp": 3413,
-   "decode_tok_s_mtp_off": 8.1,
-   "decode_tok_s_mtp_on": 10.72,
-   "e2e_tok_s_mtp_off": 7.71,
-   "e2e_tok_s_mtp_on": 10.41,
-   "e2e_speedup": 1.35,
-   "wall_off_s": 428.8,
-   "wall_on_s": 327.9,
+   "completion_tokens_mtp": 3421,
+   "decode_tok_s_mtp_off": 8.3,
+   "decode_tok_s_mtp_on": 10.67,
+   "e2e_tok_s_mtp_off": 7.89,
+   "e2e_tok_s_mtp_on": 10.38,
+   "e2e_speedup": 1.32,
+   "wall_off_s": 419.0,
+   "wall_on_s": 329.7,
    "definition": "end-to-end = completion tokens / full request wall (prompt prefill + first token + decode); decode = tokens per interval after the first token; per-case token counts differ between arms where the fast verify takes an alternate greedy branch"
   }
  },
@@ -220,6 +220,17 @@
    "same_window_ab": "plain 7.71 vs fast MTP 10.41 aggregate e2e tok/s; LRUCache 14.19 e2e (decode 14.48), C max2 12.04 e2e (decode 30.37); prose-class cases 9.1-9.4 e2e remain acceptance-limited",
    "numerics": "half-MMA accumulation order differs from the exact path: 3/5 battery cases token-identical to plain greedy, prose and essay each flip one numerical near-tie and continue on an alternate fluent greedy branch (inspected, no degeneration); QWEN38_VERIFY_FAST=0 restores the exact kernels and 5/5 token-identity at 9.81 aggregate; QWEN38_PREFILL_MMA=0 exact mode is unchanged and bitwise (36/36 parity)",
    "capture_kernels": "checkpoint and half-copy side outputs live in separate _cap kernel variants so the exact kernels keep their original code generation; a store added inside the hot kernels measurably perturbed fast-math contraction and broke exact-mode bitwise parity until split out"
+  },
+  "context_lookup_drafting_v2": {
+   "measured_at": "2026-08-17",
+   "design": "runtime-level lookup drafting layered on the fast verify: when the four-token suffix ending at the pending token recurs in the request's token history, up to seven follower tokens replace the MTP draft chain with zero draft-model passes; gated to acceptance EMA <= 0.70 so it never displaces a strong code chain, cooldown 16 steps after a zero-accept lookup",
+   "iterations": {
+    "trigram_ungated": "aggregate 10.09 - misfiring code trigrams displaced the MTP chain (LRUCache 12.89 vs 14.19)",
+    "trigram_ema_gated": "LRUCache recovered to 14.36; essay still lost ~4% to prose function-word trigram misfires",
+    "fourgram_ema_gated": "kept: aggregate 10.38 with prose 9.79 (best) and code long 14.17"
+   },
+   "why_it_works_now": "the 2026-08-16 chat-layer version lost (7.17 vs 7.97) because a partial accept paid a wide verify plus a replay; with replay-free rollback and a flat-cost verify a misfired lookup step costs roughly one shallow MTP step",
+   "ema_note": "the acceptance EMA counts accepted drafts plus at most one miss per step (chain positions past the first reject were never tested); the uncensored update crashed the estimate by 0.85^7 on one bad deep step"
   }
  }
 }

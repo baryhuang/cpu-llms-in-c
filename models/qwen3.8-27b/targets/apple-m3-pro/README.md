@@ -118,18 +118,18 @@ The ARC-Easy record is a small generative smoke adaptation, not an official ARC-
 
 ## Measured throughput
 
-The following five workloads ran through one resident chat process per arm with greedy seed 42. End-to-end throughput is completion tokens divided by the full request wall, including prompt prefill, first token and decode. The speculative arm uses adaptive MTP with replay-free partial accepts, an eight-wide half-MMA verify and a depth-7 chain ceiling.
+The following five workloads ran through one resident chat process per arm with greedy seed 42. End-to-end throughput is completion tokens divided by the full request wall, including prompt prefill, first token and decode. The speculative arm uses adaptive MTP with replay-free partial accepts, an eight-wide half-MMA verify, a depth-7 chain ceiling and four-gram context-lookup drafting.
 
 | Case | Output tokens | Plain end-to-end | Adaptive MTP end-to-end | Speedup | Request wall, plain / MTP |
 |---|---:|---:|---:|---:|---:|
-| C `max2` function | 28 | 6.36 tok/s | **12.04 tok/s** | 1.89× | 4.4 / 2.3 s |
-| Hash-table explanation | 531 / 524 | 7.76 tok/s | 9.43 tok/s | 1.22× | 68.4 / 55.6 s |
-| Python `LRUCache` class | 1,155 | 7.91 tok/s | **14.19 tok/s** | 1.79× | 146.0 / 81.4 s |
-| Virtual-memory essay | 1,463 / 1,578 | 7.75 tok/s | 9.11 tok/s | 1.18× | 188.8 / 173.2 s |
-| Notes summary, 159-token prompt | 128 | 6.04 tok/s | 8.36 tok/s | 1.38× | 21.2 / 15.3 s |
-| **Aggregate** | **3,305 / 3,413** | **7.71 tok/s** | **10.41 tok/s** | **1.35×** | **428.8 / 327.9 s** |
+| C `max2` function | 28 | 5.77 tok/s | **13.69 tok/s** | 2.37× | 4.8 / 2.0 s |
+| Hash-table explanation | 531 / 533 | 7.93 tok/s | 9.79 tok/s | 1.23× | 66.9 / 54.4 s |
+| Python `LRUCache` class | 1,155 | 7.94 tok/s | **14.17 tok/s** | 1.78× | 145.5 / 81.5 s |
+| Virtual-memory essay | 1,463 / 1,577 | 7.99 tok/s | 8.95 tok/s | 1.12× | 183.2 / 176.1 s |
+| Notes summary, 159-token prompt | 128 | 6.93 tok/s | 8.23 tok/s | 1.19× | 18.5 / 15.6 s |
+| **Aggregate** | **3,305 / 3,421** | **7.89 tok/s** | **10.38 tok/s** | **1.32×** | **419.0 / 329.7 s** |
 
-Aggregate decode throughput is 7.71 plain and 10.72 speculative. Code-heavy cases run at 14.5–30.4 decode tok/s because their draft chains accept deeply; prose cases stay acceptance-limited near 9.5. Three cases are token-identical between arms; the two paired token counts mark the prose cases where the fast verify's accumulation order flips one numerical near-tie onto an alternate fluent greedy continuation. `QWEN38_VERIFY_FAST=0` selects the exact verify kernels, which are token-identical on all five cases at 9.81 aggregate end-to-end tok/s.
+Aggregate decode throughput is 7.99 plain and 10.67 speculative. Code-heavy cases run at 14.5–33.6 decode tok/s because their draft chains accept deeply; prose cases stay acceptance-limited near 9–10. Three cases are token-identical between arms; the two paired token counts mark the prose cases where the fast verify's accumulation order flips one numerical near-tie onto an alternate fluent greedy continuation. `QWEN38_VERIFY_FAST=0` selects the exact verify kernels, which are token-identical on all five cases at 9.81 aggregate end-to-end tok/s.
 
 ## llama.cpp comparison
 

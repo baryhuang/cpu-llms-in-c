@@ -21,7 +21,7 @@ Every performance claim belongs to one exact model revision and one exact target
 
 | Model | CPU / SoC | Execution path | Measured result | Evidence |
 |---|---|---|---|---|
-| Qwen3.8-27B | Apple M3 Pro, 36 GB unified memory | C runtime + Metal kernels, affine Q4, FP16 KV, adaptive MTP | **10.41 end-to-end tok/s** five-workload aggregate, up to **14.19** on long code; 7.71 tok/s without MTP | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [raw results](models/qwen3.8-27b/targets/apple-m3-pro/results.json) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) |
+| Qwen3.8-27B | Apple M3 Pro, 36 GB unified memory | C runtime + Metal kernels, affine Q4, FP16 KV, adaptive MTP | **10.38 end-to-end tok/s** five-workload aggregate, up to **14.17** on long code; 7.89 tok/s without MTP | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [raw results](models/qwen3.8-27b/targets/apple-m3-pro/results.json) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) |
 | MiniMax-H3 | Apple M3 Pro, 36 GB unified memory | C/Metal tokenizer, streamed Q8 conditioner, affine-Q4/BF16 H3, optimized Video VAE, Audio VAE | Exact 864×480×124 Turbo-4: **2,418.71 s**; frame-safe late-layer candidate: **2,344.73 s**, matching all three exact scene cuts without the old tree's ghosting; zero swap | [model](models/minimax-h3/README.md) · [target](models/minimax-h3/targets/apple-m3-pro/README.md) · [raw results](models/minimax-h3/targets/apple-m3-pro/results.json) · [review](models/minimax-h3/targets/apple-m3-pro/H3-ATTENTION-QUALITY-REVIEW.html) |
 | Qwen3.5-0.8B | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, model-specialized DeltaNet state | **3.64 prompt tok/s**, **2.60 decode tok/s**, 488 MiB generation RSS, zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [raw results](models/qwen3.5-0.8b/targets/a113x/results.json) |
 | Whisper small.en | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, mixed Q4/Q8 encoder and cached decoder | 11 s audio in **45.0 s**, 251 MiB RSS, zero swap; 0/22 word errors on the pinned JFK sample | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [raw results](models/whisper-small.en/targets/a113x/results.json) |
@@ -62,10 +62,10 @@ Qwen3.8 is the most complete target in the repository. It includes free-text cha
 
 | Five-workload resident run | Plain greedy | Adaptive MTP | Increment |
 |---|---:|---:|---:|
-| End-to-end throughput | 7.71 tok/s | **10.41 tok/s** | **1.35×** |
-| Decode throughput | 7.71 tok/s | **10.72 tok/s** | **1.39×** |
-| Long-code case end-to-end | 7.91 tok/s | **14.19 tok/s** | **1.79×** |
-| Total request wall | 428.8 s | **327.9 s** | 100.9 s less |
+| End-to-end throughput | 7.89 tok/s | **10.38 tok/s** | **1.32×** |
+| Decode throughput | 7.99 tok/s | **10.67 tok/s** | **1.34×** |
+| Long-code case end-to-end | 7.94 tok/s | **14.17 tok/s** | **1.78×** |
+| Total request wall | 419.0 s | **329.7 s** | 89.3 s less |
 
 Speculative output is token-identical to plain greedy on three of the five cases; the two prose cases each flip one numerical near-tie onto an alternate fluent greedy continuation, and an exact-verify mode restores full token identity at 9.81 aggregate tok/s.
 

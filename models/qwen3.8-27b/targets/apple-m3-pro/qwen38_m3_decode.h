@@ -95,12 +95,13 @@ int qwen38_m3_model_forward_wait(
  * qwen38_m3_model_mtp_open loads the MTP draft images; afterwards
  * qwen38_m3_model_prefill also fills the draft layer's cache, and its
  * token_ids argument must carry token_count + 1 entries (the token after
- * the prefilled run). QWEN38_MTP_DEPTH (1..3, read at open) sets the
+ * the prefilled run). QWEN38_MTP_DEPTH (1..7, read at open) sets the
  * draft depth: each step chains that many draft tokens through the MTP
  * layer, verifies the pending token plus all drafts in one batched
- * forward, and on a partial accept restores the pre-verify GDN state
- * and re-verifies the accepted prefix plus the corrected token. A step
- * emits between two and depth + 1 tokens into emitted (up to 8);
+ * forward, and on a partial accept rolls the GDN state back to the last
+ * accepted row from the verify's factor checkpoints and hands the
+ * corrected token over as the next pending token. A step
+ * emits between one and depth + 1 tokens into emitted (up to 8);
  * accepted receives the number of accepted drafts (0..depth).
  * current_token carries the sampled-but-unprocessed token in and the
  * next one out; the caller appends emitted and checks stop tokens. */
@@ -120,6 +121,17 @@ int qwen38_m3_model_mtp_step(
     int *accepted,
     char *error_message,
     size_t error_message_capacity);
+
+/* Optional context view for lookup drafting: tokens must stay valid and
+ * cover the exact sequence the layer states correspond to (prompt plus
+ * emitted tokens, excluding the pending token). When the trigram ending
+ * at the pending token recurs in this context, the step drafts up to
+ * seven follower tokens from the context with no draft-model passes and
+ * verifies them in the usual batched forward. Pass NULL/0 to disable. */
+void qwen38_m3_model_mtp_context(
+    qwen38_m3_model *model,
+    const uint32_t *tokens,
+    uint32_t count);
 
 /* Prompt-boundary conversation checkpoint: save copies the cumulative
  * GDN recurrent/convolution states (the attention KV cache is
