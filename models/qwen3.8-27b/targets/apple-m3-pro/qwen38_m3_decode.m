@@ -88,6 +88,9 @@ enum {
     id<MTLComputePipelineState> gemm_f16_mma8;
     id<MTLComputePipelineState> gemm_f32_residual_f16_mma8;
     id<MTLComputePipelineState> gemm_f32_residual_f32_mma8;
+    id<MTLComputePipelineState> gemm_f16_mma8w;
+    id<MTLComputePipelineState> gemm_f32_residual_f16_mma8w;
+    id<MTLComputePipelineState> gemm_f32_residual_f32_mma8w;
 }
 @end
 
@@ -191,6 +194,9 @@ enum {
      * held to the argmax/token-parity standard; QWEN38_VERIFY_FAST=0
      * restores the exact scalar kernels. */
     int fast_verify;
+    /* 64-row output tiles for the small-batch MMA verify (measured
+     * ~8% cheaper than 32-row tiles); QWEN38_VERIFY_WIDE=0 compares. */
+    int wide_verify;
     id<MTLResidencySet> residency API_AVAILABLE(macos(15.0));
 
     id<MTLComputePipelineState> rms_half;
@@ -823,6 +829,11 @@ static Q38PrefillPipelines *prefill_pipelines(
                  @"qwen38_prefill_q4_gemm_f32_residual_f16_mma8");
     MAKE_PREFILL(gemm_f32_residual_f32_mma8,
                  @"qwen38_prefill_q4_gemm_f32_residual_f32_mma8");
+    MAKE_PREFILL(gemm_f16_mma8w, @"qwen38_prefill_q4_gemm_f16_mma8w");
+    MAKE_PREFILL(gemm_f32_residual_f16_mma8w,
+                 @"qwen38_prefill_q4_gemm_f32_residual_f16_mma8w");
+    MAKE_PREFILL(gemm_f32_residual_f32_mma8w,
+                 @"qwen38_prefill_q4_gemm_f32_residual_f32_mma8w");
     MAKE_PREFILL(gemm_f16_mma, @"qwen38_prefill_q4_gemm_f16_mma");
     MAKE_PREFILL(gemm_f32_residual_f16_mma,
                  @"qwen38_prefill_q4_gemm_f32_residual_f16_mma");
@@ -865,13 +876,15 @@ static void encode_prefill_gemm_f16(
                   (int)p->batch >= r->mma_min_batch;
     if (!use_mma && r->fast_verify && r->prefill_mma_level > 0 &&
         p->batch >= 3 && p->batch <= 8) {
-        [encoder setComputePipelineState:p->gemm_f16_mma8];
+        [encoder setComputePipelineState:r->wide_verify ?
+            p->gemm_f16_mma8w : p->gemm_f16_mma8];
         [encoder setBuffer:x offset:0 atIndex:0];
         [encoder setBuffer:quants offset:0 atIndex:1];
         [encoder setBuffer:metadata offset:0 atIndex:2];
         [encoder setBuffer:output offset:0 atIndex:3];
         [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4];
-        [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
+        [encoder dispatchThreadgroups:MTLSizeMake(
+                r->wide_verify ? (rows + 63) / 64 : rows / 32, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
         return;
     }
@@ -912,15 +925,19 @@ static void encode_prefill_gemm_residual(
         /* x's producer wrote a half copy of it into p_x_half in the same
          * encoder, so no conversion dispatch is needed. */
         (void)x;
-        [encoder setComputePipelineState:residual_is_half ?
-            p->gemm_f32_residual_f16_mma8 : p->gemm_f32_residual_f32_mma8];
+        [encoder setComputePipelineState:r->wide_verify ?
+            (residual_is_half ? p->gemm_f32_residual_f16_mma8w :
+                                p->gemm_f32_residual_f32_mma8w) :
+            (residual_is_half ? p->gemm_f32_residual_f16_mma8 :
+                                p->gemm_f32_residual_f32_mma8)];
         [encoder setBuffer:r->p_x_half offset:0 atIndex:0];
         [encoder setBuffer:quants offset:0 atIndex:1];
         [encoder setBuffer:metadata offset:0 atIndex:2];
         [encoder setBuffer:residual offset:0 atIndex:3];
         [encoder setBuffer:output offset:0 atIndex:4];
         [encoder setBytes:&parameters length:sizeof(parameters) atIndex:5];
-        [encoder dispatchThreadgroups:MTLSizeMake(rows / 32, 1, 1)
+        [encoder dispatchThreadgroups:MTLSizeMake(
+                r->wide_verify ? (rows + 63) / 64 : rows / 32, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
         return;
     }
@@ -1515,6 +1532,9 @@ qwen38_m3_model *qwen38_m3_model_open(
         const char *verify_fast = getenv("QWEN38_VERIFY_FAST");
         r->fast_verify = verify_fast == NULL ||
                          strcmp(verify_fast, "0") != 0;
+        const char *verify_wide = getenv("QWEN38_VERIFY_WIDE");
+        r->wide_verify = verify_wide == NULL ||
+                         strcmp(verify_wide, "0") != 0;
         qwen38_m3_model *model = calloc(1, sizeof(*model));
         if (model == NULL) {
             decode_error(error_message, error_message_capacity,

@@ -24,80 +24,80 @@
   "mtp_output_parity": "default fast verify: 3/5 five-workload cases token-identical to plain greedy; prose and essay flip one numerical near-tie each onto an alternate fluent greedy continuation; QWEN38_VERIFY_FAST=0 restores 5/5 token-identity (9.81 aggregate e2e); every emitted token remains the argmax of a true model forward"
  },
  "throughput_matrix": {
-  "method": "five-case resident-chat matrix, one process per arm, greedy seed 42; adaptive MTP with replay-free partial accepts, eight-wide half-MMA verify, depth ceiling 7 and four-gram context-lookup drafting",
+  "method": "five-case resident-chat matrix, one process per arm, greedy seed 42; adaptive MTP with replay-free partial accepts, wide-tile eight-wide half-MMA verify, depth ceiling 7 and four-gram context-lookup drafting",
   "measured_at": "2026-08-17",
   "cases": [
    {
     "case": "C max2 (code, short)",
     "match": true,
     "tokens": 28,
-    "decode_off": 7.19,
-    "decode_on": 33.58,
-    "wall_off": 4.8,
+    "decode_off": 6.61,
+    "decode_on": 34.44,
+    "wall_off": 5.1,
     "wall_on": 2.0,
     "accepts": "26/4",
-    "e2e_tok_s_off": 5.77,
-    "e2e_tok_s_on": 13.69
+    "e2e_tok_s_off": 5.45,
+    "e2e_tok_s_on": 13.66
    },
    {
     "case": "hash table prose",
     "match": false,
     "tokens": 533,
-    "decode_off": 8.02,
-    "decode_on": 9.96,
-    "wall_off": 66.9,
-    "wall_on": 54.4,
+    "decode_off": 7.9,
+    "decode_on": 10.3,
+    "wall_off": 68.0,
+    "wall_on": 52.7,
     "accepts": "310/224",
-    "e2e_tok_s_off": 7.93,
-    "e2e_tok_s_on": 9.79
+    "e2e_tok_s_off": 7.81,
+    "e2e_tok_s_on": 10.12
    },
    {
     "case": "LRUCache (code, long)",
     "match": true,
     "tokens": 1155,
-    "decode_off": 8.0,
-    "decode_on": 14.46,
-    "wall_off": 145.5,
-    "wall_on": 81.5,
+    "decode_off": 7.87,
+    "decode_on": 15.13,
+    "wall_off": 147.8,
+    "wall_on": 77.7,
     "accepts": "856/303",
-    "e2e_tok_s_off": 7.94,
-    "e2e_tok_s_on": 14.17
+    "e2e_tok_s_off": 7.82,
+    "e2e_tok_s_on": 14.86
    },
    {
     "case": "virtual memory essay",
     "match": false,
     "tokens": 1577,
-    "decode_off": 8.04,
-    "decode_on": 9.04,
-    "wall_off": 183.2,
-    "wall_on": 176.1,
+    "decode_off": 7.96,
+    "decode_on": 9.38,
+    "wall_off": 185.0,
+    "wall_on": 169.7,
     "accepts": "850/727",
-    "e2e_tok_s_off": 7.99,
-    "e2e_tok_s_on": 8.95
+    "e2e_tok_s_off": 7.91,
+    "e2e_tok_s_on": 9.29
    },
    {
     "case": "notes summary (159-tok prompt)",
     "match": true,
     "tokens": 128,
-    "decode_off": 8.25,
-    "decode_on": 10.75,
-    "wall_off": 18.5,
-    "wall_on": 15.6,
+    "decode_off": 8.14,
+    "decode_on": 12.07,
+    "wall_off": 18.7,
+    "wall_on": 13.9,
     "accepts": "84/46",
-    "e2e_tok_s_off": 6.93,
-    "e2e_tok_s_on": 8.23
+    "e2e_tok_s_off": 6.84,
+    "e2e_tok_s_on": 9.2
    }
   ],
   "aggregate": {
    "completion_tokens_plain": 3305,
    "completion_tokens_mtp": 3421,
-   "decode_tok_s_mtp_off": 8.3,
-   "decode_tok_s_mtp_on": 10.67,
-   "e2e_tok_s_mtp_off": 7.89,
-   "e2e_tok_s_mtp_on": 10.38,
-   "e2e_speedup": 1.32,
-   "wall_off_s": 419.0,
-   "wall_on_s": 329.7,
+   "decode_tok_s_mtp_off": 8.19,
+   "decode_tok_s_mtp_on": 11.12,
+   "e2e_tok_s_mtp_off": 7.78,
+   "e2e_tok_s_mtp_on": 10.82,
+   "e2e_speedup": 1.39,
+   "wall_off_s": 424.6,
+   "wall_on_s": 316.0,
    "definition": "end-to-end = completion tokens / full request wall (prompt prefill + first token + decode); decode = tokens per interval after the first token; per-case token counts differ between arms where the fast verify takes an alternate greedy branch"
   }
  },
@@ -219,7 +219,8 @@
    "adaptive_depth": "with ~7 ms per marginal chain level the ceiling rose from 3 to 7 with acceptance-EMA tiers 0.85/0.70/0.55/0.40 -> depths 7/5/3/2",
    "same_window_ab": "plain 7.71 vs fast MTP 10.41 aggregate e2e tok/s; LRUCache 14.19 e2e (decode 14.48), C max2 12.04 e2e (decode 30.37); prose-class cases 9.1-9.4 e2e remain acceptance-limited",
    "numerics": "half-MMA accumulation order differs from the exact path: 3/5 battery cases token-identical to plain greedy, prose and essay each flip one numerical near-tie and continue on an alternate fluent greedy branch (inspected, no degeneration); QWEN38_VERIFY_FAST=0 restores the exact kernels and 5/5 token-identity at 9.81 aggregate; QWEN38_PREFILL_MMA=0 exact mode is unchanged and bitwise (36/36 parity)",
-   "capture_kernels": "checkpoint and half-copy side outputs live in separate _cap kernel variants so the exact kernels keep their original code generation; a store added inside the hot kernels measurably perturbed fast-math contraction and broke exact-mode bitwise parity until split out"
+   "capture_kernels": "checkpoint and half-copy side outputs live in separate _cap kernel variants so the exact kernels keep their original code generation; a store added inside the hot kernels measurably perturbed fast-math contraction and broke exact-mode bitwise parity until split out",
+   "wide_tile_update": "64-row output tiles with K-split simdgroups (mma8w) halve activation-fragment loads and barrier rounds: verify 170/203/212 ms at depths 1/3/7 (same-window 8% under the 32-row tiles); a row-major staging variant with transposed fragment loads measured 231-239 ms and was rejected (transposed simdgroup_load is slow on this GPU); battery aggregate 10.82 e2e vs 7.78 plain (1.39x), LRUCache 14.86, prose 10.12"
   },
   "context_lookup_drafting_v2": {
    "measured_at": "2026-08-17",

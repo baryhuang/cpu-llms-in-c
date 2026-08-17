@@ -41,8 +41,8 @@
   <p class="meta">Runtime review · measured 2026-08-17 · Mac15,6 · Apple M3 Pro · 36 GB unified memory · macOS 15.7.3</p>
 
   <div class="summary">
-    <div class="metric"><b>10.38 tok/s</b><span>end-to-end aggregate, adaptive MTP, five-workload set; 14.17 on long code</span></div>
-    <div class="metric"><b>1.32x</b><span>vs plain greedy (7.89 end-to-end), same window</span></div>
+    <div class="metric"><b>10.82 tok/s</b><span>end-to-end aggregate, adaptive MTP, five-workload set; 14.86 on long code</span></div>
+    <div class="metric"><b>1.39x</b><span>vs plain greedy (7.78 end-to-end), same window</span></div>
     <div class="metric"><b>64 layers</b><span>48 DeltaNet + 16 full-attention layers</span></div>
     <div class="metric"><b>15.139 GB</b><span>mapped compiled Qwen3.8 text image</span></div>
   </div>
@@ -77,15 +77,15 @@
   <table>
     <thead><tr><th>Case</th><th class="num">Tokens</th><th class="num">End-to-end tok/s, MTP off</th><th class="num">End-to-end, adaptive MTP</th><th class="num">Speedup</th><th class="num">Decode off &rarr; on</th></tr></thead>
     <tbody>
-      <tr><td>C <code>max2</code> function</td><td class="num">28</td><td class="num">5.77</td><td class="num"><strong>13.69</strong></td><td class="num">2.37x</td><td class="num">7.19 &rarr; 33.58</td></tr>
-      <tr><td>Hash-table prose</td><td class="num">531 / 533</td><td class="num">7.93</td><td class="num">9.79</td><td class="num">1.23x</td><td class="num">8.02 &rarr; 9.96</td></tr>
-      <tr><td>Python <code>LRUCache</code> class</td><td class="num">1,155</td><td class="num">7.94</td><td class="num"><strong>14.17</strong></td><td class="num">1.78x</td><td class="num">8.00 &rarr; 14.46</td></tr>
-      <tr><td>Virtual-memory essay</td><td class="num">1,463 / 1,577</td><td class="num">7.99</td><td class="num">8.95</td><td class="num">1.12x</td><td class="num">8.04 &rarr; 9.04</td></tr>
-      <tr><td>Notes summary, 159-token prompt</td><td class="num">128</td><td class="num">6.93</td><td class="num">8.23</td><td class="num">1.19x</td><td class="num">8.25 &rarr; 10.75</td></tr>
-      <tr><td><strong>Aggregate</strong></td><td class="num">3,305 / 3,421</td><td class="num"><strong>7.89</strong></td><td class="num"><strong>10.38</strong></td><td class="num"><strong>1.32x</strong></td><td class="num">7.99 &rarr; 10.67</td></tr>
+      <tr><td>C <code>max2</code> function</td><td class="num">28</td><td class="num">5.45</td><td class="num"><strong>13.66</strong></td><td class="num">2.51x</td><td class="num">7.36 &rarr; 34.44</td></tr>
+      <tr><td>Hash-table prose</td><td class="num">531 / 533</td><td class="num">7.81</td><td class="num"><strong>10.12</strong></td><td class="num">1.30x</td><td class="num">7.90 &rarr; 10.30</td></tr>
+      <tr><td>Python <code>LRUCache</code> class</td><td class="num">1,155</td><td class="num">7.82</td><td class="num"><strong>14.86</strong></td><td class="num">1.90x</td><td class="num">7.88 &rarr; 15.13</td></tr>
+      <tr><td>Virtual-memory essay</td><td class="num">1,463 / 1,577</td><td class="num">7.91</td><td class="num">9.29</td><td class="num">1.17x</td><td class="num">7.96 &rarr; 9.38</td></tr>
+      <tr><td>Notes summary, 159-token prompt</td><td class="num">128</td><td class="num">6.84</td><td class="num">9.20</td><td class="num">1.35x</td><td class="num">8.15 &rarr; 12.07</td></tr>
+      <tr><td><strong>Aggregate</strong></td><td class="num">3,305 / 3,421</td><td class="num"><strong>7.78</strong></td><td class="num"><strong>10.82</strong></td><td class="num"><strong>1.39x</strong></td><td class="num">7.89 &rarr; 11.12</td></tr>
     </tbody>
   </table>
-  <p>End-to-end is completion tokens over the full request wall — prompt prefill, first token and decode included. Three cases are token-identical between arms; paired token counts mark the prose cases where the fast verify's accumulation order takes an alternate fluent greedy branch. The speculative schedule reduces aggregate wall time from 419.0 to 329.7 seconds.</p>
+  <p>End-to-end is completion tokens over the full request wall — prompt prefill, first token and decode included. Three cases are token-identical between arms; paired token counts mark the prose cases where the fast verify's accumulation order takes an alternate fluent greedy branch. The speculative schedule reduces aggregate wall time from 424.6 to 316.0 seconds.</p>
 
   <h2>4. Template semantics</h2>
   <p>The serving layer implements the 3.8 template: per-request <code>reasoning_effort</code> (low/medium/xhigh, none to disable) injects the verbatim effort instructions at the top of the system turn, thinking replies open at <code>&lt;think&gt;</code> and stream the think block as <code>reasoning_content</code>, and prior turns replay their reasoning (<code>preserve_thinking</code>). A low-effort request that exhausted a 400-token budget mid-think returned the truncated thinking with empty content and <code>finish_reason: length</code> — the reasoning-model convention; give thinking mode a larger budget. Raw record: <a href="results.json">results.json</a>.</p>
