@@ -2,11 +2,12 @@
 
 Status: the real-weight C/Metal path covers the tokenizer, streamed Q8 Qwen
 conditioner, affine-Q4 H3 transformer, BF16 residual stream, Video VAE, Audio
-VAE and MP4 mux. The corrected 864×480×124 Turbo-4 path completed in
-2,418.708 seconds with a 4.136 GiB runtime peak footprint and zero swaps. All
-124 frames decode, the output contains four prompt-aligned shots, and no flat
-tail or sampled tile/chunk break is visible. Functional and visual smoke gates
-pass; official full-precision parity and the speed target remain open.
+VAE and MP4 mux. The exact-attention 864×480×124 Turbo-4 path completed in
+2,418.708 seconds with a 4.136 GiB runtime peak footprint and zero swaps. An
+opt-in compiled-tree experiment completed the same workload in 1,489.401
+seconds with a 4.592 GiB peak, but introduced visible softness and transition
+ghosting. Exact attention remains the default; official full-precision parity
+and the speed target remain open.
 
 ## N-to-N optimization timeline
 
@@ -19,6 +20,8 @@ pass; official full-precision parity and the speed target remain open.
 | + 32-row shared-weight GEMM | Video VAE dense projections and MLP | 659.524425 → 637.239960 s projected (**−22.284465 s**) | 2,544.817665 s; −22.284465; 3.652× | Share staged weights across neighboring activation rows to reduce repeated weight traffic | projected from 105 × 6.068952 s |
 | + 64-row shared-weight GEMM | Video VAE dense projections and MLP | 637.239960 → 528.169950 s projected (**−109.070010 s**) | 2,435.747655 s; −109.070010; 3.816× | Amortize every staged tile across twice as many activation rows | projected from 105 × 5.030190 s |
 | Full current N-to-N validation | Full graph measurement; no new optimization | VAE: 528.169950 projected → **487.273811 s measured** (−40.896139); all other stages: 1,907.577705 → 1,931.434426 s (+23.856721) | **2,418.708237 s**; −17.039418 vs projection; **3.843×** | Replace single-task linear scaling with a complete run; the net projection difference is not claimed as an optimization | measured complete N-to-N |
+| Exact BF16 direct output + four-layer H3 command groups | H3 dense-attention storage and command submission | Attention: 5,024.974042 → 5,012.634167 ms/call; FP32 scratch: 448,401,408 → 0 B; 128² denoise: 17.407398 → 17.147884 s | full 480p N-to-N not remeasured; no projection claimed | Reuse the kernel's dead score-tile region as an FP32 fragment spill, emit BF16 directly and submit four layers per command buffer | all 112,100,352 irregular-input BF16 outputs and smoke media hashes identical |
+| Experimental compiled tree attention | H3 dense attention | **1,898.120497 → 974.544700 s measured**; −923.575797 s; 1.948× | **1,489.401301 s**; −929.306936; **1.624×** vs exact; **6.241×** vs baseline | Compile geometry, row order, tree nodes, routes and query blocks once; rebuild only K/V summaries on Metal | measured complete N-to-N; functional pass, visual regression; opt-in only |
 
 ### Latest measured run breakdown
 
@@ -43,6 +46,36 @@ pass; official full-precision parity and the speed target remain open.
 The model-runtime rows add exactly to 2,418.708237 seconds. Post-run decode,
 hash, media statistics and visual verification are excluded from both runtime
 and command wall.
+
+### Experimental compiled-tree run breakdown
+
+| Stage | Seconds | Runtime share | Change from exact run |
+|---|---:|---:|---:|
+| Tokenizer | 0.008059 | 0.001% | +0.000361 s |
+| Metal setup | 0.026800 | 0.002% | −0.016912 s |
+| Text image access | 4.273334 | 0.287% | −0.420552 s |
+| 50-layer text conditioner | 4.635396 | 0.311% | +0.067974 s |
+| Turbo AdaLN compile | 0.877777 | 0.059% | +0.009660 s |
+| H3 RoPE precompute | 0.000916 | <0.001% | −0.000080 s |
+| **H3 denoise** | **974.544700** | **65.431%** | **−923.575797 s** |
+| Video VAE precompute | 0.007417 | <0.001% | −0.000494 s |
+| **Video VAE decode** | **483.809133** | **32.483%** | −3.464678 s |
+| Audio VAE decode | 13.697438 | 0.920% | −0.062639 s |
+| H.264/AAC mux | 0.648403 | 0.044% | −0.022818 s |
+| Other measured runtime | 6.871928 | 0.461% | −1.820961 s |
+| **Model runtime** | **1,489.401301** | **100%** | **−929.306936 s; 1.623947×** |
+| Preflight hashes and shell overhead | 67.838699 | outside runtime | local SHA-256 checks |
+| **Command wall** | **1,557.240000** | runtime + preflight | −927.140000 s |
+
+The experimental run used 4,930,967,616 bytes (4.592 GiB) peak physical
+footprint, 1,361,362,944 bytes maximum resident set and zero swaps. The extra
+490,242,048 bytes over the exact run are the physical Q/K/V/output and tree
+summary buffers. The stage timing passed; the quality gate did not. All 124
+frames decode and no frame is flat, but the 0.25 scene detector reports 10
+changes instead of the exact run's 3, adjacent-frame mean difference rises
+from 4.494335 to 9.814484, and visual review finds softer detail and stronger
+transition ghosting. The path therefore requires
+`MINIMAX_H3_TREE_ATTENTION=conservative` and is not selected by default.
 
 Intermediate N-to-N values are projections, not hidden full runs. Each uses
 the valid baseline's measured 1,907.577705 seconds outside Video VAE plus 105
@@ -133,6 +166,24 @@ H3 denoise is now 78.477% of runtime and Video VAE is 20.146%. Within the 200
 H3 layer/evaluation calls, exact dense attention consumes 1,143.533 seconds,
 projections 248.384 seconds and MLP 495.066 seconds. H3 attention and dense
 projection/MLP work are now the next optimization boundaries.
+
+### H3 attention round: precompiled data and Metal work
+
+| Item | Compile/precompute boundary | Runtime Metal work | Result |
+|---|---|---|---|
+| Direct exact BF16 output | pipeline is built from the offline metallib; no graph-dependent table | MMA64 attention writes BF16 from FP32 fragments | 5,024.974042 → 5,012.634167 ms/call; 448,401,408 B scratch removed; bit identical |
+| Four-layer command groups | fixed 50-layer schedule determines 13 groups | one encoder and synchronization per group instead of three per layer | 128² denoise 17.407398 → 17.147884 s; complete video/audio hashes identical |
+| Row permutation | fixed text/audio/video geometry maps logical rows to tree-major physical rows once | three parallel BF16→F16 reorder kernels per block | reused across all 200 block/evaluation calls |
+| Tree and routes | 342 nodes, 307 query blocks, 140,284 route entries and log token counts are compiled once | no route construction or graph traversal in the denoise loop | maximum route length 548 entries instead of 15,639 dense keys |
+| K/V summaries | topology and reduction ranges are fixed | leaf, frame, temporal and root summaries are rebuilt for each dynamic layer | approximate attention remains responsive to the current hidden state |
+| Tree attention | query block and route offsets are fixed | `simdgroup_matrix` QK tiles, online softmax and V accumulation on the M3 GPU | H3 denoise 1,898.120497 → 974.544700 s, with failed visual-quality gate |
+
+The compiler does not precompute values that depend on a denoise hidden state.
+It precomputes the topology, storage layout and execution schedule, then emits
+Metal kernels for the remaining reductions and attention. The current route is
+geometry-only. The measured quality regression shows that the next version
+must compile teacher-calibrated routes or multiple learned centroids rather
+than merely increasing geometric locality.
 
 The earlier same-size attempt incorrectly decoded all 37 video latents as one
 sequence. It produced 38 non-flat frames followed by 86 flat gray frames. The

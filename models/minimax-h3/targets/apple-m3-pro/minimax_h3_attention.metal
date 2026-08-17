@@ -132,6 +132,19 @@ kernel void minimax_h3_initialize_bf16(
     output[index] = bfloat(float(value) * 0.0625f);
 }
 
+kernel void minimax_h3_initialize_bf16_irregular(
+    device bfloat *output [[buffer(0)]],
+    constant uint &element_count [[buffer(1)]],
+    constant uint &seed [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= element_count) return;
+    uint bits = index * 747796405u + seed * 2891336453u + 277803737u;
+    bits = ((bits >> ((bits >> 28u) + 4u)) ^ bits) * 277803737u;
+    bits = (bits >> 22u) ^ bits;
+    int centered = int(bits % 2001u) - 1000;
+    output[index] = bfloat(float(centered) * 0.000731f);
+}
+
 /* The H3 packed layout and MM-RoPE frequencies are fixed for an execution
  * artifact.  Build the 48 unique (cos, sin) pairs per row once instead of
  * evaluating pow/cos/sin independently for Q and K in every head and block. */
@@ -2271,12 +2284,228 @@ kernel void minimax_h3_dense_attention_mma64_bf16(
     }
 }
 
+/* Exact dense attention with the same FP32 QK, softmax and value
+ * accumulation as minimax_h3_dense_attention_mma64_bf16.  The reference
+ * path writes a rows x heads x dimensions FP32 image and launches a second
+ * conversion kernel.  Once the value pass is complete, score_tiles is dead;
+ * reuse those 2 KiB as a per-fragment FP32 spill and round directly to the
+ * BF16 residual boundary.  This removes the 448 MiB 480p scratch image and
+ * its full-device write/read without changing the arithmetic order. */
+kernel void minimax_h3_dense_attention_mma64_bf16_direct(
+    device const bfloat *queries [[buffer(0)]],
+    device const bfloat *keys [[buffer(1)]],
+    device const bfloat *values [[buffer(2)]],
+    device bfloat *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup bfloat key_tile[8 * kH3HeadDim];
+    threadgroup float value_tile[8 * kH3HeadDim];
+    threadgroup float score_tiles[8 * 8 * 8];
+    threadgroup float probability_tiles[8 * 8 * 8];
+    threadgroup float row_maximum[64];
+    threadgroup float row_denominator[64];
+    uint query_block_start = group.x * 64u;
+    uint query_block_rows = min(64u, rows - query_block_start);
+    uint head = group.y;
+    uint query_base = simdgroup_index * 8u;
+    uint candidate_blocks = (rows + 7u) / 8u;
+    simdgroup_bfloat8x8 query_fragments[16];
+
+    for (uint frag = 0u; frag < 16u; ++frag) {
+        if (query_base < query_block_rows) {
+            device const bfloat *source =
+                queries + ((query_block_start + query_base) * kH3HeadCount +
+                           head) * kH3HeadDim + frag * 8u;
+            simdgroup_load(query_fragments[frag], source,
+                           kH3HeadCount * kH3HeadDim);
+        } else {
+            query_fragments[frag] =
+                make_filled_simdgroup_matrix<bfloat, 8, 8>(bfloat(0.0f));
+        }
+    }
+    if (tid < 64u) {
+        row_maximum[tid] = -INFINITY;
+        row_denominator[tid] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint candidate_block = 0u; candidate_block < candidate_blocks;
+         ++candidate_block) {
+        for (uint linear = tid; linear < 8u * kH3HeadDim; linear += 256u) {
+            uint key_in_block = linear / kH3HeadDim;
+            uint dimension = linear - key_in_block * kH3HeadDim;
+            uint candidate = candidate_block * 8u + key_in_block;
+            key_tile[linear] = candidate < rows
+                ? keys[(candidate * kH3HeadCount + head) * kH3HeadDim +
+                       dimension]
+                : bfloat(0.0f);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        simdgroup_float8x8 scores =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        for (uint frag = 0u; frag < 16u; ++frag) {
+            simdgroup_bfloat8x8 key_fragment;
+            simdgroup_load(key_fragment, key_tile + frag * 8u,
+                           kH3HeadDim, 0u, true);
+            simdgroup_multiply_accumulate(scores, query_fragments[frag],
+                                           key_fragment, scores);
+        }
+        threadgroup float *score_tile =
+            score_tiles + simdgroup_index * 64u;
+        simdgroup_store(scores, score_tile, 8u);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        uint local_query = query_base + lane;
+        if (lane < 8u && local_query < query_block_rows) {
+            uint valid_keys = min(8u, rows - candidate_block * 8u);
+            float block_maximum = -INFINITY;
+            for (uint key = 0u; key < valid_keys; ++key)
+                block_maximum = max(
+                    block_maximum,
+                    score_tile[lane * 8u + key] * kH3AttentionScale);
+            float next_maximum = max(row_maximum[local_query], block_maximum);
+            float denominator = row_denominator[local_query] *
+                                exp(row_maximum[local_query] - next_maximum);
+            for (uint key = 0u; key < valid_keys; ++key)
+                denominator += exp(score_tile[lane * 8u + key] *
+                                       kH3AttentionScale -
+                                   next_maximum);
+            row_maximum[local_query] = next_maximum;
+            row_denominator[local_query] = denominator;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    simdgroup_float8x8 accumulators[16];
+    for (uint frag = 0u; frag < 16u; ++frag)
+        accumulators[frag] =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    for (uint candidate_block = 0u; candidate_block < candidate_blocks;
+         ++candidate_block) {
+        for (uint linear = tid; linear < 8u * kH3HeadDim; linear += 256u) {
+            uint key_in_block = linear / kH3HeadDim;
+            uint dimension = linear - key_in_block * kH3HeadDim;
+            uint candidate = candidate_block * 8u + key_in_block;
+            if (candidate < rows) {
+                uint source = (candidate * kH3HeadCount + head) *
+                                  kH3HeadDim +
+                              dimension;
+                key_tile[linear] = keys[source];
+                value_tile[linear] = float(values[source]);
+            } else {
+                key_tile[linear] = bfloat(0.0f);
+                value_tile[linear] = 0.0f;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        simdgroup_float8x8 scores =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        for (uint frag = 0u; frag < 16u; ++frag) {
+            simdgroup_bfloat8x8 key_fragment;
+            simdgroup_load(key_fragment, key_tile + frag * 8u,
+                           kH3HeadDim, 0u, true);
+            simdgroup_multiply_accumulate(scores, query_fragments[frag],
+                                           key_fragment, scores);
+        }
+        threadgroup float *score_tile =
+            score_tiles + simdgroup_index * 64u;
+        simdgroup_store(scores, score_tile, 8u);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup float *probability_tile =
+            probability_tiles + simdgroup_index * 64u;
+        for (uint index = lane; index < 64u; index += 32u) {
+            uint query_in_simdgroup = index / 8u;
+            uint key_in_block = index & 7u;
+            uint local_query = query_base + query_in_simdgroup;
+            uint candidate = candidate_block * 8u + key_in_block;
+            probability_tile[index] =
+                local_query < query_block_rows && candidate < rows
+                    ? exp(score_tile[index] * kH3AttentionScale -
+                          row_maximum[local_query]) /
+                          row_denominator[local_query]
+                    : 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        simdgroup_float8x8 probability_fragment;
+        simdgroup_load(probability_fragment, probability_tile, 8u);
+        for (uint frag = 0u; frag < 16u; ++frag) {
+            simdgroup_float8x8 value_fragment;
+            simdgroup_load(value_fragment, value_tile + frag * 8u,
+                           kH3HeadDim);
+            simdgroup_multiply_accumulate(accumulators[frag],
+                                           probability_fragment,
+                                           value_fragment,
+                                           accumulators[frag]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    /* score_tiles is no longer live.  Spill one 8-column output fragment for
+     * all eight simdgroups, then have the full threadgroup perform the exact
+     * float-to-BF16 boundary conversion. */
+    for (uint frag = 0u; frag < 16u; ++frag) {
+        threadgroup float *spill = score_tiles + simdgroup_index * 64u;
+        simdgroup_store(accumulators[frag], spill, 8u);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint linear = tid; linear < 512u; linear += 256u) {
+            uint output_simdgroup = linear / 64u;
+            uint in_tile = linear - output_simdgroup * 64u;
+            uint query_in_simdgroup = in_tile / 8u;
+            uint column = in_tile - query_in_simdgroup * 8u;
+            uint local_query = output_simdgroup * 8u + query_in_simdgroup;
+            if (local_query < query_block_rows) {
+                uint destination =
+                    ((query_block_start + local_query) * kH3HeadCount + head) *
+                        kH3HeadDim +
+                    frag * 8u + column;
+                output[destination] = bfloat(score_tiles[linear]);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
 kernel void minimax_h3_f32_to_bf16(
     device const float *input [[buffer(0)]],
     device bfloat *output [[buffer(1)]],
     constant uint &element_count [[buffer(2)]],
     uint index [[thread_position_in_grid]]) {
     if (index < element_count) output[index] = bfloat(input[index]);
+}
+
+/* The tree-attention execution image is tree-major while the released H3
+ * graph is [text | audio | frame-major video].  The permutation is compiled
+ * once for a fixed geometry and reused by every layer/evaluation. */
+kernel void minimax_h3_reorder_bf16_to_f16(
+    device const bfloat *input [[buffer(0)]],
+    device const uint *logical_to_physical [[buffer(1)]],
+    device half *output [[buffer(2)]],
+    constant uint &row_count [[buffer(3)]],
+    uint index [[thread_position_in_grid]]) {
+    const uint row_width = kH3HeadCount * kH3HeadDim;
+    uint element_count = row_count * row_width;
+    if (index >= element_count) return;
+    uint logical_row = index / row_width;
+    uint column = index - logical_row * row_width;
+    uint physical_row = logical_to_physical[logical_row];
+    output[physical_row * row_width + column] = half(float(input[index]));
+}
+
+kernel void minimax_h3_reorder_f16_to_bf16(
+    device const half *input [[buffer(0)]],
+    device const uint *logical_to_physical [[buffer(1)]],
+    device bfloat *output [[buffer(2)]],
+    constant uint &row_count [[buffer(3)]],
+    uint index [[thread_position_in_grid]]) {
+    const uint row_width = kH3HeadCount * kH3HeadDim;
+    uint element_count = row_count * row_width;
+    if (index >= element_count) return;
+    uint logical_row = index / row_width;
+    uint column = index - logical_row * row_width;
+    uint physical_row = logical_to_physical[logical_row];
+    output[index] = bfloat(float(input[physical_row * row_width + column]));
 }
 
 kernel void minimax_h3_build_leaf_summaries(

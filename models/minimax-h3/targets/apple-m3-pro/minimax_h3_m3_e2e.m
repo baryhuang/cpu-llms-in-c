@@ -2,6 +2,8 @@
 #import <Metal/Metal.h>
 
 #include "minimax_h3_m3_e2e.h"
+#include "minimax_h3.h"
+#include "minimax_h3_m3_tree.h"
 #include "minimax_h3_remote_safetensors.h"
 #include "qwen38_tokenizer.h"
 
@@ -69,6 +71,27 @@ typedef struct {
     uint32_t aggregate_start;
     uint32_t aggregate_count;
 } h3_tree_parameters;
+
+typedef struct {
+    uint32_t parent;
+    uint32_t first_child;
+    uint32_t child_count;
+    uint32_t kind;
+    uint32_t first_frame;
+    uint32_t frame_count;
+    uint32_t patch_y;
+    uint32_t patch_x;
+    uint32_t patch_h;
+    uint32_t patch_w;
+    uint32_t token_count;
+    uint32_t physical_start;
+} h3_tree_node_gpu;
+
+typedef struct {
+    uint32_t first_row;
+    uint32_t row_count;
+    uint32_t route_index;
+} h3_query_block_gpu;
 
 typedef struct {
     uint32_t batch;
@@ -156,6 +179,12 @@ typedef struct {
     __strong id<MTLComputePipelineState> h3_prepare_bf16;
     __strong id<MTLComputePipelineState> h3_attention_bf16;
     __strong id<MTLComputePipelineState> h3_attention_mma64_bf16;
+    __strong id<MTLComputePipelineState> h3_attention_mma64_bf16_direct;
+    __strong id<MTLComputePipelineState> h3_reorder_bf16_to_f16;
+    __strong id<MTLComputePipelineState> h3_reorder_f16_to_bf16;
+    __strong id<MTLComputePipelineState> h3_tree_leaf_summary;
+    __strong id<MTLComputePipelineState> h3_tree_parent_summary;
+    __strong id<MTLComputePipelineState> h3_tree_attention_mma64;
     __strong id<MTLComputePipelineState> f32_to_bf16;
     __strong id<MTLComputePipelineState> video_rope;
     __strong id<MTLComputePipelineState> video_prepare;
@@ -171,6 +200,32 @@ typedef struct {
     int pipeline_archive_hit;
     double setup_seconds;
 } h3_metal;
+
+typedef struct {
+    int enabled;
+    h3_tree_parameters parameters;
+    uint32_t query_block_count;
+    uint32_t summary_node_count;
+    uint32_t leaf_count;
+    uint32_t frame_node_start;
+    uint32_t frame_node_count;
+    uint32_t temporal_node_start;
+    uint32_t temporal_node_count;
+    uint32_t root_index;
+    __strong id<MTLBuffer> logical_to_physical;
+    __strong id<MTLBuffer> nodes;
+    __strong id<MTLBuffer> summary_log_counts;
+    __strong id<MTLBuffer> route_offsets;
+    __strong id<MTLBuffer> route_entries;
+    __strong id<MTLBuffer> query_blocks;
+    __strong id<MTLBuffer> physical_query;
+    __strong id<MTLBuffer> physical_key;
+    __strong id<MTLBuffer> physical_value;
+    __strong id<MTLBuffer> physical_output;
+    __strong id<MTLBuffer> summary_key;
+    __strong id<MTLBuffer> summary_value;
+    __strong id<MTLBuffer> lse;
+} h3_tree_runtime;
 
 static void e2e_error(char *error, size_t capacity, const char *format, ...) {
     va_list arguments;
@@ -404,6 +459,18 @@ static int h3_metal_open(const char *path,
     H3_PIPE(h3_attention_bf16, "minimax_h3_dense_attention_bf16");
     H3_PIPE(h3_attention_mma64_bf16,
             "minimax_h3_dense_attention_mma64_bf16");
+    H3_PIPE(h3_attention_mma64_bf16_direct,
+            "minimax_h3_dense_attention_mma64_bf16_direct");
+    H3_PIPE(h3_reorder_bf16_to_f16,
+            "minimax_h3_reorder_bf16_to_f16");
+    H3_PIPE(h3_reorder_f16_to_bf16,
+            "minimax_h3_reorder_f16_to_bf16");
+    H3_PIPE(h3_tree_leaf_summary,
+            "minimax_h3_build_leaf_summaries");
+    H3_PIPE(h3_tree_parent_summary,
+            "minimax_h3_build_parent_summaries");
+    H3_PIPE(h3_tree_attention_mma64,
+            "minimax_h3_hierarchical_attention_mma64");
     H3_PIPE(f32_to_bf16, "minimax_h3_f32_to_bf16");
     H3_PIPE(video_rope, "minimax_h3_build_video_rope_f32");
     H3_PIPE(video_prepare, "minimax_h3_video_prepare_qkv");
@@ -440,6 +507,12 @@ static int h3_metal_open(const char *path,
         result.h3_prepare == nil || result.h3_attention == nil ||
         result.h3_prepare_bf16 == nil || result.h3_attention_bf16 == nil ||
         result.h3_attention_mma64_bf16 == nil ||
+        result.h3_attention_mma64_bf16_direct == nil ||
+        result.h3_reorder_bf16_to_f16 == nil ||
+        result.h3_reorder_f16_to_bf16 == nil ||
+        result.h3_tree_leaf_summary == nil ||
+        result.h3_tree_parent_summary == nil ||
+        result.h3_tree_attention_mma64 == nil ||
         result.f32_to_bf16 == nil || result.video_rope == nil ||
         result.video_prepare == nil || result.video_attention == nil ||
         result.video_attention_tiled == nil ||
@@ -1141,35 +1214,389 @@ static void h3_dense_attention(h3_metal *metal,
                 threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
 }
 
+static int h3_tree_runtime_build(
+    const minimax_h3_m3_e2e_options *options,
+    size_t text_rows,
+    h3_metal *metal,
+    h3_tree_runtime *runtime,
+    char *error,
+    size_t error_capacity) {
+    h3_tree_runtime result = {0};
+    const char *mode = getenv("MINIMAX_H3_TREE_ATTENTION");
+    if (mode == NULL || mode[0] == '\0' || strcmp(mode, "0") == 0) {
+        *runtime = result;
+        return 0;
+    }
+    if (strcmp(mode, "1") != 0 && strcmp(mode, "conservative") != 0) {
+        e2e_error(error, error_capacity,
+                  "MINIMAX_H3_TREE_ATTENTION must be 0, 1 or conservative");
+        return 2;
+    }
+
+    minimax_h3_geometry geometry;
+    minimax_h3_t2va_layout layout;
+    minimax_h3_m3_tree_plan plan;
+    double *positions = NULL;
+    uint8_t *tags = NULL;
+    minimax_h3_m3_tree_node *nodes = NULL;
+    uint32_t *route_offsets = NULL;
+    uint32_t *route_entries = NULL;
+    uint32_t *logical_to_physical = NULL;
+    h3_query_block_gpu *query_blocks = NULL;
+    size_t node_count = 0u;
+    size_t route_entry_count = 0u;
+    size_t maximum_route_entries = 0u;
+    size_t query_block_count = 0u;
+    int status = 1;
+
+    if (minimax_h3_geometry_init(&geometry, options->width, options->height,
+                                 options->frames, text_rows) !=
+            MINIMAX_H3_OK ||
+        geometry.sequence_rows > UINT32_MAX) {
+        e2e_error(error, error_capacity, "cannot compile H3 tree geometry");
+        goto cleanup;
+    }
+    positions = calloc(geometry.sequence_rows * 3u, sizeof(*positions));
+    tags = calloc(geometry.sequence_rows, sizeof(*tags));
+    if (positions == NULL || tags == NULL ||
+        minimax_h3_build_t2va_layout(&geometry, NULL, positions, tags,
+                                     geometry.sequence_rows, &layout) !=
+            MINIMAX_H3_OK ||
+        minimax_h3_m3_tree_node_count(&geometry, &node_count) !=
+            MINIMAX_H3_OK) {
+        e2e_error(error, error_capacity, "cannot compile H3 tree layout");
+        goto cleanup;
+    }
+    nodes = calloc(node_count, sizeof(*nodes));
+    if (nodes == NULL ||
+        minimax_h3_m3_tree_plan_make(&geometry, &layout, nodes, node_count,
+                                     &plan) != MINIMAX_H3_OK ||
+        minimax_h3_m3_tree_route_entry_count(
+            &geometry, &layout, nodes, &plan, &route_entry_count,
+            &maximum_route_entries) != MINIMAX_H3_OK ||
+        plan.exact_count > UINT32_MAX || plan.leaf_count > UINT32_MAX ||
+        plan.node_count > UINT32_MAX) {
+        e2e_error(error, error_capacity, "cannot compile H3 tree routes");
+        goto cleanup;
+    }
+    query_block_count = (plan.exact_count + 63u) / 64u + plan.leaf_count;
+    if (query_block_count > UINT32_MAX) {
+        e2e_error(error, error_capacity, "H3 tree query plan is too large");
+        goto cleanup;
+    }
+    route_offsets = calloc(plan.leaf_count + 1u, sizeof(*route_offsets));
+    route_entries = calloc(route_entry_count, sizeof(*route_entries));
+    logical_to_physical = calloc(geometry.sequence_rows,
+                                 sizeof(*logical_to_physical));
+    query_blocks = calloc(query_block_count, sizeof(*query_blocks));
+    if (route_offsets == NULL || route_entries == NULL ||
+        logical_to_physical == NULL || query_blocks == NULL ||
+        minimax_h3_m3_tree_routes_make(
+            &geometry, &layout, nodes, &plan, route_offsets,
+            plan.leaf_count + 1u, route_entries, route_entry_count) !=
+            MINIMAX_H3_OK) {
+        e2e_error(error, error_capacity, "cannot materialize H3 tree routes");
+        goto cleanup;
+    }
+
+    {
+        size_t block = 0u;
+        size_t physical_row = plan.video_start;
+        for (size_t row = 0u; row < plan.exact_count; ++row)
+            logical_to_physical[row] = (uint32_t)row;
+        for (size_t row = 0u; row < plan.exact_count; row += 64u) {
+            size_t count = plan.exact_count - row;
+            if (count > 64u) count = 64u;
+            query_blocks[block++] = (h3_query_block_gpu) {
+                .first_row = (uint32_t)row,
+                .row_count = (uint32_t)count,
+                .route_index = 0u,
+            };
+        }
+        for (size_t leaf = 0u; leaf < plan.leaf_count; ++leaf) {
+            const minimax_h3_m3_tree_node *node = &nodes[leaf];
+            if (node->token_count == 0u || node->token_count > 64u) {
+                e2e_error(error, error_capacity,
+                          "H3 tree leaf exceeds 64 query rows");
+                goto cleanup;
+            }
+            query_blocks[block++] = (h3_query_block_gpu) {
+                .first_row = (uint32_t)physical_row,
+                .row_count = node->token_count,
+                .route_index = (uint32_t)leaf,
+            };
+            for (uint16_t y = 0u; y < node->patch_h; ++y) {
+                for (uint16_t x = 0u; x < node->patch_w; ++x) {
+                    size_t logical_row = 0u;
+                    if (minimax_h3_m3_tree_leaf_row(
+                            &geometry, &layout, node, y, x,
+                            &logical_row) != MINIMAX_H3_OK ||
+                        logical_row >= geometry.sequence_rows ||
+                        physical_row >= geometry.sequence_rows) {
+                        e2e_error(error, error_capacity,
+                                  "H3 tree row permutation is invalid");
+                        goto cleanup;
+                    }
+                    logical_to_physical[logical_row] =
+                        (uint32_t)physical_row++;
+                }
+            }
+        }
+        if (block != query_block_count ||
+            physical_row != geometry.sequence_rows) {
+            e2e_error(error, error_capacity,
+                      "H3 tree row permutation is incomplete");
+            goto cleanup;
+        }
+        for (size_t entry = 0u; entry < route_entry_count; ++entry) {
+            if ((route_entries[entry] &
+                 MINIMAX_H3_M3_TREE_SUMMARY_ENTRY) == 0u) {
+                uint32_t logical_row = route_entries[entry];
+                if (logical_row >= geometry.sequence_rows) {
+                    e2e_error(error, error_capacity,
+                              "H3 tree route row is invalid");
+                    goto cleanup;
+                }
+                route_entries[entry] =
+                    logical_to_physical[logical_row];
+            }
+        }
+    }
+
+    size_t tensor_elements = geometry.sequence_rows * 56u * 128u;
+    size_t tensor_bytes = tensor_elements * sizeof(uint16_t);
+    size_t summary_elements = plan.node_count * 56u * 128u;
+    size_t summary_bytes = summary_elements * sizeof(uint16_t);
+    result.logical_to_physical = [metal->device
+        newBufferWithBytes:logical_to_physical
+                      length:geometry.sequence_rows * sizeof(uint32_t)
+                     options:MTLResourceStorageModeShared];
+    result.route_offsets = [metal->device
+        newBufferWithBytes:route_offsets
+                      length:(plan.leaf_count + 1u) * sizeof(uint32_t)
+                     options:MTLResourceStorageModeShared];
+    result.route_entries = [metal->device
+        newBufferWithBytes:route_entries
+                      length:route_entry_count * sizeof(uint32_t)
+                     options:MTLResourceStorageModeShared];
+    result.query_blocks = [metal->device
+        newBufferWithBytes:query_blocks
+                      length:query_block_count * sizeof(h3_query_block_gpu)
+                     options:MTLResourceStorageModeShared];
+    result.nodes = [metal->device
+        newBufferWithLength:plan.node_count * sizeof(h3_tree_node_gpu)
+                    options:MTLResourceStorageModeShared];
+    result.summary_log_counts = [metal->device
+        newBufferWithLength:plan.node_count * sizeof(float)
+                    options:MTLResourceStorageModeShared];
+    result.physical_query = [metal->device newBufferWithLength:tensor_bytes
+                                                    options:MTLResourceStorageModePrivate];
+    result.physical_key = [metal->device newBufferWithLength:tensor_bytes
+                                                  options:MTLResourceStorageModePrivate];
+    result.physical_value = [metal->device newBufferWithLength:tensor_bytes
+                                                    options:MTLResourceStorageModePrivate];
+    result.physical_output = [metal->device newBufferWithLength:tensor_bytes
+                                                     options:MTLResourceStorageModePrivate];
+    result.summary_key = [metal->device newBufferWithLength:summary_bytes
+                                                options:MTLResourceStorageModePrivate];
+    result.summary_value = [metal->device newBufferWithLength:summary_bytes
+                                                  options:MTLResourceStorageModePrivate];
+    result.lse = [metal->device
+        newBufferWithLength:geometry.sequence_rows * 56u * sizeof(float)
+                    options:MTLResourceStorageModePrivate];
+    if (result.logical_to_physical == nil || result.route_offsets == nil ||
+        result.route_entries == nil || result.query_blocks == nil ||
+        result.nodes == nil || result.summary_log_counts == nil ||
+        result.physical_query == nil || result.physical_key == nil ||
+        result.physical_value == nil || result.physical_output == nil ||
+        result.summary_key == nil || result.summary_value == nil ||
+        result.lse == nil) {
+        e2e_error(error, error_capacity,
+                  "cannot allocate compiled H3 tree execution image");
+        goto cleanup;
+    }
+
+    {
+        h3_tree_node_gpu *gpu_nodes = result.nodes.contents;
+        float *log_counts = result.summary_log_counts.contents;
+        size_t physical_start = plan.video_start;
+        for (size_t index = 0u; index < plan.node_count; ++index) {
+            gpu_nodes[index] = (h3_tree_node_gpu) {
+                .parent = nodes[index].parent,
+                .first_child = nodes[index].first_child,
+                .child_count = nodes[index].child_count,
+                .kind = nodes[index].kind,
+                .first_frame = nodes[index].first_frame,
+                .frame_count = nodes[index].frame_count,
+                .patch_y = nodes[index].patch_y,
+                .patch_x = nodes[index].patch_x,
+                .patch_h = nodes[index].patch_h,
+                .patch_w = nodes[index].patch_w,
+                .token_count = nodes[index].token_count,
+                .physical_start = index < plan.leaf_count
+                                      ? (uint32_t)physical_start
+                                      : 0u,
+            };
+            if (index < plan.leaf_count)
+                physical_start += nodes[index].token_count;
+            log_counts[index] = logf((float)nodes[index].token_count);
+        }
+    }
+
+    result.parameters = (h3_tree_parameters) {
+        .sequence_rows = (uint32_t)geometry.sequence_rows,
+        .exact_rows = (uint32_t)plan.exact_count,
+        .video_start = (uint32_t)layout.video_start,
+        .rows_per_video_frame = (uint32_t)geometry.rows_per_video_frame,
+        .patch_columns = plan.patch_columns,
+        .tile_columns = plan.tile_columns,
+        .leaves_per_frame =
+            (uint32_t)((size_t)plan.tile_rows * plan.tile_columns),
+        .leaf_count = (uint32_t)plan.leaf_count,
+    };
+    result.query_block_count = (uint32_t)query_block_count;
+    result.summary_node_count = (uint32_t)plan.node_count;
+    result.leaf_count = (uint32_t)plan.leaf_count;
+    result.frame_node_start = (uint32_t)plan.frame_node_start;
+    result.frame_node_count = (uint32_t)plan.frame_node_count;
+    result.temporal_node_start = (uint32_t)plan.temporal_node_start;
+    result.temporal_node_count = (uint32_t)plan.temporal_node_count;
+    result.root_index = (uint32_t)plan.root_index;
+    result.enabled = 1;
+    fprintf(stderr,
+            "stage=tree-precompile rows=%zu exact_rows=%zu nodes=%zu "
+            "query_blocks=%zu route_entries=%zu max_route=%zu "
+            "tensor_summary_bytes=%zu\n",
+            geometry.sequence_rows, plan.exact_count, plan.node_count,
+            query_block_count, route_entry_count, maximum_route_entries,
+            tensor_bytes * 4u + summary_bytes * 2u);
+    fflush(stderr);
+    *runtime = result;
+    status = 0;
+
+cleanup:
+    free(positions);
+    free(tags);
+    free(nodes);
+    free(route_offsets);
+    free(route_entries);
+    free(logical_to_physical);
+    free(query_blocks);
+    return status;
+}
+
+static void h3_tree_attention_encode(
+    h3_tree_runtime *tree,
+    h3_metal *metal,
+    id<MTLComputeCommandEncoder> encoder,
+    id<MTLBuffer> query,
+    id<MTLBuffer> key,
+    id<MTLBuffer> value,
+    id<MTLBuffer> output,
+    uint32_t rows) {
+    uint32_t elements = rows * 56u * 128u;
+    const id<MTLBuffer> logical[3] = {query, key, value};
+    const id<MTLBuffer> physical[3] = {
+        tree->physical_query, tree->physical_key, tree->physical_value
+    };
+    [encoder setComputePipelineState:metal->h3_reorder_bf16_to_f16];
+    for (unsigned tensor = 0u; tensor < 3u; ++tensor) {
+        [encoder setBuffer:logical[tensor] offset:0 atIndex:0];
+        [encoder setBuffer:tree->logical_to_physical offset:0 atIndex:1];
+        [encoder setBuffer:physical[tensor] offset:0 atIndex:2];
+        [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
+        [encoder dispatchThreads:MTLSizeMake(elements, 1u, 1u)
+                 threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
+    }
+
+    h3_tree_parameters parameters = tree->parameters;
+    [encoder setComputePipelineState:metal->h3_tree_leaf_summary];
+    [encoder setBuffer:tree->physical_key offset:0 atIndex:0];
+    [encoder setBuffer:tree->physical_value offset:0 atIndex:1];
+    [encoder setBuffer:tree->nodes offset:0 atIndex:2];
+    [encoder setBuffer:tree->summary_key offset:0 atIndex:4];
+    [encoder setBuffer:tree->summary_value offset:0 atIndex:5];
+    parameters.aggregate_start = 0u;
+    parameters.aggregate_count = tree->leaf_count;
+    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
+    [encoder dispatchThreadgroups:MTLSizeMake((size_t)tree->leaf_count * 56u,
+                                               1u, 1u)
+                threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
+
+    [encoder setComputePipelineState:metal->h3_tree_parent_summary];
+    parameters.aggregate_start = tree->frame_node_start;
+    parameters.aggregate_count = tree->frame_node_count;
+    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
+    [encoder dispatchThreadgroups:
+        MTLSizeMake((size_t)tree->frame_node_count * 56u, 1u, 1u)
+                threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
+    parameters.aggregate_start = tree->temporal_node_start;
+    parameters.aggregate_count = tree->temporal_node_count;
+    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
+    [encoder dispatchThreadgroups:
+        MTLSizeMake((size_t)tree->temporal_node_count * 56u, 1u, 1u)
+                threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
+    parameters.aggregate_start = tree->root_index;
+    parameters.aggregate_count = 1u;
+    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
+    [encoder dispatchThreadgroups:MTLSizeMake(56u, 1u, 1u)
+                threadsPerThreadgroup:MTLSizeMake(32u, 1u, 1u)];
+
+    parameters = tree->parameters;
+    [encoder setComputePipelineState:metal->h3_tree_attention_mma64];
+    [encoder setBuffer:tree->physical_query offset:0 atIndex:0];
+    [encoder setBuffer:tree->physical_key offset:0 atIndex:1];
+    [encoder setBuffer:tree->physical_value offset:0 atIndex:2];
+    [encoder setBuffer:tree->summary_key offset:0 atIndex:3];
+    [encoder setBuffer:tree->summary_value offset:0 atIndex:4];
+    [encoder setBuffer:tree->summary_log_counts offset:0 atIndex:5];
+    [encoder setBuffer:tree->route_offsets offset:0 atIndex:6];
+    [encoder setBuffer:tree->route_entries offset:0 atIndex:7];
+    [encoder setBytes:&parameters length:sizeof(parameters) atIndex:8];
+    [encoder setBuffer:tree->physical_output offset:0 atIndex:9];
+    [encoder setBuffer:tree->query_blocks offset:0 atIndex:10];
+    [encoder setBuffer:tree->lse offset:0 atIndex:11];
+    [encoder dispatchThreadgroups:MTLSizeMake(tree->query_block_count, 56u,
+                                               1u)
+                threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
+
+    [encoder setComputePipelineState:metal->h3_reorder_f16_to_bf16];
+    [encoder setBuffer:tree->physical_output offset:0 atIndex:0];
+    [encoder setBuffer:tree->logical_to_physical offset:0 atIndex:1];
+    [encoder setBuffer:output offset:0 atIndex:2];
+    [encoder setBytes:&rows length:sizeof(rows) atIndex:3];
+    [encoder dispatchThreads:MTLSizeMake(elements, 1u, 1u)
+             threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
+}
+
 static void h3_dense_attention_mma64(h3_metal *metal,
+                                     h3_tree_runtime *tree,
                                      id<MTLComputeCommandEncoder> encoder,
                                      id<MTLBuffer> query,
                                      id<MTLBuffer> key,
                                      id<MTLBuffer> value,
-                                     id<MTLBuffer> fp32_scratch,
                                      id<MTLBuffer> output,
                                      uint32_t rows) {
+    if (tree != NULL && tree->enabled) {
+        h3_tree_attention_encode(tree, metal, encoder, query, key, value,
+                                 output, rows);
+        return;
+    }
     const char *reference = getenv("MINIMAX_H3_REFERENCE_ATTENTION");
     if (reference != NULL && strcmp(reference, "1") == 0) {
         h3_dense_attention(metal, encoder, query, key, value, output, rows);
         return;
     }
-    [encoder setComputePipelineState:metal->h3_attention_mma64_bf16];
+    [encoder setComputePipelineState:
+        metal->h3_attention_mma64_bf16_direct];
     [encoder setBuffer:query offset:0 atIndex:0];
     [encoder setBuffer:key offset:0 atIndex:1];
     [encoder setBuffer:value offset:0 atIndex:2];
-    [encoder setBuffer:fp32_scratch offset:0 atIndex:3];
+    [encoder setBuffer:output offset:0 atIndex:3];
     [encoder setBytes:&rows length:sizeof(rows) atIndex:4];
     [encoder dispatchThreadgroups:MTLSizeMake((rows + 63u) / 64u, 56u, 1u)
                 threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
 
-    uint32_t element_count = rows * 56u * 128u;
-    [encoder setComputePipelineState:metal->f32_to_bf16];
-    [encoder setBuffer:fp32_scratch offset:0 atIndex:0];
-    [encoder setBuffer:output offset:0 atIndex:1];
-    [encoder setBytes:&element_count length:sizeof(element_count) atIndex:2];
-    [encoder dispatchThreads:MTLSizeMake(element_count, 1u, 1u)
-             threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
 }
 
 static int h3_q8_linear_bound(h3_affine_binding binding,
@@ -1835,9 +2262,10 @@ static int h3_denoise_block(h3_remote_image *weights,
                             h3_remote_image *adapter,
                             h3_tensor_binding modulation,
                             h3_metal *metal,
+                            h3_tree_runtime *tree,
+                            id<MTLComputeCommandEncoder> encoder,
                             unsigned layer,
                             uint32_t step,
-                            uint32_t total_steps,
                             id<MTLBuffer> row_indices,
                             id<MTLBuffer> hidden,
                             id<MTLBuffer> normalized,
@@ -1846,7 +2274,6 @@ static int h3_denoise_block(h3_remote_image *weights,
                             id<MTLBuffer> key,
                             id<MTLBuffer> value,
                             id<MTLBuffer> attended,
-                            id<MTLBuffer> attention_fp32_scratch,
                             id<MTLBuffer> attention_output,
                             id<MTLBuffer> lora_scratch,
                             id<MTLBuffer> fc1,
@@ -1860,61 +2287,46 @@ static int h3_denoise_block(h3_remote_image *weights,
     char name[192];
     snprintf(prefix, sizeof(prefix), "blocks.%u", layer);
 
-    double stage_started = e2e_now();
-    id<MTLCommandBuffer> command = [metal->queue commandBuffer];
-    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
     snprintf(name, sizeof(name), "%s.norm1.weight", prefix);
     if (h3_rms_adaln_bound(weights, metal, encoder, name, modulation, step,
                            9u, 6u * 5376u, 0u, 5376u, row_indices, hidden,
                            normalized, rows, error, error_capacity) != 0)
-        goto qkv_failed;
+        return 1;
     snprintf(name, sizeof(name), "%s.attn.qkv_proj", prefix);
     if (h3_q4_linear_lora(weights, adapter, metal, encoder, name, normalized,
                           lora_scratch, qkv, rows, error,
                           error_capacity) != 0)
-        goto qkv_failed;
+        return 1;
     snprintf(name, sizeof(name), "%s.attn", prefix);
     if (h3_prepare_attention(weights, metal, encoder, name, qkv, positions,
                              1u, query, key, value, rows, error,
                              error_capacity) != 0)
-        goto qkv_failed;
-    [encoder endEncoding];
-    if (h3_wait(command, error, error_capacity) != 0) return 1;
-    double qkv_seconds = e2e_now() - stage_started;
+        return 1;
 
-    stage_started = e2e_now();
-    command = [metal->queue commandBuffer];
-    encoder = [command computeCommandEncoder];
-    h3_dense_attention_mma64(metal, encoder, query, key, value,
-                             attention_fp32_scratch, attended, rows);
+    h3_dense_attention_mma64(metal, tree, encoder, query, key, value,
+                             attended, rows);
     snprintf(name, sizeof(name), "%s.attn.out_proj", prefix);
     if (h3_q4_linear_lora(weights, adapter, metal, encoder, name, attended,
                           lora_scratch, attention_output, rows, error,
                           error_capacity) != 0)
-        goto attention_failed;
+        return 1;
     if (h3_cached_residual_bound(modulation, metal, encoder, step,
                                  2u * 5376u, row_indices, hidden,
                                  attention_output, rows, error,
                                  error_capacity) != 0)
-        goto attention_failed;
-    [encoder endEncoding];
-    if (h3_wait(command, error, error_capacity) != 0) return 1;
-    double attention_seconds = e2e_now() - stage_started;
+        return 1;
 
-    stage_started = e2e_now();
-    command = [metal->queue commandBuffer];
-    encoder = [command computeCommandEncoder];
     snprintf(name, sizeof(name), "%s.norm2.weight", prefix);
     if (h3_rms_adaln_bound(weights, metal, encoder, name, modulation, step,
                            9u, 6u * 5376u, 3u * 5376u, 4u * 5376u,
                            row_indices, hidden, normalized, rows, error,
                            error_capacity) != 0)
-        goto mlp_failed;
+        return 1;
     snprintf(name, sizeof(name), "%s.mlp.fc1", prefix);
     if (h3_q4_linear_lora(weights, adapter, metal, encoder, name, normalized,
                           lora_scratch, fc1, rows, error,
                           error_capacity) != 0)
-        goto mlp_failed;
+        return 1;
     uint32_t width = 14336u;
     [encoder setComputePipelineState:metal->silu_split_bf16];
     [encoder setBuffer:fc1 offset:0 atIndex:0];
@@ -1927,31 +2339,12 @@ static int h3_denoise_block(h3_remote_image *weights,
     if (h3_q4_linear_lora(weights, adapter, metal, encoder, name, gated,
                           lora_scratch, mlp_output, rows, error,
                           error_capacity) != 0)
-        goto mlp_failed;
+        return 1;
     if (h3_cached_residual_bound(modulation, metal, encoder, step,
                                  5u * 5376u, row_indices, hidden, mlp_output,
                                  rows, error, error_capacity) != 0)
-        goto mlp_failed;
-    [encoder endEncoding];
-    if (h3_wait(command, error, error_capacity) != 0) return 1;
-    double mlp_seconds = e2e_now() - stage_started;
-    fprintf(stderr,
-            "stage=denoise-layer step=%u/%u layer=%u/50 "
-            "qkv_seconds=%.6f attention_seconds=%.6f mlp_seconds=%.6f\n",
-            step + 1u, total_steps, layer + 1u, qkv_seconds,
-            attention_seconds, mlp_seconds);
-    fflush(stderr);
+        return 1;
     return 0;
-
-qkv_failed:
-    [encoder endEncoding];
-    return 1;
-attention_failed:
-    [encoder endEncoding];
-    return 1;
-mlp_failed:
-    [encoder endEncoding];
-    return 1;
 }
 
 static uint64_t h3_rng_next(uint64_t *state) {
@@ -2365,6 +2758,7 @@ static int h3_transformer_run(const uint16_t *text_states,
     h3_remote_image cache = {0};
     h3_remote_image adapter = {0};
     h3_turbo_cache turbo_cache = {0};
+    h3_tree_runtime tree_runtime = {0};
     *turbo_compile_seconds = 0.0;
     *rope_precompute_seconds = 0.0;
     int status = 1;
@@ -2389,6 +2783,9 @@ static int h3_transformer_run(const uint16_t *text_states,
         e2e_error(error, error_capacity, "invalid packed H3 row count");
         return 2;
     }
+    if (h3_tree_runtime_build(options, text_rows, metal, &tree_runtime,
+                              error, error_capacity) != 0)
+        return 1;
     if (h3_remote_image_open("transformer.safetensors", "transformer",
                              &weights, error, error_capacity) != 0)
         return 1;
@@ -2453,7 +2850,6 @@ static int h3_transformer_run(const uint16_t *text_states,
 
     size_t hidden_bytes = (size_t)padded * 5376u * 2u;
     size_t heads_bytes = (size_t)padded * 56u * 128u * 2u;
-    size_t attention_fp32_bytes = (size_t)rows * 56u * 128u * 4u;
     id<MTLBuffer> hidden = [metal->device newBufferWithLength:hidden_bytes
                                                        options:MTLResourceStorageModeShared];
     id<MTLBuffer> normalized = [metal->device newBufferWithLength:hidden_bytes
@@ -2468,9 +2864,6 @@ static int h3_transformer_run(const uint16_t *text_states,
                                                      options:MTLResourceStorageModeShared];
     id<MTLBuffer> attended = [metal->device newBufferWithLength:heads_bytes
                                                         options:MTLResourceStorageModeShared];
-    id<MTLBuffer> attention_fp32_scratch = [metal->device
-        newBufferWithLength:attention_fp32_bytes
-                    options:MTLResourceStorageModePrivate];
     id<MTLBuffer> attention_output = [metal->device newBufferWithLength:hidden_bytes
                                                                   options:MTLResourceStorageModeShared];
     id<MTLBuffer> lora_scratch = [metal->device
@@ -2519,7 +2912,7 @@ static int h3_transformer_run(const uint16_t *text_states,
     h3_tensor_binding audio_sigmas = { {0}, nil, 0u };
     if (hidden == nil || normalized == nil || qkv == nil || query == nil ||
         key == nil || value == nil || attended == nil ||
-        attention_fp32_scratch == nil || attention_output == nil ||
+        attention_output == nil ||
         lora_scratch == nil ||
         fc1 == nil || gated == nil || mlp_output == nil || positions == nil ||
         rotary == nil ||
@@ -2752,17 +3145,33 @@ static int h3_transformer_run(const uint16_t *text_states,
         memcpy((uint16_t *)hidden.contents +
                    ((size_t)text_rows + audio_rows) * 5376u,
                video_hidden.contents, (size_t)video_rows * 5376u * 2u);
-        for (unsigned layer = 0u; layer < 50u; ++layer) {
-            if (h3_denoise_block(&weights,
-                                 turbo_enabled ? &adapter : NULL,
-                                 block_modulations[layer],
-                                 metal, layer, step, step_count,
-                                 row_indices, hidden, normalized, qkv, query,
-                                 key, value, attended, attention_fp32_scratch,
-                                 attention_output, lora_scratch, fc1, gated,
-                                 mlp_output,
-                                 rotary, rows,
-                                 error, error_capacity) != 0) {
+        const unsigned layers_per_command = 4u;
+        for (unsigned layer_start = 0u; layer_start < 50u;
+             layer_start += layers_per_command) {
+            unsigned layer_end = layer_start + layers_per_command;
+            if (layer_end > 50u) layer_end = 50u;
+            double group_started = e2e_now();
+            id<MTLCommandBuffer> command = [metal->queue commandBuffer];
+            id<MTLComputeCommandEncoder> encoder =
+                [command computeCommandEncoder];
+            int group_status = 0;
+            for (unsigned layer = layer_start; layer < layer_end; ++layer) {
+                if (h3_denoise_block(&weights,
+                                     turbo_enabled ? &adapter : NULL,
+                                     block_modulations[layer], metal,
+                                     &tree_runtime, encoder, layer, step,
+                                     row_indices, hidden, normalized, qkv,
+                                     query, key, value, attended,
+                                     attention_output, lora_scratch, fc1,
+                                     gated, mlp_output, rotary, rows, error,
+                                     error_capacity) != 0) {
+                    group_status = 1;
+                    break;
+                }
+            }
+            [encoder endEncoding];
+            if (group_status ||
+                h3_wait(command, error, error_capacity) != 0) {
                 free(video);
                 free(audio);
                 goto cleanup;
@@ -2776,9 +3185,15 @@ static int h3_transformer_run(const uint16_t *text_states,
                 e2e_error(error, error_capacity,
                           "non-finite transformer hidden at step %u layer %u "
                           "index %zu (largest finite magnitude %.9g)",
-                          step, layer, first_bad, largest);
+                          step, layer_end - 1u, first_bad, largest);
                 goto cleanup;
             }
+            fprintf(stderr,
+                    "stage=denoise-layer-group step=%u/%u layers=%u-%u/50 "
+                    "seconds=%.6f\n",
+                    step + 1u, step_count, layer_start + 1u, layer_end,
+                    e2e_now() - group_started);
+            fflush(stderr);
         }
         {
             id<MTLCommandBuffer> command = [metal->queue commandBuffer];

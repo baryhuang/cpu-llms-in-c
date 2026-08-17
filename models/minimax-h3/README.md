@@ -2,11 +2,13 @@
 
 Status: the portable C graph rules and Apple M3 Pro runtime are implemented
 through tokenizer, streamed 50-layer Qwen conditioner, 50-block H3 denoiser,
-Video VAE, Audio VAE and media mux. The optimized real-weight
+Video VAE, Audio VAE and media mux. The exact-attention real-weight
 864×480×124 Turbo-4 run completed in 2,418.708 seconds with a 4.136 GiB
-runtime peak physical footprint and zero swaps. All 124 frames decode and four
-prompt-aligned shots are visible. Functional and visual smoke gates pass;
-official full-precision parity and the speed target remain open.
+runtime peak physical footprint and zero swaps. A compiled-tree attention
+experiment completed the same N-to-N workload in 1,489.401 seconds with a
+4.592 GiB peak. It preserved the four requested shot categories but increased
+ghosting and temporal instability, so exact attention remains the default.
+Official full-precision parity and the speed target remain open.
 
 | N-to-N milestone | Affected stage | Affected-stage time before → after | 480p N-to-N time | Why time changed | Evidence |
 |---|---|---:|---:|---|---|
@@ -17,6 +19,14 @@ official full-precision parity and the speed target remain open.
 | + 32-row shared-weight GEMM | Video VAE dense projections and MLP | 659.524425 → 637.239960 s projected (**−22.284465 s**) | 2,544.817665 s (−22.284465) | Neighboring activation rows share staged weight tiles, reducing repeated weight traffic | 105 × 6.068952 s component result |
 | + 64-row shared-weight GEMM | Video VAE dense projections and MLP | 637.239960 → 528.169950 s projected (**−109.070010 s**) | 2,435.747655 s (−109.070010) | Each staged weight tile serves twice as many activation rows | 105 × 5.030190 s component result |
 | Current full validation | Full graph measurement; no new optimization | VAE: 528.169950 projected → **487.273811 s measured** (−40.896139); all other stages: 1,907.577705 → 1,931.434426 s (+23.856721) | **2,418.708237 s** (−17.039418 vs projection; **3.843×** vs baseline) | Replace one-task linear scaling with a complete measurement; the net projection difference is not claimed as optimization | measured complete run |
+| Exact BF16 direct output + four-layer H3 command groups | H3 dense-attention storage and command submission | Attention: 5,024.974042 → 5,012.634167 ms per call; scratch: 448,401,408 → 0 B; 128² smoke denoise: 17.407398 → 17.147884 s | full 480p N-to-N not remeasured; no projection claimed | Spill FP32 fragments into otherwise dead score-tile storage, write BF16 directly, and wait once per four layers | 112,100,352/112,100,352 irregular-input BF16 values identical; smoke MP4/audio hashes identical |
+| Experimental compiled tree attention | H3 dense attention | **1,898.120497 → 974.544700 s measured** (−923.575797 s; 1.948×) | **1,489.401301 s** (−929.306936; **1.624×** vs exact run; **6.241×** vs baseline) | Compile fixed geometry into a row permutation, 342 summary nodes, 307 query blocks and 140,284 route entries; update only dynamic K/V summaries on Metal | measured complete N-to-N; functional pass, visual-quality regression; not default |
+
+The tree row is not an exact-model speedup claim. It changes the attention
+approximation and requires an explicit `MINIMAX_H3_TREE_ATTENTION=conservative`
+opt-in. It decoded 124/124 frames with zero flat frames, but scene detections
+increased from 3 to 10 and visual review found softer details and stronger
+transition ghosting.
 
 ## Latest measured run breakdown
 

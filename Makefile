@@ -102,6 +102,7 @@ MINIMAX_H3_M3_PIPELINE_ARCHIVE := $(BUILD_DIR)/minimax-h3-m3-attention.mtlarchiv
 MINIMAX_H3_M3_ATTENTION_OBJECT := $(BUILD_DIR)/minimax-h3-m3-attention.o
 MINIMAX_H3_M3_ATTENTION_BENCH_OBJECT := $(BUILD_DIR)/minimax-h3-m3-attention-bench.o
 MINIMAX_H3_M3_ATTENTION_BENCH := $(BUILD_DIR)/minimax-h3-m3-attention-bench
+MINIMAX_H3_M3_DENSE_ATTENTION_BENCH := $(BUILD_DIR)/minimax-h3-m3-dense-attention-bench
 MINIMAX_H3_M3_ROPE_BENCH := $(BUILD_DIR)/minimax-h3-m3-rope-bench
 MINIMAX_H3_M3_VAE_GEMM_BENCH := $(BUILD_DIR)/minimax-h3-m3-vae-gemm-bench
 MINIMAX_H3_M3_VAE_ATTENTION_BENCH := $(BUILD_DIR)/minimax-h3-m3-vae-attention-bench
@@ -116,7 +117,7 @@ MINIMAX_H3_M3_E2E_OBJECT := $(BUILD_DIR)/minimax-h3-m3-e2e.o
 MINIMAX_H3_M3_E2E_CLI_OBJECT := $(BUILD_DIR)/minimax-h3-m3-e2e-cli.o
 MINIMAX_H3_M3_E2E := $(BUILD_DIR)/minimax-h3-m3-e2e
 
-.PHONY: all a113x clean fixture linux-tools minimax-h3-m3-attention-bench minimax-h3-m3-rope-bench minimax-h3-m3-vae-gemm-bench minimax-h3-m3-vae-attention-bench minimax-h3-m3-gemm-bench minimax-h3-m3-q8-gemm-bench minimax-h3-m3-pipeline-archive minimax-h3-m3-e2e minimax-h3-tools qwen38-m3-bench qwen38-m3-deltanet-bench qwen38-m3-layer-bench qwen38-m3-attention-bench qwen38-m3-decode qwen38-m3-generate qwen38-m3-chat qwen38-m3-api-state-test qwen38-m3-prefill-parity-test qwen38-tools test whisper-small-tools
+.PHONY: all a113x clean fixture linux-tools minimax-h3-m3-attention-bench minimax-h3-m3-dense-attention-bench minimax-h3-m3-rope-bench minimax-h3-m3-vae-gemm-bench minimax-h3-m3-vae-attention-bench minimax-h3-m3-gemm-bench minimax-h3-m3-q8-gemm-bench minimax-h3-m3-pipeline-archive minimax-h3-m3-e2e minimax-h3-tools qwen38-m3-bench qwen38-m3-deltanet-bench qwen38-m3-layer-bench qwen38-m3-attention-bench qwen38-m3-decode qwen38-m3-generate qwen38-m3-chat qwen38-m3-api-state-test qwen38-m3-prefill-parity-test qwen38-tools test whisper-small-tools
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
@@ -149,6 +150,11 @@ qwen38-m3-chat: $(QWEN38_M3_CHAT) $(QWEN38_M3_METALLIB)
 minimax-h3-m3-attention-bench: $(MINIMAX_H3_M3_ATTENTION_BENCH) \
 	$(MINIMAX_H3_M3_ATTENTION_METALLIB)
 	$(MINIMAX_H3_M3_ATTENTION_BENCH) $(MINIMAX_H3_M3_ATTENTION_METALLIB)
+
+minimax-h3-m3-dense-attention-bench: $(MINIMAX_H3_M3_DENSE_ATTENTION_BENCH) \
+	$(MINIMAX_H3_M3_ATTENTION_METALLIB)
+	$(MINIMAX_H3_M3_DENSE_ATTENTION_BENCH) \
+		$(MINIMAX_H3_M3_ATTENTION_METALLIB)
 
 minimax-h3-m3-rope-bench: $(MINIMAX_H3_M3_ROPE_BENCH) \
 	$(MINIMAX_H3_M3_ATTENTION_METALLIB)
@@ -373,6 +379,13 @@ $(MINIMAX_H3_M3_ATTENTION_BENCH): $(MINIMAX_H3_M3_ATTENTION_OBJECT) \
 		$(MINIMAX_H3_GENERIC)/minimax_h3.c -o $@ \
 		-framework Foundation -framework Metal -lm
 
+$(MINIMAX_H3_M3_DENSE_ATTENTION_BENCH): \
+	$(MINIMAX_H3_M3)/benchmarks/minimax_h3_m3_dense_attention_bench.m \
+	$(MINIMAX_H3_M3_ATTENTION_METALLIB)
+	mkdir -p $(BUILD_DIR)
+	$(CC) -O3 -std=c17 -Wall -Wextra -Wpedantic -fobjc-arc $< \
+		-o $@ -framework Foundation -framework Metal -lm
+
 $(MINIMAX_H3_M3_ROPE_BENCH): \
 	$(MINIMAX_H3_M3)/benchmarks/minimax_h3_m3_rope_bench.m \
 	$(MINIMAX_H3_M3_ATTENTION_METALLIB) \
@@ -450,12 +463,16 @@ $(MINIMAX_H3_M3_REAL_GEMM): $(MINIMAX_H3_M3_GEMM_OBJECT) \
 
 $(MINIMAX_H3_M3_E2E_OBJECT): $(MINIMAX_H3_M3)/minimax_h3_m3_e2e.m \
 	$(MINIMAX_H3_M3)/minimax_h3_m3_e2e.h \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_tree.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_tree.h \
+	$(MINIMAX_H3_GENERIC)/minimax_h3.c $(MINIMAX_H3_GENERIC)/minimax_h3.h \
 	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.h \
 	$(QWEN38_M3)/qwen38_tokenizer.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) -O3 -std=c17 -Wall -Wextra -Wpedantic -fobjc-arc \
 		-DMINIMAX_H3_TOKENIZER_PROFILE -I$(MINIMAX_H3_COMPILER) \
-		-I$(QWEN38_M3) -I$(MINIMAX_H3_M3) -c $< -o $@
+		-I$(QWEN38_M3) -I$(MINIMAX_H3_M3) -I$(MINIMAX_H3_GENERIC) \
+		-c $< -o $@
 
 $(MINIMAX_H3_M3_E2E_CLI_OBJECT): \
 	$(MINIMAX_H3_M3)/minimax_h3_m3_e2e_cli.c \
@@ -465,13 +482,18 @@ $(MINIMAX_H3_M3_E2E_CLI_OBJECT): \
 
 $(MINIMAX_H3_M3_E2E): $(MINIMAX_H3_M3_E2E_OBJECT) \
 	$(MINIMAX_H3_M3_E2E_CLI_OBJECT) $(MINIMAX_H3_TOKENIZER_OBJECT) \
-	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c
+	$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c \
+	$(MINIMAX_H3_M3)/minimax_h3_m3_tree.c \
+	$(MINIMAX_H3_GENERIC)/minimax_h3.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -DMINIMAX_H3_TOKENIZER_PROFILE \
 		-DMINIMAX_H3_LOCAL_ONLY \
 		-I$(MINIMAX_H3_COMPILER) -I$(QWEN38_M3) \
+		-I$(MINIMAX_H3_M3) -I$(MINIMAX_H3_GENERIC) \
 		$(MINIMAX_H3_M3_E2E_OBJECT) $(MINIMAX_H3_M3_E2E_CLI_OBJECT) \
 		$(MINIMAX_H3_TOKENIZER_OBJECT) \
 		$(MINIMAX_H3_COMPILER)/minimax_h3_remote_safetensors.c \
+		$(MINIMAX_H3_M3)/minimax_h3_m3_tree.c \
+		$(MINIMAX_H3_GENERIC)/minimax_h3.c \
 		-o $@ -framework Foundation -framework Metal \
 		-framework CoreFoundation -licucore -lm
 

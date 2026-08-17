@@ -22,7 +22,7 @@ Every performance claim belongs to one exact model revision and one exact target
 | Model | CPU / SoC | Execution path | Measured result | Evidence |
 |---|---|---|---|---|
 | Qwen3.8-27B | Apple M3 Pro, 36 GB unified memory | C runtime + Metal kernels, affine Q4, FP16 KV, adaptive MTP | **9.66 end-to-end tok/s** over 3,305 output tokens; 7.94 tok/s without MTP | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [raw results](models/qwen3.8-27b/targets/apple-m3-pro/results.json) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) |
-| MiniMax-H3 | Apple M3 Pro, 36 GB unified memory | C/Metal tokenizer, streamed Q8 conditioner, affine-Q4/BF16 H3, optimized Video VAE, Audio VAE | 864×480×124 Turbo-4 in **2,418.71 s**, 4.136 GiB peak physical footprint, zero swap; four prompt-aligned shots | [model](models/minimax-h3/README.md) · [target](models/minimax-h3/targets/apple-m3-pro/README.md) · [raw results](models/minimax-h3/targets/apple-m3-pro/results.json) · [review](models/minimax-h3/targets/apple-m3-pro/REVIEW.html) |
+| MiniMax-H3 | Apple M3 Pro, 36 GB unified memory | C/Metal tokenizer, streamed Q8 conditioner, affine-Q4/BF16 H3, optimized Video VAE, Audio VAE | Exact 864×480×124 Turbo-4: **2,418.71 s**, 4.136 GiB peak; experimental compiled tree: **1,489.40 s**, 4.592 GiB peak, visual regression; zero swap | [model](models/minimax-h3/README.md) · [target](models/minimax-h3/targets/apple-m3-pro/README.md) · [raw results](models/minimax-h3/targets/apple-m3-pro/results.json) · [review](models/minimax-h3/targets/apple-m3-pro/REVIEW.html) |
 | Qwen3.5-0.8B | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, model-specialized DeltaNet state | **3.64 prompt tok/s**, **2.60 decode tok/s**, 488 MiB generation RSS, zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [raw results](models/qwen3.5-0.8b/targets/a113x/results.json) |
 | Whisper small.en | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, mixed Q4/Q8 encoder and cached decoder | 11 s audio in **45.0 s**, 251 MiB RSS, zero swap; 0/22 word errors on the pinned JFK sample | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [raw results](models/whisper-small.en/targets/a113x/results.json) |
 | Gemma 4 E2B | Unpinned two-vCPU x86-64 development machine | Legacy restricted C artifact | 0.598 token/s, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [raw results](models/gemma-4-e2b/results.json) |
@@ -31,6 +31,12 @@ The MiniMax-H3 Video VAE now uses static tensor bindings, precomputed RoPE,
 grouped command buffers, simdgroup-matrix GEMM and exact tiled attention. The
 same 480p N-to-N workload fell from 9,294.870 to 2,418.708 seconds (3.843×);
 Video VAE decode fell from 7,387.292 to 487.274 seconds (15.160×). The
+[next H3 attention round](models/minimax-h3/targets/apple-m3-pro/README.md#h3-attention-round-precompiled-data-and-metal-work)
+removes a 448.4 MB exact-attention scratch buffer with bit-identical output and
+compiles fixed tree topology and routes into an opt-in Metal execution image.
+That approximate path reduces H3 denoise from 1,898.120 to 974.545 seconds and
+N-to-N runtime to 1,489.401 seconds, but it is not the default because temporal
+stability and visual detail regress. The
 [target record](models/minimax-h3/targets/apple-m3-pro/README.md#video-vae-structure-and-optimization)
 separates measured end-to-end results, component gates and projections.
 Its [optimization ledger](models/minimax-h3/targets/apple-m3-pro/README.md#optimization-ledger)

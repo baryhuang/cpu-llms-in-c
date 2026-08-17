@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "date": "2026-08-16",
+  "date": "2026-08-17",
   "device": {
     "model": "MacBook Pro Mac15,6",
     "soc": "Apple M3 Pro",
@@ -118,6 +118,30 @@
       "speedup_vs_first_kernel": 51.485260,
       "speedup_vs_external_peer_time": 1.193149,
       "quality_status": "not validated against dense H3 trajectory"
+    },
+    {
+      "name": "dense-attention-direct-bf16-output",
+      "scope": "one exact 15639-row, 56-head, 128-dimension attention call",
+      "warmup_iterations": 0,
+      "measured_iterations": 1,
+      "reference_fp32_scratch_bytes": 448401408,
+      "reference_gpu_ms": 5024.974042,
+      "direct_bf16_gpu_ms": 5012.634167,
+      "speedup": 1.002462,
+      "compared_bf16_values": 112100352,
+      "differing_bf16_values": 0,
+      "quality_status": "bit-identical"
+    },
+    {
+      "name": "four-layer-h3-command-groups",
+      "scope": "128x128x22 Turbo-4 exact-attention N-to-N smoke",
+      "denoise_before_seconds": 17.407398,
+      "denoise_after_seconds": 17.147884,
+      "speedup": 1.015133,
+      "video_sha256_identical": true,
+      "audio_sha256_identical": true,
+      "muxed_mp4_sha256_identical": true,
+      "quality_status": "bit-identical media"
     }
   ],
   "projection_experiments": {
@@ -240,7 +264,9 @@
         {"name": "eight-query exact tiled attention", "stage": "Video VAE self-attention", "stage_before_seconds": 716.561895, "stage_after_seconds": 659.524425, "stage_delta_seconds": -57.037470, "stage_timing": "projected", "n_to_n_seconds": 2567.102130, "delta_seconds": -57.037470, "speedup_vs_baseline": 3.620764, "component_seconds": 6.281185, "reason": "reuse 32 K/V rows across eight queries in threadgroup memory while preserving key order", "evidence": "projected"},
         {"name": "32-row shared-weight GEMM", "stage": "Video VAE dense projections and MLP", "stage_before_seconds": 659.524425, "stage_after_seconds": 637.239960, "stage_delta_seconds": -22.284465, "stage_timing": "projected", "n_to_n_seconds": 2544.817665, "delta_seconds": -22.284465, "speedup_vs_baseline": 3.652470, "component_seconds": 6.068952, "reason": "share staged weights across neighboring activation rows to reduce repeated weight traffic", "evidence": "projected"},
         {"name": "64-row shared-weight GEMM", "stage": "Video VAE dense projections and MLP", "stage_before_seconds": 637.239960, "stage_after_seconds": 528.169950, "stage_delta_seconds": -109.070010, "stage_timing": "projected", "n_to_n_seconds": 2435.747655, "delta_seconds": -109.070010, "speedup_vs_baseline": 3.816023, "component_seconds": 5.030190, "reason": "amortize every staged weight tile across twice as many activation rows", "evidence": "projected"},
-        {"name": "full current validation", "stage": "full graph measurement; no new optimization", "stage_before_seconds": 528.169950, "stage_after_seconds": 487.273811, "stage_delta_seconds": -40.896139, "stage_timing": "Video VAE before projected and after measured", "non_video_vae_before_seconds": 1907.577705, "non_video_vae_after_seconds": 1931.434426, "non_video_vae_delta_seconds": 23.856721, "n_to_n_seconds": 2418.708237, "delta_seconds_vs_projection": -17.039418, "speedup_vs_baseline": 3.842907, "reason": "replace single-task linear scaling with a complete measurement; do not claim the net projection difference as optimization", "evidence": "measured complete N-to-N"}
+        {"name": "full current validation", "stage": "full graph measurement; no new optimization", "stage_before_seconds": 528.169950, "stage_after_seconds": 487.273811, "stage_delta_seconds": -40.896139, "stage_timing": "Video VAE before projected and after measured", "non_video_vae_before_seconds": 1907.577705, "non_video_vae_after_seconds": 1931.434426, "non_video_vae_delta_seconds": 23.856721, "n_to_n_seconds": 2418.708237, "delta_seconds_vs_projection": -17.039418, "speedup_vs_baseline": 3.842907, "reason": "replace single-task linear scaling with a complete measurement; do not claim the net projection difference as optimization", "evidence": "measured complete N-to-N"},
+        {"name": "exact BF16 direct output and four-layer H3 command groups", "stage": "H3 dense-attention storage and command submission", "attention_before_ms": 5024.974042, "attention_after_ms": 5012.634167, "reference_fp32_scratch_bytes": 448401408, "direct_fp32_scratch_bytes": 0, "h3_smoke_before_seconds": 17.407398, "h3_smoke_after_seconds": 17.147884, "stage_timing": "measured component and 128x128 smoke", "n_to_n_seconds": null, "reason": "spill FP32 fragments into dead score-tile storage, emit BF16 directly and synchronize once per four layers", "evidence": "112100352 irregular-input BF16 values and all smoke media hashes identical; full 480p exact run not remeasured"},
+        {"name": "experimental compiled tree attention", "stage": "H3 dense attention", "stage_before_seconds": 1898.120497, "stage_after_seconds": 974.544700, "stage_delta_seconds": -923.575797, "stage_timing": "measured complete N-to-N before and after", "n_to_n_before_seconds": 2418.708237, "n_to_n_seconds": 1489.401301, "delta_seconds": -929.306936, "speedup_vs_previous": 1.623947, "speedup_vs_baseline": 6.240675, "reason": "compile fixed geometry into a tree-major row permutation, summaries, query blocks and static routes; update dynamic K/V summaries on Metal", "evidence": "measured complete N-to-N; functional pass; visual-quality regression; opt-in only"}
       ]
     },
     "optimization_ledger": [
@@ -603,12 +629,110 @@
         "visual_review": "four prompt-aligned shots; no sampled spatial seam or temporal-chunk break"
       },
       "quality_status": "visual prompt response and media structure passed; same-prompt official full-precision parity and audio semantic listening remain open"
+    },
+    {
+      "name": "experimental-480p-turbo4-compiled-tree-attention",
+      "status": "functional-pass-quality-regression",
+      "n_to_n": true,
+      "default_runtime": false,
+      "runtime_switch": "MINIMAX_H3_TREE_ATTENTION=conservative",
+      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
+      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+      "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
+      "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
+      "geometry": {"width": 864, "height": 480, "frames": 124, "fps": 24},
+      "seed": 42,
+      "sampling": {"profile": "turbo-v4-step600-ema", "evaluations": 4},
+      "prompt_tokens": 240,
+      "sequence_rows": 15639,
+      "compiled_tree": {
+        "exact_conditioning_rows": 654,
+        "nodes": 342,
+        "query_blocks": 307,
+        "route_entries": 140284,
+        "maximum_route_entries": 548,
+        "tensor_and_summary_bytes": 906608640,
+        "runtime_summary_policy": "rebuild leaf, frame, temporal and root K/V summaries for every dynamic layer"
+      },
+      "durations_seconds": {
+        "tokenizer": 0.008059,
+        "metal_setup": 0.026800,
+        "text_download": 4.273334,
+        "text_encode": 4.635396,
+        "transformer_download": 0.0,
+        "turbo_compile": 0.877777,
+        "rope_precompute": 0.000916,
+        "denoise": 974.544700,
+        "video_download": 0.0,
+        "video_precompute": 0.007417,
+        "video_decode": 483.809133,
+        "audio_download": 0.0,
+        "audio_decode": 13.697438,
+        "mux": 0.648403,
+        "other_measured_runtime": 6.871928,
+        "total": 1489.401301,
+        "outer_wall_including_preflight_hashes": 1557.24
+      },
+      "comparison_to_exact_run": {
+        "total_delta_seconds": -929.306936,
+        "runtime_speedup": 1.623947,
+        "runtime_reduction_percent": 38.421622,
+        "denoise_delta_seconds": -923.575797,
+        "denoise_speedup": 1.947700,
+        "denoise_reduction_percent": 48.657385,
+        "peak_footprint_delta_bytes": 490242048,
+        "peak_footprint_increase_percent": 11.039684
+      },
+      "comparison_to_pre_optimization": {
+        "runtime_speedup": 6.240675,
+        "runtime_reduction_percent": 83.976093
+      },
+      "process_cpu_seconds": {"user": 3.751192, "system": 11.124034},
+      "outer_process_tree_cpu_seconds": {"user": 69.68, "system": 15.63},
+      "peak_footprint_bytes": 4930967616,
+      "maximum_resident_set_bytes": 1361362944,
+      "page_faults": 1103210,
+      "swaps": 0,
+      "output": {
+        "local_run_path": "tmp/minimax-h3-runs/20260817-480p-tree-conservative/minimax-h3.mp4",
+        "sha256": "4c773da92ff290babf02a5b1a5553b9f320ab45db43cfe3b7a43fa1598c7b97c",
+        "bytes": 1747361,
+        "duration_seconds": 5.167,
+        "video_codec": "H.264",
+        "video_frames_declared": 124,
+        "video_frames_decoded": 124,
+        "audio_codec": "AAC",
+        "audio_sample_rate_hz": 32000,
+        "audio_channels": 2,
+        "audio_source_sha256": "2f7d9606379760c9de4ace90145c60fe77ccc229ab439c9a45753801f885940f"
+      },
+      "verification": {
+        "flat_frames": 0,
+        "minimum_luma_range": 175,
+        "mean_luma_range": 212.250,
+        "maximum_luma_range": 239,
+        "adjacent_frame_differences": 123,
+        "adjacent_difference_yavg_min": 0.289653,
+        "adjacent_difference_yavg_mean": 9.814484,
+        "adjacent_difference_yavg_max": 87.718600,
+        "scene_changes_seconds": [0.458333, 0.708333, 1.083333, 1.416667, 1.708333, 1.791667, 2.125, 2.375, 4.458333, 4.833333],
+        "comparison_to_exact_video": {"psnr_db": 13.455967, "ssim": 0.659928},
+        "audio_peak_dbfs": -6.654165,
+        "audio_rms_dbfs": -23.470915,
+        "audio_dc_offset": 0.000009,
+        "visual_review": "four requested shot categories remain visible, but detail is softer and transitions show stronger ghosting than the exact run",
+        "contact_sheet": "artifacts/anime-room-864x480-turbo4/tree-conservative-contact-sheet.png"
+      },
+      "quality_status": "media structure passed, visual-quality gate regressed; experimental opt-in only and not a replacement for exact attention"
     }
   ],
   "commands": {
     "attention": "make build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib 5 2",
+    "exact_dense_attention": "make minimax-h3-m3-dense-attention-bench",
     "projection": "make build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib 15485 5 2",
     "n_to_n": "MINIMAX_H3_TEXT_ENCODER_URL=file://$PWD/tmp/minimax-h3-text-encoder.safetensors build/minimax-h3-m3-e2e 'a jeweled hummingbird hovering beside a red orchid, cinematic natural light' models/minimax-h3/targets/apple-m3-pro/artifacts/hummingbird-128x128-euler30 128 128 22 314159",
-    "corrected_480p": "MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt"
+    "corrected_480p": "MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt",
+    "experimental_tree_480p": "MINIMAX_H3_TREE_ATTENTION=conservative MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-tree-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt"
   }
 }

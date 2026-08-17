@@ -24,13 +24,13 @@
 </head>
 <body>
   <h1>MiniMax-H3 480p N-to-N review</h1>
-  <p class="muted">Apple M3 Pro · C graph/runtime with Metal kernels · 864×480 · 124 frames · Turbo 4 · 2026-08-16</p>
+  <p class="muted">Apple M3 Pro · C graph/runtime with Metal kernels · 864×480 · 124 frames · Turbo 4 · updated 2026-08-17</p>
 
   <div class="status">
     <div class="card"><div class="pass">FUNCTIONAL N-TO-N: PASS</div>Original prompt reached tokenizer, 50-layer conditioner, H3, both VAEs and final MP4.</div>
     <div class="card"><div class="pass">MEDIA STRUCTURE: PASS</div>124/124 H.264 frames decode; 32 kHz stereo AAC is non-silent.</div>
-    <div class="card"><div class="pass">VISUAL PROMPT RESPONSE: PASS</div>Four distinct prompt-aligned shots are visible with no flat tail.</div>
-    <div class="card"><div class="fail">SPEED TARGET: FAIL</div>2,418.708 s on M3 Pro, 3.843× over the prior C/Metal run; the peer front-page sample reports 192 s under a different record.</div>
+    <div class="card"><div class="pass">EXACT VISUAL GATE: PASS</div>Four distinct prompt-aligned shots are visible with no flat tail.</div>
+    <div class="card"><div class="fail">TREE VISUAL GATE: REGRESSION</div>1,489.401 s experimental path preserves shot categories but adds softness, ghosting and excess scene changes.</div>
   </div>
 
   <h2>N-to-N optimization timeline</h2>
@@ -44,6 +44,8 @@
       <tr><td>+ 32-row shared-weight GEMM</td><td>Video VAE dense projections and MLP</td><td class="num">659.524425 → 637.239960 s projected (<strong>−22.284465 s</strong>)</td><td class="num">2,544.817665 s; −22.284465; 3.652×</td><td>Share staged weights across neighboring activation rows to reduce repeated weight traffic.</td><td>projected from 105 × 6.068952 s</td></tr>
       <tr><td>+ 64-row shared-weight GEMM</td><td>Video VAE dense projections and MLP</td><td class="num">637.239960 → 528.169950 s projected (<strong>−109.070010 s</strong>)</td><td class="num">2,435.747655 s; −109.070010; 3.816×</td><td>Amortize every staged tile across twice as many activation rows.</td><td>projected from 105 × 5.030190 s</td></tr>
       <tr><td>Full current N-to-N validation</td><td>Full graph measurement; no new optimization</td><td class="num">VAE: 528.169950 projected → <strong>487.273811 s measured</strong> (−40.896139); all other stages: 1,907.577705 → 1,931.434426 s (+23.856721)</td><td class="num"><strong>2,418.708237 s</strong>; −17.039418 vs projection; <strong>3.843×</strong></td><td>Replace single-task linear scaling with a complete run; the net projection difference is not claimed as an optimization.</td><td>measured complete N-to-N</td></tr>
+      <tr><td>Exact BF16 direct output + four-layer H3 command groups</td><td>H3 dense-attention storage and command submission</td><td class="num">Attention: 5,024.974042 → 5,012.634167 ms/call; scratch: 448,401,408 → 0 B; 128² denoise: 17.407398 → 17.147884 s</td><td class="num">480p exact N-to-N not remeasured; no projection claimed</td><td>Use dead score-tile storage for FP32 fragment spill, emit BF16 directly and synchronize once per four layers.</td><td>112,100,352 irregular-input BF16 values and smoke media hashes identical</td></tr>
+      <tr><td>Experimental compiled tree attention</td><td>H3 dense attention</td><td class="num"><strong>1,898.120497 → 974.544700 s measured</strong>; −923.575797 s; 1.948×</td><td class="num"><strong>1,489.401301 s</strong>; −929.306936; <strong>1.624×</strong> vs exact; <strong>6.241×</strong> vs baseline</td><td>Compile tree-major row order, 342 nodes, 307 query blocks and 140,284 static route entries once; update only dynamic K/V summaries on Metal.</td><td>measured complete N-to-N; functional pass; visual regression; opt-in only</td></tr>
     </tbody>
   </table>
   <h3>Latest measured run breakdown</h3>
@@ -69,6 +71,21 @@
   </table>
   <p>The model-runtime rows add exactly to 2,418.708237 seconds. Post-run media verification is excluded from both model runtime and command wall.</p>
   <p>Projected rows use the measured 1,907.577705 seconds outside Video VAE plus 105 times the corresponding real-weight 256×256×22 task. Only the first and last rows are complete runs. The 7,249.519-second one-sequence attempt is excluded because 86/124 frames were flat.</p>
+
+  <h3>Experimental compiled-tree breakdown</h3>
+  <table>
+    <thead><tr><th>Stage</th><th class="num">Exact run</th><th class="num">Tree experiment</th><th class="num">Change</th></tr></thead>
+    <tbody>
+      <tr><td>H3 denoise</td><td class="num">1,898.120497 s</td><td class="num"><strong>974.544700 s</strong></td><td class="num"><strong>−923.575797 s; 1.947700×</strong></td></tr>
+      <tr><td>Video VAE decode</td><td class="num">487.273811 s</td><td class="num">483.809133 s</td><td class="num">−3.464678 s</td></tr>
+      <tr><td>Audio VAE decode</td><td class="num">13.760077 s</td><td class="num">13.697438 s</td><td class="num">−0.062639 s</td></tr>
+      <tr><td>Other model runtime</td><td class="num">19.553852 s</td><td class="num">17.350030 s</td><td class="num">−2.203822 s</td></tr>
+      <tr><td><strong>Model runtime</strong></td><td class="num"><strong>2,418.708237 s</strong></td><td class="num"><strong>1,489.401301 s</strong></td><td class="num"><strong>−929.306936 s; 1.623947×</strong></td></tr>
+      <tr><td>Runtime peak physical footprint</td><td class="num">4,440,725,568 B</td><td class="num">4,930,967,616 B</td><td class="num">+490,242,048 B; +11.040%</td></tr>
+      <tr><td>Command wall including hashes</td><td class="num">2,484.38 s</td><td class="num">1,557.24 s</td><td class="num">−927.14 s</td></tr>
+    </tbody>
+  </table>
+  <p class="fail">The tree timing and media-structure gates pass, but the visual-quality gate regresses. Exact attention remains the default. The experiment requires <code>MINIMAX_H3_TREE_ATTENTION=conservative</code>.</p>
 
   <h2>1. Exact input and output</h2>
   <table>
@@ -127,6 +144,17 @@
     </tbody>
   </table>
 
+  <h3>H3 attention precompile and Metal boundary</h3>
+  <table>
+    <thead><tr><th>Work</th><th>Precompiled once</th><th>Executed for dynamic states</th><th>Measured result</th></tr></thead>
+    <tbody>
+      <tr><td>Exact attention storage</td><td>Offline metallib and fixed pipeline</td><td>MMA64 QK, online softmax, V accumulation and direct BF16 store</td><td>448,401,408 B FP32 scratch removed; bit identical</td></tr>
+      <tr><td>Command graph</td><td>50 layers partitioned into 13 fixed groups</td><td>one Metal command encoder/wait per group</td><td>128² exact denoise 17.407398 → 17.147884 s; media hashes identical</td></tr>
+      <tr><td>Tree execution image</td><td>row permutation, 342 nodes, 307 query blocks, 140,284 routes and log counts</td><td>BF16↔F16 reorder, K/V summaries and routed attention</td><td>974.544700 s H3 denoise; quality regression</td></tr>
+    </tbody>
+  </table>
+  <p>The tree compiler freezes only geometry-dependent topology and scheduling. K, V and their summaries still depend on every denoise hidden state and are recomputed on Metal. The geometry-only route is insufficient for release quality; the next gate is a teacher-calibrated route image or multiple calibrated centroids.</p>
+
   <h3>Resource record</h3>
   <table>
     <tr><th>Metric</th><th class="num">Measured value</th><th>Scope</th></tr>
@@ -156,9 +184,22 @@
 
   <div class="media">
     <figure><img src="artifacts/anime-room-864x480-turbo4/contact-sheet.png" alt="Six frames from the corrected output"><figcaption>Frames 0, 24, 48, 72, 96 and 123 from the final MP4.</figcaption></figure>
+    <figure><img src="artifacts/anime-room-864x480-turbo4/tree-conservative-contact-sheet.png" alt="Twenty-four sampled frames from the compiled-tree experiment"><figcaption>Compiled-tree experiment, 24 evenly sampled frames. All four requested shot categories remain, but faces and transitions are visibly softer and less stable.</figcaption></figure>
     <figure><img src="artifacts/anime-room-864x480-turbo4/temporal-boundaries.png" alt="Frames around temporal chunk boundaries"><figcaption>Four-frame windows around six temporal blend boundaries.</figcaption></figure>
     <figure><img src="artifacts/anime-room-864x480-turbo4/audio-spectrum.png" alt="Generated audio spectrum"><figcaption>Generated 32 kHz stereo source WAV. Non-silence is established; semantics remain open.</figcaption></figure>
   </div>
+
+  <h3>Compiled-tree quality comparison</h3>
+  <table>
+    <thead><tr><th>Check</th><th class="num">Exact attention</th><th class="num">Compiled tree</th><th>Finding</th></tr></thead>
+    <tbody>
+      <tr><td>Decoded / flat frames</td><td class="num">124 / 0</td><td class="num">124 / 0</td><td class="pass">functional structure preserved</td></tr>
+      <tr><td>Scene changes at threshold 0.25</td><td class="num">3</td><td class="num">10</td><td class="fail">temporal instability increased</td></tr>
+      <tr><td>Adjacent-frame Y difference, mean</td><td class="num">4.494335</td><td class="num">9.814484</td><td class="fail">motion/transition discontinuity increased</td></tr>
+      <tr><td>Tree versus exact encoded video</td><td class="num">reference</td><td class="num">PSNR 13.455967 dB; SSIM 0.659928</td><td>large trajectory divergence; not a perceptual score by itself</td></tr>
+      <tr><td>Visual review</td><td>sharp, stable four-shot sequence</td><td>same shot categories; softer detail and stronger ghosting</td><td class="fail">quality regression</td></tr>
+    </tbody>
+  </table>
 
   <h2>4. Correctness increment</h2>
   <p>The first 480p attempt decoded all 37 video latents as one sequence. It produced 38 non-flat frames followed by 86 flat gray frames. The corrected path follows the released decoder's seven-latent temporal tasks, five-latent stride and five-frame overlap.</p>
@@ -211,19 +252,20 @@ make minimax-h3-m3-vae-attention-bench</pre>
     <thead><tr><th>Record</th><th>Device / precision</th><th>Workload</th><th class="num">Time</th><th>Conclusion</th></tr></thead>
     <tbody>
       <tr><td>This optimized C/Metal run</td><td>M3 Pro; Q8/Q4 mixed precision</td><td>864×480×124; 240 text rows; 15,639 packed rows</td><td class="num">2,418.708 s</td><td class="fail">3.843× over prior C run; speed target not met</td></tr>
+      <tr><td>Experimental compiled-tree C/Metal run</td><td>M3 Pro; Q8/Q4 mixed precision; approximate attention</td><td>same prompt, seed and 864×480×124 workload</td><td class="num">1,489.401 s</td><td class="fail">1.624× faster than exact, but visual quality regressed</td></tr>
       <tr><td>MacOS-H3-Speedrun front-page sample</td><td>Per-file device/peak-memory record not attached</td><td>832×480×124; different prompt; Turbo v4 + SolAttn + staged</td><td class="num">192 s</td><td>This run is 12.597× slower; not an equivalent-run quality ratio</td></tr>
       <tr><td>MacOS-H3-Speedrun attention record</td><td>M3 Ultra; BF16</td><td>864×480×124; 15,485 packed rows; kernel only</td><td class="num">59.53 ms/call</td><td>This dense baseline averages 5,717.664 ms/call; device, rows and algorithm differ</td></tr>
     </tbody>
   </table>
-  <p>The repository's 49.893 ms tree-attention primitive is a synthetic approximate-route result. It was not enabled in this run because real-weight trajectory quality is still open.</p>
+  <p>The repository's earlier 49.893 ms tree-attention primitive is a synthetic aggressive-route result. The integrated conservative route is slower but has now completed a real-weight trajectory. It is still not release quality.</p>
 
   <h2>7. Next measured work</h2>
   <table>
     <thead><tr><th>Order</th><th>Change</th><th>Reason from this run</th><th>Required gate</th></tr></thead>
     <tbody>
-      <tr><td>1</td><td>Integrate tree attention behind a dense fallback</td><td>Dense H3 attention is now 1,143.533 s across 200 calls and dominates the run</td><td>Per-layer error, fixed-seed trajectory and final media comparison</td></tr>
-      <tr><td>2</td><td>Validate sparse projection/MLP schedules</td><td>Dense QKV/output + MLP consume 743.450 s</td><td>Real-weight layer and four-evaluation trajectory quality</td></tr>
-      <tr><td>3</td><td>Offline-pack 64×32 Video VAE weight tiles and quality-gate the 272-tile graph</td><td>The exact VAE is 487.274 s; further gains cannot compensate for dense H3 alone</td><td>Kernel differential, complete frame metrics and seam/temporal-boundary review</td></tr>
+      <tr><td>1</td><td>Compile teacher-calibrated tree routes or multiple centroids</td><td>Geometry-only routes cut H3 time 48.657% but increased scene changes from 3 to 10</td><td>Four-shot stability, adjacent-frame statistics and human visual comparison versus exact</td></tr>
+      <tr><td>2</td><td>Validate sparse projection/MLP schedules</td><td>Exact QKV/output + MLP consume 743.450 s</td><td>Real-weight layer and four-evaluation trajectory quality</td></tr>
+      <tr><td>3</td><td>Offline-pack 64×32 Video VAE weight tiles and quality-gate the 272-tile graph</td><td>The exact VAE is 487.274 s; H3 remains the primary quality/performance boundary</td><td>Kernel differential, complete frame metrics and seam/temporal-boundary review</td></tr>
     </tbody>
   </table>
 
@@ -237,6 +279,7 @@ MINIMAX_H3_TURBO_ADAPTER="file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safete
 MINIMAX_H3_OUTPUT_DIR="$PWD/tmp/minimax-h3-runs/reproduction-480p" \
 /usr/bin/time -lp tools/minimax_h3_generate.sh \
   &lt; models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt</pre>
+  <p>To reproduce the quality-regressed tree experiment, add <code>MINIMAX_H3_TREE_ATTENTION=conservative</code>. Omit it for the default exact-attention path.</p>
   <p>The deployed inference binary is compiled without libcurl and does not launch Python, PyTorch, MLX, GGML, llama.cpp, ONNX Runtime or ComfyUI. It uses ffmpeg only for final H.264/AAC output.</p>
 </body>
 </html>
