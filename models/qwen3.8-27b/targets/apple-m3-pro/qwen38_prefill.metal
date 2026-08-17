@@ -974,9 +974,20 @@ kernel void qwen38_prefill_convert_x(
             (quants + block * 32 + (k_base >> 1));                        \
         for (uint word = 0; word < 2; ++word) {                           \
             uint bits = words[word];                                      \
-            for (uint j = 0; j < 8; ++j)                                  \
-                w_tile[(k_base + word * 8 + j) * kGemmTileRows + r] =     \
-                    scale * half((bits >> (4 * j)) & 0x0f) + bias;        \
+            half4 lo = half4(as_type<uchar4>(bits & 0x0f0f0f0fu)) *       \
+                       scale + bias;                                      \
+            half4 hi = half4(as_type<uchar4>((bits >> 4) &                \
+                                             0x0f0f0f0fu)) *              \
+                       scale + bias;                                      \
+            uint base = (k_base + word * 8) * kGemmTileRows + r;          \
+            w_tile[base] = lo.x;                                          \
+            w_tile[base + kGemmTileRows] = hi.x;                          \
+            w_tile[base + 2 * kGemmTileRows] = lo.y;                      \
+            w_tile[base + 3 * kGemmTileRows] = hi.y;                      \
+            w_tile[base + 4 * kGemmTileRows] = lo.z;                      \
+            w_tile[base + 5 * kGemmTileRows] = hi.z;                      \
+            w_tile[base + 6 * kGemmTileRows] = lo.w;                      \
+            w_tile[base + 7 * kGemmTileRows] = hi.w;                      \
         }                                                                 \
         threadgroup_barrier(mem_flags::mem_threadgroup);                  \
         for (uint kk = 0; kk < kGemmTileK; kk += 8) {                     \
@@ -1099,9 +1110,20 @@ kernel void qwen38_prefill_q4_gemm_f32_residual_f32_mma2(
             (quants + block * 32 + (k_base >> 1));                        \
         for (uint word = 0; word < 2; ++word) {                           \
             uint bits = words[word];                                      \
-            for (uint j = 0; j < 8; ++j)                                  \
-                w_tile[(k_base + word * 8 + j) * kGemmTileRows + r] =     \
-                    scale * half((bits >> (4 * j)) & 0x0f) + bias;        \
+            half4 lo = half4(as_type<uchar4>(bits & 0x0f0f0f0fu)) *       \
+                       scale + bias;                                      \
+            half4 hi = half4(as_type<uchar4>((bits >> 4) &                \
+                                             0x0f0f0f0fu)) *              \
+                       scale + bias;                                      \
+            uint base = (k_base + word * 8) * kGemmTileRows + r;          \
+            w_tile[base] = lo.x;                                          \
+            w_tile[base + kGemmTileRows] = hi.x;                          \
+            w_tile[base + 2 * kGemmTileRows] = lo.y;                      \
+            w_tile[base + 3 * kGemmTileRows] = hi.y;                      \
+            w_tile[base + 4 * kGemmTileRows] = lo.z;                      \
+            w_tile[base + 5 * kGemmTileRows] = hi.z;                      \
+            w_tile[base + 6 * kGemmTileRows] = lo.w;                      \
+            w_tile[base + 7 * kGemmTileRows] = hi.w;                      \
         }                                                                 \
         threadgroup_barrier(mem_flags::mem_threadgroup);                  \
         for (uint kk = kk0; kk < kk0 + 16; kk += 8) {                     \
@@ -1373,9 +1395,20 @@ kernel void qwen38_prefill_q4_gemm_f32_residual_f32_mma8w(
                 (quants + block * 32 + (k_base >> 1));                    \
             for (uint word = 0; word < 4; ++word) {                       \
                 uint bits = words[word];                                  \
-                for (uint j = 0; j < 8; ++j)                              \
-                    w_tile[(k_base + word * 8 + j) * kGemmWideRows + r] = \
-                        scale * half((bits >> (4 * j)) & 0x0f) + bias;    \
+                half4 lo = half4(as_type<uchar4>(bits & 0x0f0f0f0fu)) *   \
+                           scale + bias;                                  \
+                half4 hi = half4(as_type<uchar4>((bits >> 4) &            \
+                                                 0x0f0f0f0fu)) *          \
+                           scale + bias;                                  \
+                uint base = (k_base + word * 8) * kGemmWideRows + r;      \
+                w_tile[base] = lo.x;                                      \
+                w_tile[base + kGemmWideRows] = hi.x;                      \
+                w_tile[base + 2 * kGemmWideRows] = lo.y;                  \
+                w_tile[base + 3 * kGemmWideRows] = hi.y;                  \
+                w_tile[base + 4 * kGemmWideRows] = lo.z;                  \
+                w_tile[base + 5 * kGemmWideRows] = hi.z;                  \
+                w_tile[base + 6 * kGemmWideRows] = lo.w;                  \
+                w_tile[base + 7 * kGemmWideRows] = hi.w;                  \
             }                                                             \
         } else {                                                          \
             for (uint i = 0; i < 32; ++i)                                 \
