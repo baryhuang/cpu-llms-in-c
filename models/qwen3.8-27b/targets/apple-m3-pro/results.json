@@ -276,6 +276,25 @@
    "max": 11.49
   },
   "prefill_tok_s": 47.4,
-  "note": "synthetic random prompts draft-accept below natural text, so decode sits under the five-workload record (11.95 aggregate); TTFT spread across 12 requests is 47 ms - prefill is effectively deterministic"
+  "note": "synthetic random prompts draft-accept below natural text, so decode sits under the five-workload record (11.95 aggregate); TTFT spread across 12 requests is 47 ms - prefill is effectively deterministic",
+  "long_code_use_case": {
+   "method": "6 identical requests of the LRUCache workload via --custom-dataset-type single_turn, natural stop, QWEN38_CONTINUE=0 so every request pays full prefill",
+   "ttft_ms": {
+    "avg": 1367,
+    "std": 4.8
+   },
+   "inter_token_latency_ms": {
+    "avg": 55.35,
+    "std": 0.13
+   },
+   "decode_tok_s_per_user": 18.07,
+   "e2e_tok_s_per_user": {
+    "avg": 17.7,
+    "min": 17.65,
+    "max": 17.76
+   },
+   "output_tokens": 1155,
+   "note": "external tool reproduces the five-workload battery's 17.59 e2e long-code record within noise; all six requests emitted the identical 1,155-token completion"
+  }
  }
 }
