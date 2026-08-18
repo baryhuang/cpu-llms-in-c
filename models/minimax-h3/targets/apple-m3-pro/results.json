@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "date": "2026-08-17",
+ "date": "2026-08-18",
  "device": {
   "model": "MacBook Pro Mac15,6",
   "soc": "Apple M3 Pro",
@@ -155,14 +155,16 @@
   {
    "name": "dense-attention-single-pass-flash",
    "date": "2026-08-17",
-   "finding": "the exact two-pass attention kernel recomputes every QK score for the probability pass; a single-pass online-softmax kernel with a conditional diagonal-MMA accumulator rescale, transposed key staging (transposed simdgroup_load is slow on this GPU), one exponential per score, and bf16 probability/value fragments feeding fp32 accumulators (Metal supports mixed bfloat-input MMA) runs 5007 -> 3485 ms at 15639 rows x 56 heads (1.44x)",
+   "finding": "the exact two-pass attention kernel recomputes every QK score for the probability pass; a single-pass online-softmax kernel with a conditional diagonal-MMA accumulator rescale, transposed key staging (transposed simdgroup_load is slow on this GPU), and one exponential per score runs 5,007 -> 3,753-3,828 ms at 15,639 rows x 56 heads (~1.33x), with 0.19 percent of outputs off by one bf16 ulp",
    "cost_breakdown_ms": {
     "qk_section": 1310,
     "pv_section": 1300,
     "staging_softmax_barriers": 875
    },
    "ceiling": "threadgroup fragment loads pair one-to-one with MMAs in this tile shape; further gains need a shape that reuses staged fragments across more math",
-   "rejected_variants": "16-key blocks alone (+2 percent), head-major device layout (+3 percent, L2 already covers the strided reads), single-exp restructure (neutral)"
+   "rejected_variants": "16-key blocks alone (+2 percent), head-major device layout (+3 percent, L2 already covers the strided reads), single-exp restructure (neutral)",
+   "bf16_probability_rejection": "quantizing the attention probabilities to bf16 for a full-rate value matmul benched 3,485 ms but broadened the temporal attention mix: the 480p run rendered displaced duplicate line work in the shot-4 close-up (frame 116), caught in user review; probabilities stay fp32",
+   "two_pass_staging_note": "the same transposed key staging applied to the two-pass kernels is bitwise-identical (bench diff 0) and timing-neutral there"
   },
   {
    "name": "frame-safe-candidate-rejection",
@@ -1160,23 +1162,24 @@
    "quality_status": "single-prompt temporal and ghosting gate passed; exact numeric parity, audio listening and multi-prompt quality gate remain open"
   },
   {
-   "name": "optimized-480p-turbo4-flash-attention-n-to-n",
+   "name": "optimized-480p-turbo4-flash-attention-fp32p-n-to-n",
    "date": "2026-08-17",
-   "workload": "864x480x124 Turbo-4, anime four-shot prompt, seed 42, exact path with the single-pass attention kernel",
+   "workload": "864x480x124 Turbo-4, anime four-shot prompt, seed 42, exact path with the single-pass fp32-probability attention kernel",
    "durations_seconds": {
-    "denoise": 1542.3,
-    "video_decode": 479.51,
-    "audio_decode": 13.55,
-    "total": 2051.49
+    "denoise": 1685.0,
+    "video_decode": 479.5,
+    "audio_decode": 13.6,
+    "total": 2194.44
    },
    "previous_exact_total_seconds": 2418.71,
-   "speedup_end_to_end": 1.179,
+   "speedup_end_to_end": 1.102,
    "quality_gates": {
     "scene_cuts": "frames 36/61/93 identical to the exact reference",
-    "adjacent_frame_luma_mean": "2.574 vs 2.668 exact reference (subsampled)",
-    "frame_review": "shots 1-4 sampled at frames 45/75/100: no ghosting, no double exposure; the violent-motion close-up (frame 45) that exposed the rejected late-layer approximation renders clean",
-    "kernel_parity": "standalone kernel differs from the two-pass kernel by at most one bf16 ulp (max abs 6.1e-5 on 0.0149 max magnitude); a 30-step 128x128 smoke stays on the same visual trajectory"
-   }
+    "adjacent_frame_luma_mean": "2.714 vs 2.668 exact reference (subsampled)",
+    "frame_review": "shot-4 frames 96/105/116 match the exact reference's line work with no displaced duplicates; frame 45 motion close-up clean",
+    "kernel_parity": "0.19 percent of standalone kernel outputs differ from the two-pass kernel by exactly one bf16 ulp"
+   },
+   "history": "a first version of this run (2,051.49 s) used bf16 probability fragments in the value matmul; it was rejected after user review found displaced duplicate line work in the shot-4 close-up (frame 116) that the scene-cut and luma gates missed"
   }
  ],
  "commands": {

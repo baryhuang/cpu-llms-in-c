@@ -3,13 +3,14 @@
 Status: the real-weight C/Metal path covers the tokenizer, streamed Q8 Qwen
 conditioner, affine-Q4 H3 transformer, BF16 residual stream, Video VAE, Audio
 VAE and MP4 mux. The exact-attention 864×480×124 Turbo-4 path completes in
-2,051.492 seconds with zero swaps, using a single-pass online-softmax
+2,194.437 seconds with zero swaps, using a single-pass online-softmax
 attention kernel — the same mathematics as the earlier two-pass kernel with
-fp32 accumulation and at most one bf16 unit of rounding difference. Both
-approximate attention paths are rejected: the compiled tree (1,489.401 s)
-softens detail and ghosts transitions, and the frame-safe late-layer
-candidate (2,344.734 s) shows streak ghosting on the highest-motion close-up
-under per-frame review that whole-video luma averages had missed. Attention
+fp32 accumulation and at most one bf16 unit of rounding difference on 0.19
+percent of outputs. Three faster attention variants are rejected on
+frame-level review: the compiled tree (1,489.401 s) softens detail and ghosts
+transitions; the frame-safe late-layer candidate (2,344.734 s) streaks the
+highest-motion close-up; and a bf16-probability variant of the single-pass
+kernel (2,051.492 s) duplicates line work in the shot-4 close-up. Attention
 quality gates now include per-frame review of the highest-motion shot.
 Official full-precision parity and the speed target remain open.
 
@@ -27,7 +28,7 @@ Official full-precision parity and the speed target remain open.
 | Exact BF16 direct output + four-layer H3 command groups | H3 dense-attention storage and command submission | Attention: 5,024.974042 → 5,012.634167 ms/call; FP32 scratch: 448,401,408 → 0 B; 128² denoise: 17.407398 → 17.147884 s | full 480p N-to-N not remeasured; no projection claimed | Reuse the kernel's dead score-tile region as an FP32 fragment spill, emit BF16 directly and submit four layers per command buffer | all 112,100,352 irregular-input BF16 outputs and smoke media hashes identical |
 | Experimental compiled tree attention | H3 dense attention | **1,898.120497 → 974.544700 s measured**; −923.575797 s; 1.948× | **1,489.401301 s**; −929.306936; **1.624×** vs exact; **6.241×** vs baseline | Compile geometry, row order, tree nodes, routes and query blocks once; rebuild only K/V summaries on Metal | measured complete N-to-N; functional pass, visual regression; opt-in only |
 | Frame-safe late-layer attention | H3 attention in step 4, layers 40–49 only | same-run three late groups **92.597490 → 70.313368 s**; −22.284122 s; 1.317× | **2,344.734228 s**; −73.974009 s; **1.032×** vs earlier exact run | Keep conditioning exact; never merge K/V across frames; exact-anchor 190/200 attention calls | **rejected**: per-frame review of the violent-motion close-up (frame 45) shows vertical streak ghosting and eye-edge echoes that the whole-video luma gate averaged away |
-| Single-pass online-softmax exact attention | H3 dense attention, all 200 calls | kernel **5,007 → 3,485 ms/call** (1.44×): one QK pass instead of two, transposed key staging, one exponential per score, bf16 probability/value fragments into fp32 accumulators | **2,051.492 s**; −367.216 s; **1.179×** vs prior exact; **4.531×** vs baseline | Same mathematics, fp32 accumulation; at most one bf16 unit of output rounding difference | measured complete N-to-N; scene cuts identical (frames 36/61/93), adjacent-luma 2.574 vs 2.668, per-frame review of all four shots clean including the frame-45 motion close-up |
+| Single-pass online-softmax exact attention | H3 dense attention, all 200 calls | kernel **5,007 → 3,753 ms/call** (~1.33×): one QK pass instead of two, transposed key staging, one exponential per score, fp32 probabilities throughout | **2,194.437 s**; −224.271 s; **1.102×** vs prior exact; **4.236×** vs baseline | Same mathematics, fp32 accumulation; one bf16 ulp difference on 0.19% of kernel outputs | measured complete N-to-N; scene cuts identical (36/61/93), adjacent-luma 2.714 vs 2.668, per-frame review clean; a bf16-probability variant (2,051.492 s) was rejected after user review found duplicated line work in the shot-4 close-up |
 
 ### Latest measured run breakdown
 

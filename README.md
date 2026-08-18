@@ -22,23 +22,24 @@ Every performance claim belongs to one exact model revision and one exact target
 | Model | CPU / SoC | Execution path | Measured result | Evidence |
 |---|---|---|---|---|
 | Qwen3.8-27B | Apple M3 Pro, 36 GB unified memory | C runtime + Metal kernels, affine Q4, FP16 KV, adaptive MTP | **11.95 end-to-end tok/s** five-workload aggregate, up to **17.59** on long code; 7.96 tok/s without MTP | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [raw results](models/qwen3.8-27b/targets/apple-m3-pro/results.json) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) |
-| MiniMax-H3 | Apple M3 Pro, 36 GB unified memory | C/Metal tokenizer, streamed Q8 conditioner, affine-Q4/BF16 H3, single-pass exact attention, optimized Video VAE, Audio VAE | Exact 864×480×124 Turbo-4: **2,051.49 s** (was 2,418.71 s); all three scene cuts stable, per-frame review clean; zero swap | [model](models/minimax-h3/README.md) · [target](models/minimax-h3/targets/apple-m3-pro/README.md) · [raw results](models/minimax-h3/targets/apple-m3-pro/results.json) · [review](models/minimax-h3/targets/apple-m3-pro/H3-ATTENTION-QUALITY-REVIEW.html) |
+| MiniMax-H3 | Apple M3 Pro, 36 GB unified memory | C/Metal tokenizer, streamed Q8 conditioner, affine-Q4/BF16 H3, single-pass exact attention, optimized Video VAE, Audio VAE | Exact 864×480×124 Turbo-4: **2,194.44 s** (was 2,418.71 s); all three scene cuts stable, per-frame review clean; zero swap | [model](models/minimax-h3/README.md) · [target](models/minimax-h3/targets/apple-m3-pro/README.md) · [raw results](models/minimax-h3/targets/apple-m3-pro/results.json) · [review](models/minimax-h3/targets/apple-m3-pro/H3-ATTENTION-QUALITY-REVIEW.html) |
 | Qwen3.5-0.8B | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, model-specialized DeltaNet state | **3.64 prompt tok/s**, **2.60 decode tok/s**, 488 MiB generation RSS, zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [raw results](models/qwen3.5-0.8b/targets/a113x/results.json) |
 | Whisper small.en | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, mixed Q4/Q8 encoder and cached decoder | 11 s audio in **45.0 s**, 251 MiB RSS, zero swap; 0/22 word errors on the pinned JFK sample | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [raw results](models/whisper-small.en/targets/a113x/results.json) |
 | Gemma 4 E2B | Unpinned two-vCPU x86-64 development machine | Legacy restricted C artifact | 0.598 token/s, 926 MiB RSS, zero swap | [model](models/gemma-4-e2b/README.md) · [raw results](models/gemma-4-e2b/results.json) |
 
 The MiniMax-H3 pipeline uses static tensor bindings, precomputed RoPE, grouped
 command buffers, simdgroup-matrix GEMM and exact attention. The same 480p
-N-to-N workload fell from 9,294.870 to 2,051.492 seconds (4.531×); Video VAE
+N-to-N workload fell from 9,294.870 to 2,194.437 seconds (4.236×); Video VAE
 decode fell from 7,387.292 to 479.511 seconds. The latest attention round
 replaced the two-pass exact kernel with a single-pass online-softmax kernel —
 same mathematics, fp32 accumulation, at most one bf16 unit of rounding
-difference — for a 1.44× kernel speedup and 367 seconds off the exact path.
-Two earlier approximate attention paths (a hierarchical tree and a late-layer
-candidate) are rejected: frame-level review shows both smear high-motion
-close-ups with streak ghosting that whole-video luma averages fail to catch,
-and the late-layer candidate saved only 3 percent. Attention quality gates now
-require per-frame review of the highest-motion shot. The
+difference on 0.19 percent of outputs — for a ~1.33× kernel speedup and 224
+seconds off the exact path. A faster variant with bf16 probability fragments
+and two approximate attention paths (a hierarchical tree and a late-layer
+candidate) are all rejected on frame-level review: each duplicates or smears
+line work in high-motion close-ups in ways whole-video luma averages fail to
+catch. Attention quality gates now require per-frame review of the
+highest-motion shot. The
 [target record](models/minimax-h3/targets/apple-m3-pro/README.md#video-vae-structure-and-optimization)
 separates measured end-to-end results, component gates and projections.
 Its [optimization ledger](models/minimax-h3/targets/apple-m3-pro/README.md#optimization-ledger)

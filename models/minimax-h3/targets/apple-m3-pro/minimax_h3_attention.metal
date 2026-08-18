@@ -2170,7 +2170,7 @@ kernel void minimax_h3_dense_attention_mma64_bf16(
             uint key_in_block = linear / kH3HeadDim;
             uint dimension = linear - key_in_block * kH3HeadDim;
             uint candidate = candidate_block * 8u + key_in_block;
-            key_tile[linear] = candidate < rows
+            key_tile[dimension * 8u + key_in_block] = candidate < rows
                 ? keys[(candidate * kH3HeadCount + head) * kH3HeadDim +
                        dimension]
                 : bfloat(0.0f);
@@ -2180,8 +2180,7 @@ kernel void minimax_h3_dense_attention_mma64_bf16(
             make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
         for (uint frag = 0u; frag < 16u; ++frag) {
             simdgroup_bfloat8x8 key_fragment;
-            simdgroup_load(key_fragment, key_tile + frag * 8u,
-                           kH3HeadDim, 0u, true);
+            simdgroup_load(key_fragment, key_tile + (frag * 8u) * 8u, 8u);
             simdgroup_multiply_accumulate(scores, query_fragments[frag],
                                            key_fragment, scores);
         }
@@ -2224,10 +2223,10 @@ kernel void minimax_h3_dense_attention_mma64_bf16(
                 uint source = (candidate * kH3HeadCount + head) *
                                   kH3HeadDim +
                               dimension;
-                key_tile[linear] = keys[source];
+                key_tile[dimension * 8u + key_in_block] = keys[source];
                 value_tile[linear] = float(values[source]);
             } else {
-                key_tile[linear] = bfloat(0.0f);
+                key_tile[dimension * 8u + key_in_block] = bfloat(0.0f);
                 value_tile[linear] = 0.0f;
             }
         }
@@ -2236,8 +2235,7 @@ kernel void minimax_h3_dense_attention_mma64_bf16(
             make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
         for (uint frag = 0u; frag < 16u; ++frag) {
             simdgroup_bfloat8x8 key_fragment;
-            simdgroup_load(key_fragment, key_tile + frag * 8u,
-                           kH3HeadDim, 0u, true);
+            simdgroup_load(key_fragment, key_tile + (frag * 8u) * 8u, 8u);
             simdgroup_multiply_accumulate(scores, query_fragments[frag],
                                            key_fragment, scores);
         }
@@ -2338,7 +2336,7 @@ kernel void minimax_h3_dense_attention_mma64_bf16_direct(
             uint key_in_block = linear / kH3HeadDim;
             uint dimension = linear - key_in_block * kH3HeadDim;
             uint candidate = candidate_block * 8u + key_in_block;
-            key_tile[linear] = candidate < rows
+            key_tile[dimension * 8u + key_in_block] = candidate < rows
                 ? keys[(candidate * kH3HeadCount + head) * kH3HeadDim +
                        dimension]
                 : bfloat(0.0f);
@@ -2348,8 +2346,7 @@ kernel void minimax_h3_dense_attention_mma64_bf16_direct(
             make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
         for (uint frag = 0u; frag < 16u; ++frag) {
             simdgroup_bfloat8x8 key_fragment;
-            simdgroup_load(key_fragment, key_tile + frag * 8u,
-                           kH3HeadDim, 0u, true);
+            simdgroup_load(key_fragment, key_tile + (frag * 8u) * 8u, 8u);
             simdgroup_multiply_accumulate(scores, query_fragments[frag],
                                            key_fragment, scores);
         }
@@ -2392,10 +2389,10 @@ kernel void minimax_h3_dense_attention_mma64_bf16_direct(
                 uint source = (candidate * kH3HeadCount + head) *
                                   kH3HeadDim +
                               dimension;
-                key_tile[linear] = keys[source];
+                key_tile[dimension * 8u + key_in_block] = keys[source];
                 value_tile[linear] = float(values[source]);
             } else {
-                key_tile[linear] = bfloat(0.0f);
+                key_tile[dimension * 8u + key_in_block] = bfloat(0.0f);
                 value_tile[linear] = 0.0f;
             }
         }
@@ -2404,8 +2401,7 @@ kernel void minimax_h3_dense_attention_mma64_bf16_direct(
             make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
         for (uint frag = 0u; frag < 16u; ++frag) {
             simdgroup_bfloat8x8 key_fragment;
-            simdgroup_load(key_fragment, key_tile + frag * 8u,
-                           kH3HeadDim, 0u, true);
+            simdgroup_load(key_fragment, key_tile + (frag * 8u) * 8u, 8u);
             simdgroup_multiply_accumulate(scores, query_fragments[frag],
                                            key_fragment, scores);
         }
@@ -2536,10 +2532,10 @@ kernel void minimax_h3_dense_attention_mma64_bf16_flash(
                 uint source = (candidate * kH3HeadCount + head) *
                                   kH3HeadDim +
                               dimension;
-                key_tile[linear] = keys[source];
+                key_tile[dimension * 8u + key_in_block] = keys[source];
                 value_tile[linear] = float(values[source]);
             } else {
-                key_tile[linear] = bfloat(0.0f);
+                key_tile[dimension * 8u + key_in_block] = bfloat(0.0f);
                 value_tile[linear] = 0.0f;
             }
         }
@@ -2548,8 +2544,7 @@ kernel void minimax_h3_dense_attention_mma64_bf16_flash(
             make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
         for (uint frag = 0u; frag < 16u; ++frag) {
             simdgroup_bfloat8x8 key_fragment;
-            simdgroup_load(key_fragment, key_tile + frag * 8u,
-                           kH3HeadDim, 0u, true);
+            simdgroup_load(key_fragment, key_tile + (frag * 8u) * 8u, 8u);
             simdgroup_multiply_accumulate(scores, query_fragments[frag],
                                            key_fragment, scores);
         }
@@ -2657,9 +2652,8 @@ kernel void minimax_h3_dense_attention_mma64_bf16_flash16(
     uint simdgroup_index [[simdgroup_index_in_threadgroup]],
     uint3 group [[threadgroup_position_in_grid]]) {
     threadgroup bfloat key_tile[16 * kH3HeadDim];
-    threadgroup bfloat value_tile[16 * kH3HeadDim];
+    threadgroup float value_tile[16 * kH3HeadDim];
     threadgroup float score_tiles[8 * 8 * 16];
-    threadgroup bfloat probability_tiles[8 * 8 * 16];
     threadgroup float rescale_tiles[8 * 8 * 8];
     threadgroup float row_maximum[64];
     threadgroup float row_denominator[64];
@@ -2708,10 +2702,10 @@ kernel void minimax_h3_dense_attention_mma64_bf16_flash16(
                                   kH3HeadDim +
                               dimension;
                 key_tile[dimension * 16u + key_in_block] = keys[source];
-                value_tile[linear] = values[source];
+                value_tile[linear] = float(values[source]);
             } else {
                 key_tile[dimension * 16u + key_in_block] = bfloat(0.0f);
-                value_tile[linear] = bfloat(0.0f);
+                value_tile[linear] = 0.0f;
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2753,24 +2747,23 @@ kernel void minimax_h3_dense_attention_mma64_bf16_flash16(
         }
         bool needs_rescale = simd_any(lane < 8u && rescale != 1.0f);
         simdgroup_barrier(mem_flags::mem_threadgroup);
-        /* One exponential per score: the transform keeps the fp32 value
-         * for the denominator sum and stores a bf16 copy for the
-         * probability-times-value matmul, which then runs at the bf16
-         * MMA rate into the fp32 accumulators. */
-        threadgroup bfloat *probability_tile =
-            probability_tiles + simdgroup_index * 128u;
+        /* One exponential per score: the transform below produces the
+         * unnormalized fp32 probabilities in place, and the denominator
+         * update reads them back as a plain row sum. Probabilities stay
+         * fp32 through the value matmul - a bf16 probability variant
+         * benched 3 percent faster but its rounding broadened the
+         * temporal attention mix enough to echo line work across
+         * frames. */
         for (uint index = lane; index < 128u; index += 32u) {
             uint query_in_simdgroup = index / 16u;
             uint key_in_block = index & 15u;
             uint probe_query = query_base + query_in_simdgroup;
             uint candidate = candidate_block * 16u + key_in_block;
-            float probability =
+            score_tile[index] =
                 probe_query < query_block_rows && candidate < rows
                     ? exp(score_tile[index] * kH3AttentionScale -
                           row_maximum[probe_query])
                     : 0.0f;
-            score_tile[index] = probability;
-            probability_tile[index] = bfloat(probability);
         }
         simdgroup_barrier(mem_flags::mem_threadgroup);
         if (lane < 8u && local_query < query_block_rows) {
@@ -2789,12 +2782,12 @@ kernel void minimax_h3_dense_attention_mma64_bf16_flash16(
                 accumulators[frag] = scaled;
             }
         }
-        simdgroup_bfloat8x8 probability0;
-        simdgroup_bfloat8x8 probability1;
-        simdgroup_load(probability0, probability_tile, 16u);
-        simdgroup_load(probability1, probability_tile + 8u, 16u);
+        simdgroup_float8x8 probability0;
+        simdgroup_float8x8 probability1;
+        simdgroup_load(probability0, score_tile, 16u);
+        simdgroup_load(probability1, score_tile + 8u, 16u);
         for (uint frag = 0u; frag < 16u; ++frag) {
-            simdgroup_bfloat8x8 value_fragment;
+            simdgroup_float8x8 value_fragment;
             simdgroup_load(value_fragment, value_tile + frag * 8u,
                            kH3HeadDim);
             simdgroup_multiply_accumulate(accumulators[frag], probability0,
