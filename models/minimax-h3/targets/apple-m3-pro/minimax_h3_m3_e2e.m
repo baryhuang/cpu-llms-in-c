@@ -4641,9 +4641,14 @@ static int h3_mux(const char *frame_directory,
         return 1;
     }
     double started = e2e_now();
+    /* ffmpeg's default CRF 23 rings visibly on dark anime edges -
+     * ghost lines parallel to every high-contrast contour. CRF 14 is
+     * visually transparent for this content and the file stays small
+     * next to the frames it encodes. */
     char *video_arguments[] = {
         "/opt/homebrew/bin/ffmpeg", "-hide_banner", "-loglevel", "error",
         "-y", "-framerate", "24", "-i", pattern, "-c:v", "libx264",
+        "-crf", "14", "-preset", "slow",
         "-pix_fmt", "yuv420p", silent, NULL,
     };
     pid_t child;
