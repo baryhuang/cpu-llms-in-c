@@ -180,6 +180,7 @@ typedef struct {
     __strong id<MTLComputePipelineState> h3_attention_bf16;
     __strong id<MTLComputePipelineState> h3_attention_mma64_bf16;
     __strong id<MTLComputePipelineState> h3_attention_mma64_bf16_direct;
+    __strong id<MTLComputePipelineState> h3_attention_mma64_bf16_flash16;
     __strong id<MTLComputePipelineState> h3_reorder_bf16_to_f16;
     __strong id<MTLComputePipelineState> h3_reorder_f16_to_bf16;
     __strong id<MTLComputePipelineState> h3_tree_leaf_summary;
@@ -464,6 +465,8 @@ static int h3_metal_open(const char *path,
             "minimax_h3_dense_attention_mma64_bf16");
     H3_PIPE(h3_attention_mma64_bf16_direct,
             "minimax_h3_dense_attention_mma64_bf16_direct");
+    H3_PIPE(h3_attention_mma64_bf16_flash16,
+            "minimax_h3_dense_attention_mma64_bf16_flash16");
     H3_PIPE(h3_reorder_bf16_to_f16,
             "minimax_h3_reorder_bf16_to_f16");
     H3_PIPE(h3_reorder_f16_to_bf16,
@@ -1648,8 +1651,15 @@ static void h3_dense_attention_mma64(h3_metal *metal,
         h3_dense_attention(metal, encoder, query, key, value, output, rows);
         return;
     }
+    /* Single-pass online-softmax kernel: same mathematics as the
+     * two-pass kernel, fp32 accumulation, bf16-rounding-level output
+     * differences only; MINIMAX_H3_FLASH=0 restores the two-pass
+     * kernel for comparison. */
+    const char *flash = getenv("MINIMAX_H3_FLASH");
     [encoder setComputePipelineState:
-        metal->h3_attention_mma64_bf16_direct];
+        flash != NULL && strcmp(flash, "0") == 0
+            ? metal->h3_attention_mma64_bf16_direct
+            : metal->h3_attention_mma64_bf16_flash16];
     [encoder setBuffer:query offset:0 atIndex:0];
     [encoder setBuffer:key offset:0 atIndex:1];
     [encoder setBuffer:value offset:0 atIndex:2];

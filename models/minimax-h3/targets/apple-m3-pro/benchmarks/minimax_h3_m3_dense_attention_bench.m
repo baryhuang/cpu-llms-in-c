@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <math.h>\n#include <string.h>
 
 enum {
     H3_HEADS = 56,
@@ -126,9 +126,12 @@ int main(int argc, char **argv) {
             @"minimax_h3_dense_attention_mma64_bf16_direct", &error);
         id<MTLComputePipelineState> convert = pipeline(
             device, library, @"minimax_h3_f32_to_bf16", &error);
+        id<MTLComputePipelineState> flash = pipeline(
+            device, library,
+            @"minimax_h3_dense_attention_mma64_bf16_flash16", &error);
         if (device == nil || library == nil || queue == nil ||
             initialize == nil || reference == nil || direct == nil ||
-            convert == nil) {
+            convert == nil || flash == nil) {
             const char *message = error != nil
                 ? error.localizedDescription.UTF8String
                 : "Metal setup failed";
@@ -149,8 +152,11 @@ int main(int argc, char **argv) {
                                                               options:MTLResourceStorageModeShared];
         id<MTLBuffer> direct_output = [device newBufferWithLength:bf16_bytes
                                                            options:MTLResourceStorageModeShared];
+        id<MTLBuffer> flash_output = [device newBufferWithLength:bf16_bytes
+                                                          options:MTLResourceStorageModeShared];
         if (query == nil || key == nil || value == nil || scratch == nil ||
-            reference_output == nil || direct_output == nil) {
+            reference_output == nil || direct_output == nil ||
+            flash_output == nil) {
             fprintf(stderr, "Metal allocation failed\n");
             return 1;
         }
@@ -176,13 +182,37 @@ int main(int argc, char **argv) {
             reference_output, rows, elements);
         double direct_ms = run_direct(
             queue, direct, query, key, value, direct_output, rows);
-        if (reference_ms < 0.0 || direct_ms < 0.0) return 1;
+        double flash_ms = run_direct(
+            queue, flash, query, key, value, flash_output, rows);
+        if (reference_ms < 0.0 || direct_ms < 0.0 || flash_ms < 0.0)
+            return 1;
 
         const uint16_t *expected = reference_output.contents;
         const uint16_t *actual = direct_output.contents;
         size_t differing = 0u;
         for (size_t index = 0u; index < elements; ++index)
             differing += expected[index] != actual[index];
+
+        /* The single-pass kernel accumulates in a different order, so it
+         * is compared by magnitude, not bitwise. */
+        const uint16_t *flash_actual = flash_output.contents;
+        size_t flash_differing = 0u;
+        double flash_max_abs = 0.0;
+        double reference_max_abs = 0.0;
+        for (size_t index = 0u; index < elements; ++index) {
+            uint32_t expected_bits = (uint32_t)expected[index] << 16u;
+            uint32_t flash_bits = (uint32_t)flash_actual[index] << 16u;
+            float expected_value;
+            float flash_value;
+            memcpy(&expected_value, &expected_bits, sizeof(expected_value));
+            memcpy(&flash_value, &flash_bits, sizeof(flash_value));
+            flash_differing += expected[index] != flash_actual[index];
+            double difference = fabs((double)expected_value -
+                                     (double)flash_value);
+            if (difference > flash_max_abs) flash_max_abs = difference;
+            double magnitude = fabs((double)expected_value);
+            if (magnitude > reference_max_abs) reference_max_abs = magnitude;
+        }
 
         printf("{\n");
         printf("  \"device\": \"%s\",\n", device.name.UTF8String);
@@ -191,8 +221,14 @@ int main(int argc, char **argv) {
         printf("  \"reference_fp32_scratch_bytes\": %zu,\n", fp32_bytes);
         printf("  \"reference_gpu_ms\": %.6f,\n", reference_ms);
         printf("  \"direct_bf16_gpu_ms\": %.6f,\n", direct_ms);
+        printf("  \"flash_bf16_gpu_ms\": %.6f,\n", flash_ms);
         printf("  \"speedup\": %.6f,\n", reference_ms / direct_ms);
-        printf("  \"differing_bf16_values\": %zu\n", differing);
+        printf("  \"flash_speedup\": %.6f,\n", reference_ms / flash_ms);
+        printf("  \"differing_bf16_values\": %zu,\n", differing);
+        printf("  \"flash_differing_bf16_values\": %zu,\n",
+               flash_differing);
+        printf("  \"flash_max_abs_diff\": %.9g,\n", flash_max_abs);
+        printf("  \"reference_max_abs\": %.9g\n", reference_max_abs);
         printf("}\n");
         return differing == 0u ? 0 : 3;
     }

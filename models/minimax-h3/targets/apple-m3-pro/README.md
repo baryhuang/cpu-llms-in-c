@@ -2,14 +2,16 @@
 
 Status: the real-weight C/Metal path covers the tokenizer, streamed Q8 Qwen
 conditioner, affine-Q4 H3 transformer, BF16 residual stream, Video VAE, Audio
-VAE and MP4 mux. The exact-attention 864×480×124 Turbo-4 path completed in
-2,418.708 seconds with a 4.136 GiB runtime peak footprint and zero swaps. An
-opt-in compiled-tree experiment completed the same workload in 1,489.401
-seconds with a 4.592 GiB peak, but introduced visible softness and transition
-ghosting. A quality-first profile completed in 2,344.734 seconds with a 4.584
-GiB peak and retained the exact run's three scene cuts without reviewed double
-exposure. Exact attention remains the default pending a multi-prompt gate;
-official full-precision parity and the speed target remain open.
+VAE and MP4 mux. The exact-attention 864×480×124 Turbo-4 path completes in
+2,051.492 seconds with zero swaps, using a single-pass online-softmax
+attention kernel — the same mathematics as the earlier two-pass kernel with
+fp32 accumulation and at most one bf16 unit of rounding difference. Both
+approximate attention paths are rejected: the compiled tree (1,489.401 s)
+softens detail and ghosts transitions, and the frame-safe late-layer
+candidate (2,344.734 s) shows streak ghosting on the highest-motion close-up
+under per-frame review that whole-video luma averages had missed. Attention
+quality gates now include per-frame review of the highest-motion shot.
+Official full-precision parity and the speed target remain open.
 
 ## N-to-N optimization timeline
 
@@ -24,7 +26,8 @@ official full-precision parity and the speed target remain open.
 | Full current N-to-N validation | Full graph measurement; no new optimization | VAE: 528.169950 projected → **487.273811 s measured** (−40.896139); all other stages: 1,907.577705 → 1,931.434426 s (+23.856721) | **2,418.708237 s**; −17.039418 vs projection; **3.843×** | Replace single-task linear scaling with a complete run; the net projection difference is not claimed as an optimization | measured complete N-to-N |
 | Exact BF16 direct output + four-layer H3 command groups | H3 dense-attention storage and command submission | Attention: 5,024.974042 → 5,012.634167 ms/call; FP32 scratch: 448,401,408 → 0 B; 128² denoise: 17.407398 → 17.147884 s | full 480p N-to-N not remeasured; no projection claimed | Reuse the kernel's dead score-tile region as an FP32 fragment spill, emit BF16 directly and submit four layers per command buffer | all 112,100,352 irregular-input BF16 outputs and smoke media hashes identical |
 | Experimental compiled tree attention | H3 dense attention | **1,898.120497 → 974.544700 s measured**; −923.575797 s; 1.948× | **1,489.401301 s**; −929.306936; **1.624×** vs exact; **6.241×** vs baseline | Compile geometry, row order, tree nodes, routes and query blocks once; rebuild only K/V summaries on Metal | measured complete N-to-N; functional pass, visual regression; opt-in only |
-| Frame-safe late-layer attention | H3 attention in step 4, layers 40–49 only | same-run three late groups **92.597490 → 70.313368 s**; −22.284122 s; 1.317× | **2,344.734228 s**; −73.974009 s; **1.032×** vs earlier exact run | Keep conditioning exact; never merge K/V across frames; retain per-frame leaf summaries and exact temporal spatial neighbors; exact-anchor 190/200 attention calls | measured complete N-to-N; scene and transition ghosting gate passed; exact parity and prompt-suite gate open |
+| Frame-safe late-layer attention | H3 attention in step 4, layers 40–49 only | same-run three late groups **92.597490 → 70.313368 s**; −22.284122 s; 1.317× | **2,344.734228 s**; −73.974009 s; **1.032×** vs earlier exact run | Keep conditioning exact; never merge K/V across frames; exact-anchor 190/200 attention calls | **rejected**: per-frame review of the violent-motion close-up (frame 45) shows vertical streak ghosting and eye-edge echoes that the whole-video luma gate averaged away |
+| Single-pass online-softmax exact attention | H3 dense attention, all 200 calls | kernel **5,007 → 3,485 ms/call** (1.44×): one QK pass instead of two, transposed key staging, one exponential per score, bf16 probability/value fragments into fp32 accumulators | **2,051.492 s**; −367.216 s; **1.179×** vs prior exact; **4.531×** vs baseline | Same mathematics, fp32 accumulation; at most one bf16 unit of output rounding difference | measured complete N-to-N; scene cuts identical (frames 36/61/93), adjacent-luma 2.574 vs 2.668, per-frame review of all four shots clean including the frame-45 motion close-up |
 
 ### Latest measured run breakdown
 

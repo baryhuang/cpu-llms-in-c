@@ -2467,6 +2467,372 @@ kernel void minimax_h3_dense_attention_mma64_bf16_direct(
     }
 }
 
+/* Single-pass exact attention: the two-pass kernel above computes every
+ * QK score twice (once for the softmax statistics, once for the
+ * probability matmul). This kernel keeps unnormalized exp(score - m)
+ * accumulators with the classic online-softmax recurrence instead: when
+ * a key block raises a row maximum, the output accumulators are scaled
+ * through one diagonal-matrix multiply - and with bf16 scores the row
+ * maxima stabilize after the first few blocks, so those rescales are
+ * rare. The final division by the softmax denominator happens in the
+ * output spill, which already touches every element. Same mathematics,
+ * fp32 accumulation throughout; only floating-point rounding order
+ * differs from the two-pass kernel. */
+kernel void minimax_h3_dense_attention_mma64_bf16_flash(
+    device const bfloat *queries [[buffer(0)]],
+    device const bfloat *keys [[buffer(1)]],
+    device const bfloat *values [[buffer(2)]],
+    device bfloat *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup bfloat key_tile[8 * kH3HeadDim];
+    threadgroup float value_tile[8 * kH3HeadDim];
+    threadgroup float score_tiles[8 * 8 * 8];
+    threadgroup float probability_tiles[8 * 8 * 8];
+    threadgroup float rescale_tiles[8 * 8 * 8];
+    threadgroup float row_maximum[64];
+    threadgroup float row_denominator[64];
+    uint query_block_start = group.x * 64u;
+    uint query_block_rows = min(64u, rows - query_block_start);
+    uint head = group.y;
+    uint query_base = simdgroup_index * 8u;
+    uint candidate_blocks = (rows + 7u) / 8u;
+    simdgroup_bfloat8x8 query_fragments[16];
+
+    for (uint frag = 0u; frag < 16u; ++frag) {
+        if (query_base < query_block_rows) {
+            device const bfloat *source =
+                queries + ((query_block_start + query_base) * kH3HeadCount +
+                           head) * kH3HeadDim + frag * 8u;
+            simdgroup_load(query_fragments[frag], source,
+                           kH3HeadCount * kH3HeadDim);
+        } else {
+            query_fragments[frag] =
+                make_filled_simdgroup_matrix<bfloat, 8, 8>(bfloat(0.0f));
+        }
+    }
+    simdgroup_float8x8 accumulators[16];
+    for (uint frag = 0u; frag < 16u; ++frag)
+        accumulators[frag] =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    if (tid < 64u) {
+        row_maximum[tid] = -INFINITY;
+        row_denominator[tid] = 0.0f;
+    }
+    for (uint linear = tid; linear < 8u * 8u * 8u; linear += 256u)
+        rescale_tiles[linear] = 0.0f;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint candidate_block = 0u; candidate_block < candidate_blocks;
+         ++candidate_block) {
+        for (uint linear = tid; linear < 8u * kH3HeadDim; linear += 256u) {
+            uint key_in_block = linear / kH3HeadDim;
+            uint dimension = linear - key_in_block * kH3HeadDim;
+            uint candidate = candidate_block * 8u + key_in_block;
+            if (candidate < rows) {
+                uint source = (candidate * kH3HeadCount + head) *
+                                  kH3HeadDim +
+                              dimension;
+                key_tile[linear] = keys[source];
+                value_tile[linear] = float(values[source]);
+            } else {
+                key_tile[linear] = bfloat(0.0f);
+                value_tile[linear] = 0.0f;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        simdgroup_float8x8 scores =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        for (uint frag = 0u; frag < 16u; ++frag) {
+            simdgroup_bfloat8x8 key_fragment;
+            simdgroup_load(key_fragment, key_tile + frag * 8u,
+                           kH3HeadDim, 0u, true);
+            simdgroup_multiply_accumulate(scores, query_fragments[frag],
+                                           key_fragment, scores);
+        }
+        threadgroup float *score_tile =
+            score_tiles + simdgroup_index * 64u;
+        threadgroup float *rescale_tile =
+            rescale_tiles + simdgroup_index * 64u;
+        simdgroup_store(scores, score_tile, 8u);
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        float rescale = 1.0f;
+        uint local_query = query_base + lane;
+        uint valid_keys = min(8u, rows - candidate_block * 8u);
+        if (lane < 8u && local_query < query_block_rows) {
+            float block_maximum = -INFINITY;
+            for (uint key = 0u; key < valid_keys; ++key)
+                block_maximum = max(
+                    block_maximum,
+                    score_tile[lane * 8u + key] * kH3AttentionScale);
+            float previous_maximum = row_maximum[local_query];
+            float next_maximum = max(previous_maximum, block_maximum);
+            rescale = exp(previous_maximum - next_maximum);
+            float denominator = row_denominator[local_query] * rescale;
+            for (uint key = 0u; key < valid_keys; ++key)
+                denominator += exp(score_tile[lane * 8u + key] *
+                                       kH3AttentionScale -
+                                   next_maximum);
+            row_maximum[local_query] = next_maximum;
+            row_denominator[local_query] = denominator;
+            rescale_tile[lane * 8u + lane] = rescale;
+        }
+        bool needs_rescale = simd_any(lane < 8u && rescale != 1.0f);
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        threadgroup float *probability_tile =
+            probability_tiles + simdgroup_index * 64u;
+        for (uint index = lane; index < 64u; index += 32u) {
+            uint query_in_simdgroup = index / 8u;
+            uint key_in_block = index & 7u;
+            uint probe_query = query_base + query_in_simdgroup;
+            uint candidate = candidate_block * 8u + key_in_block;
+            probability_tile[index] =
+                probe_query < query_block_rows && candidate < rows
+                    ? exp(score_tile[index] * kH3AttentionScale -
+                          row_maximum[probe_query])
+                    : 0.0f;
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        if (needs_rescale) {
+            simdgroup_float8x8 rescale_fragment;
+            simdgroup_load(rescale_fragment, rescale_tile, 8u);
+            for (uint frag = 0u; frag < 16u; ++frag) {
+                simdgroup_float8x8 scaled;
+                simdgroup_multiply(scaled, rescale_fragment,
+                                   accumulators[frag]);
+                accumulators[frag] = scaled;
+            }
+        }
+        simdgroup_float8x8 probability_fragment;
+        simdgroup_load(probability_fragment, probability_tile, 8u);
+        for (uint frag = 0u; frag < 16u; ++frag) {
+            simdgroup_float8x8 value_fragment;
+            simdgroup_load(value_fragment, value_tile + frag * 8u,
+                           kH3HeadDim);
+            simdgroup_multiply_accumulate(accumulators[frag],
+                                           probability_fragment,
+                                           value_fragment,
+                                           accumulators[frag]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (uint frag = 0u; frag < 16u; ++frag) {
+        threadgroup float *spill = score_tiles + simdgroup_index * 64u;
+        simdgroup_store(accumulators[frag], spill, 8u);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint linear = tid; linear < 512u; linear += 256u) {
+            uint output_simdgroup = linear / 64u;
+            uint in_tile = linear - output_simdgroup * 64u;
+            uint query_in_simdgroup = in_tile / 8u;
+            uint column = in_tile - query_in_simdgroup * 8u;
+            uint local_query = output_simdgroup * 8u + query_in_simdgroup;
+            if (local_query < query_block_rows) {
+                uint destination =
+                    ((query_block_start + local_query) * kH3HeadCount + head) *
+                        kH3HeadDim +
+                    frag * 8u + column;
+                output[destination] = bfloat(score_tiles[linear] /
+                                             row_denominator[local_query]);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
+/* Sixteen-key blocks halve the staging rounds and barriers of the
+ * single-pass kernel above; probabilities overwrite the score tile in
+ * place, so threadgroup memory stays inside the 32 KB budget. */
+kernel void minimax_h3_dense_attention_mma64_bf16_flash16(
+    device const bfloat *queries [[buffer(0)]],
+    device const bfloat *keys [[buffer(1)]],
+    device const bfloat *values [[buffer(2)]],
+    device bfloat *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup bfloat key_tile[16 * kH3HeadDim];
+    threadgroup bfloat value_tile[16 * kH3HeadDim];
+    threadgroup float score_tiles[8 * 8 * 16];
+    threadgroup bfloat probability_tiles[8 * 8 * 16];
+    threadgroup float rescale_tiles[8 * 8 * 8];
+    threadgroup float row_maximum[64];
+    threadgroup float row_denominator[64];
+    uint query_block_start = group.x * 64u;
+    uint query_block_rows = min(64u, rows - query_block_start);
+    uint head = group.y;
+    uint query_base = simdgroup_index * 8u;
+    uint candidate_blocks = (rows + 15u) / 16u;
+    simdgroup_bfloat8x8 query_fragments[16];
+
+    for (uint frag = 0u; frag < 16u; ++frag) {
+        if (query_base < query_block_rows) {
+            device const bfloat *source =
+                queries + ((query_block_start + query_base) * kH3HeadCount +
+                           head) * kH3HeadDim + frag * 8u;
+            simdgroup_load(query_fragments[frag], source,
+                           kH3HeadCount * kH3HeadDim);
+        } else {
+            query_fragments[frag] =
+                make_filled_simdgroup_matrix<bfloat, 8, 8>(bfloat(0.0f));
+        }
+    }
+    simdgroup_float8x8 accumulators[16];
+    for (uint frag = 0u; frag < 16u; ++frag)
+        accumulators[frag] =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    if (tid < 64u) {
+        row_maximum[tid] = -INFINITY;
+        row_denominator[tid] = 0.0f;
+    }
+    for (uint linear = tid; linear < 8u * 8u * 8u; linear += 256u)
+        rescale_tiles[linear] = 0.0f;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint candidate_block = 0u; candidate_block < candidate_blocks;
+         ++candidate_block) {
+        /* Keys stage transposed ([dimension][key]) so the score loop
+         * uses plain simdgroup loads - transposed fragment loads are
+         * slow on this GPU. */
+        for (uint linear = tid; linear < 16u * kH3HeadDim; linear += 256u) {
+            uint key_in_block = linear / kH3HeadDim;
+            uint dimension = linear - key_in_block * kH3HeadDim;
+            uint candidate = candidate_block * 16u + key_in_block;
+            if (candidate < rows) {
+                uint source = (candidate * kH3HeadCount + head) *
+                                  kH3HeadDim +
+                              dimension;
+                key_tile[dimension * 16u + key_in_block] = keys[source];
+                value_tile[linear] = values[source];
+            } else {
+                key_tile[dimension * 16u + key_in_block] = bfloat(0.0f);
+                value_tile[linear] = bfloat(0.0f);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        simdgroup_float8x8 scores0 =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        simdgroup_float8x8 scores1 =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        for (uint frag = 0u; frag < 16u; ++frag) {
+            simdgroup_bfloat8x8 key_fragment;
+            simdgroup_load(key_fragment, key_tile + (frag * 8u) * 16u, 16u);
+            simdgroup_multiply_accumulate(scores0, query_fragments[frag],
+                                           key_fragment, scores0);
+            simdgroup_load(key_fragment,
+                           key_tile + (frag * 8u) * 16u + 8u, 16u);
+            simdgroup_multiply_accumulate(scores1, query_fragments[frag],
+                                           key_fragment, scores1);
+        }
+        threadgroup float *score_tile =
+            score_tiles + simdgroup_index * 128u;
+        threadgroup float *rescale_tile =
+            rescale_tiles + simdgroup_index * 64u;
+        simdgroup_store(scores0, score_tile, 16u);
+        simdgroup_store(scores1, score_tile + 8u, 16u);
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        float rescale = 1.0f;
+        uint local_query = query_base + lane;
+        uint valid_keys = min(16u, rows - candidate_block * 16u);
+        if (lane < 8u && local_query < query_block_rows) {
+            float block_maximum = -INFINITY;
+            for (uint key = 0u; key < valid_keys; ++key)
+                block_maximum = max(
+                    block_maximum,
+                    score_tile[lane * 16u + key] * kH3AttentionScale);
+            float previous_maximum = row_maximum[local_query];
+            float next_maximum = max(previous_maximum, block_maximum);
+            rescale = exp(previous_maximum - next_maximum);
+            row_maximum[local_query] = next_maximum;
+            rescale_tile[lane * 8u + lane] = rescale;
+        }
+        bool needs_rescale = simd_any(lane < 8u && rescale != 1.0f);
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        /* One exponential per score: the transform keeps the fp32 value
+         * for the denominator sum and stores a bf16 copy for the
+         * probability-times-value matmul, which then runs at the bf16
+         * MMA rate into the fp32 accumulators. */
+        threadgroup bfloat *probability_tile =
+            probability_tiles + simdgroup_index * 128u;
+        for (uint index = lane; index < 128u; index += 32u) {
+            uint query_in_simdgroup = index / 16u;
+            uint key_in_block = index & 15u;
+            uint probe_query = query_base + query_in_simdgroup;
+            uint candidate = candidate_block * 16u + key_in_block;
+            float probability =
+                probe_query < query_block_rows && candidate < rows
+                    ? exp(score_tile[index] * kH3AttentionScale -
+                          row_maximum[probe_query])
+                    : 0.0f;
+            score_tile[index] = probability;
+            probability_tile[index] = bfloat(probability);
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+        if (lane < 8u && local_query < query_block_rows) {
+            float denominator = row_denominator[local_query] * rescale;
+            for (uint key = 0u; key < valid_keys; ++key)
+                denominator += score_tile[lane * 16u + key];
+            row_denominator[local_query] = denominator;
+        }
+        if (needs_rescale) {
+            simdgroup_float8x8 rescale_fragment;
+            simdgroup_load(rescale_fragment, rescale_tile, 8u);
+            for (uint frag = 0u; frag < 16u; ++frag) {
+                simdgroup_float8x8 scaled;
+                simdgroup_multiply(scaled, rescale_fragment,
+                                   accumulators[frag]);
+                accumulators[frag] = scaled;
+            }
+        }
+        simdgroup_bfloat8x8 probability0;
+        simdgroup_bfloat8x8 probability1;
+        simdgroup_load(probability0, probability_tile, 16u);
+        simdgroup_load(probability1, probability_tile + 8u, 16u);
+        for (uint frag = 0u; frag < 16u; ++frag) {
+            simdgroup_bfloat8x8 value_fragment;
+            simdgroup_load(value_fragment, value_tile + frag * 8u,
+                           kH3HeadDim);
+            simdgroup_multiply_accumulate(accumulators[frag], probability0,
+                                           value_fragment,
+                                           accumulators[frag]);
+            simdgroup_load(value_fragment,
+                           value_tile + 8u * kH3HeadDim + frag * 8u,
+                           kH3HeadDim);
+            simdgroup_multiply_accumulate(accumulators[frag], probability1,
+                                           value_fragment,
+                                           accumulators[frag]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (uint frag = 0u; frag < 16u; ++frag) {
+        threadgroup float *spill = score_tiles + simdgroup_index * 64u;
+        simdgroup_store(accumulators[frag], spill, 8u);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint linear = tid; linear < 512u; linear += 256u) {
+            uint output_simdgroup = linear / 64u;
+            uint in_tile = linear - output_simdgroup * 64u;
+            uint query_in_simdgroup = in_tile / 8u;
+            uint column = in_tile - query_in_simdgroup * 8u;
+            uint local_query = output_simdgroup * 8u + query_in_simdgroup;
+            if (local_query < query_block_rows) {
+                uint destination =
+                    ((query_block_start + local_query) * kH3HeadCount + head) *
+                        kH3HeadDim +
+                    frag * 8u + column;
+                output[destination] = bfloat(score_tiles[linear] /
+                                             row_denominator[local_query]);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+}
+
 kernel void minimax_h3_f32_to_bf16(
     device const float *input [[buffer(0)]],
     device bfloat *output [[buffer(1)]],

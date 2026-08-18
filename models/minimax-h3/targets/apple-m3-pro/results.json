@@ -1,839 +1,1191 @@
 {
-  "schema": 1,
-  "date": "2026-08-17",
-  "device": {
-    "model": "MacBook Pro Mac15,6",
-    "soc": "Apple M3 Pro",
-    "gpu_cores": 14,
-    "unified_memory_bytes": 38654705664
+ "schema": 1,
+ "date": "2026-08-17",
+ "device": {
+  "model": "MacBook Pro Mac15,6",
+  "soc": "Apple M3 Pro",
+  "gpu_cores": 14,
+  "unified_memory_bytes": 38654705664
+ },
+ "workload": {
+  "sequence_rows": 15485,
+  "heads": 56,
+  "head_dimension": 128,
+  "dtype": "fp16 Q/K/V and output; fp32 softmax state",
+  "input": "deterministic synthetic exact-shape tensors",
+  "excluded": [
+   "QKV projection",
+   "output projection",
+   "real H3 weights",
+   "denoising trajectory",
+   "VAE"
+  ]
+ },
+ "external_peer": {
+  "repository_commit": "EvolvingLMMs-Lab/MacOS-H3-Speedrun@db22d300423e04d44f217bd3858147964c7b8c5c",
+  "dependency_commit": "yshenaw/ComfyUI-SolAttn-MPS@886f4b9b8598b2d17445eef659a8ef28cf04d0d4",
+  "device": "Apple M3 Ultra",
+  "attention_ms": 59.53,
+  "published_sampling_profiles": [
+   {
+    "name": "Turbo 4 Fast",
+    "steps": 4
+   },
+   {
+    "name": "Turbo 6 Balanced",
+    "steps": 6
+   },
+   {
+    "name": "Quality 20",
+    "steps": 20
+   }
+  ]
+ },
+ "experiments": [
+  {
+   "name": "scalar-simdgroup-flat-query",
+   "route": "500 exact conditioning rows; two temporal groups, two frames and two leaves expanded",
+   "query_tile_rows": 1,
+   "measured_iterations": 1,
+   "attention_gpu_ms": 2568.762667,
+   "summary_gpu_ms": 3.39275,
+   "max_abs_error_first_head": 2.57603824e-06
   },
-  "workload": {
-    "sequence_rows": 15485,
-    "heads": 56,
-    "head_dimension": 128,
-    "dtype": "fp16 Q/K/V and output; fp32 softmax state",
-    "input": "deterministic synthetic exact-shape tensors",
-    "excluded": [
-      "QKV projection",
-      "output projection",
-      "real H3 weights",
-      "denoising trajectory",
-      "VAE"
-    ]
+  {
+   "name": "mma-8-row",
+   "route": "same conservative route",
+   "query_tile_rows": 8,
+   "measured_iterations": 1,
+   "attention_gpu_ms": 2965.231,
+   "summary_gpu_ms": 3.5935,
+   "max_abs_error_first_head": 3.41422856e-06
   },
-  "external_peer": {
-    "repository_commit": "EvolvingLMMs-Lab/MacOS-H3-Speedrun@db22d300423e04d44f217bd3858147964c7b8c5c",
-    "dependency_commit": "yshenaw/ComfyUI-SolAttn-MPS@886f4b9b8598b2d17445eef659a8ef28cf04d0d4",
-    "device": "Apple M3 Ultra",
-    "attention_ms": 59.53,
-    "published_sampling_profiles": [
-      {"name": "Turbo 4 Fast", "steps": 4},
-      {"name": "Turbo 6 Balanced", "steps": 6},
-      {"name": "Quality 20", "steps": 20}
-    ]
+  {
+   "name": "mma-64-tree-major",
+   "route": "same conservative route; tree-major physical row layout",
+   "query_tile_rows": 64,
+   "measured_iterations": 1,
+   "attention_gpu_ms": 405.675125,
+   "summary_gpu_ms": 3.547375,
+   "max_abs_error_first_head": 0.000108644366
   },
-  "experiments": [
-    {
-      "name": "scalar-simdgroup-flat-query",
-      "route": "500 exact conditioning rows; two temporal groups, two frames and two leaves expanded",
-      "query_tile_rows": 1,
-      "measured_iterations": 1,
-      "attention_gpu_ms": 2568.762667,
-      "summary_gpu_ms": 3.392750,
-      "max_abs_error_first_head": 2.57603824e-6
-    },
-    {
-      "name": "mma-8-row",
-      "route": "same conservative route",
-      "query_tile_rows": 8,
-      "measured_iterations": 1,
-      "attention_gpu_ms": 2965.231000,
-      "summary_gpu_ms": 3.593500,
-      "max_abs_error_first_head": 3.41422856e-6
-    },
-    {
-      "name": "mma-64-tree-major",
-      "route": "same conservative route; tree-major physical row layout",
-      "query_tile_rows": 64,
-      "measured_iterations": 1,
-      "attention_gpu_ms": 405.675125,
-      "summary_gpu_ms": 3.547375,
-      "max_abs_error_first_head": 1.08644366e-4
-    },
-    {
-      "name": "mma-64-h3-native-audio-summary",
-      "route": "86 exact text rows; 13 audio summaries; one video leaf expanded",
-      "query_tile_rows": 64,
-      "measured_iterations": 3,
-      "maximum_route_entries": 95,
-      "attention_gpu_ms": 70.902375,
-      "summary_gpu_ms": 3.451847,
-      "max_abs_error_first_head": 3.80142592e-6
-    },
-    {
-      "name": "mma-64-compiled-conditioning-summary",
-      "route": "11 text seed summaries; 13 audio summaries; one video leaf expanded",
-      "query_tile_rows": 64,
-      "warmup_iterations": 2,
-      "measured_iterations": 5,
-      "tree_nodes": 366,
-      "route_entries": 27369,
-      "maximum_route_entries": 106,
-      "summary_gpu_ms": 3.870908,
-      "summary_wall_ms": 4.009350,
-      "attention_gpu_ms": 45.020433,
-      "attention_wall_ms": 45.214592,
-      "qkv_bytes": 665978880,
-      "summary_bytes": 10493952,
-      "output_bytes": 221992960,
-      "metal_owned_buffer_bytes": 898599392,
-      "footprint_before_bytes": 1737536,
-      "footprint_peak_bytes": 1028113984,
-      "max_abs_error_first_head": 9.47213266e-7,
-      "speedup_vs_first_kernel": 57.057707,
-      "speedup_vs_external_peer_time": 1.322288,
-      "quality_status": "not validated against dense H3 trajectory"
-    },
-    {
-      "name": "mma-64-compiled-conditioning-summary-with-lse",
-      "route": "same compiled-conditioning seed; emits one FP32 LSE per row/head for later token selection",
-      "query_tile_rows": 64,
-      "warmup_iterations": 2,
-      "measured_iterations": 5,
-      "tree_nodes": 366,
-      "route_entries": 27369,
-      "maximum_route_entries": 106,
-      "summary_gpu_ms": 4.236458,
-      "summary_wall_ms": 4.412750,
-      "attention_gpu_ms": 49.893167,
-      "attention_wall_ms": 50.125100,
-      "qkv_bytes": 665978880,
-      "summary_bytes": 10493952,
-      "output_bytes": 221992960,
-      "lse_bytes": 3468640,
-      "metal_owned_buffer_bytes": 902068032,
-      "footprint_before_bytes": 1721088,
-      "footprint_peak_bytes": 1031505280,
-      "max_abs_error_first_head": 9.47213266e-7,
-      "speedup_vs_first_kernel": 51.485260,
-      "speedup_vs_external_peer_time": 1.193149,
-      "quality_status": "not validated against dense H3 trajectory"
-    },
-    {
-      "name": "dense-attention-direct-bf16-output",
-      "scope": "one exact 15639-row, 56-head, 128-dimension attention call",
-      "warmup_iterations": 0,
-      "measured_iterations": 1,
-      "reference_fp32_scratch_bytes": 448401408,
-      "reference_gpu_ms": 5024.974042,
-      "direct_bf16_gpu_ms": 5012.634167,
-      "speedup": 1.002462,
-      "compared_bf16_values": 112100352,
-      "differing_bf16_values": 0,
-      "quality_status": "bit-identical"
-    },
-    {
-      "name": "four-layer-h3-command-groups",
-      "scope": "128x128x22 Turbo-4 exact-attention N-to-N smoke",
-      "denoise_before_seconds": 17.407398,
-      "denoise_after_seconds": 17.147884,
-      "speedup": 1.015133,
-      "video_sha256_identical": true,
-      "audio_sha256_identical": true,
-      "muxed_mp4_sha256_identical": true,
-      "quality_status": "bit-identical media"
-    }
-  ],
-  "projection_experiments": {
-    "scope": "one synthetic W4 5376-to-14336 projection; not a complete H3 block",
-    "weight_format": "affine W4 group-64 with FP16 scale and bias",
-    "accumulation": "FP16 8x8 MMA; every 64-column partial is accumulated into FP32",
-    "equivalent_projections_per_dense_block": 5,
-    "runs": [
-      {
-        "name": "mma-32-output-rows",
-        "batch_rows": 15485,
-        "warmup_iterations": 1,
-        "measured_iterations": 3,
-        "gpu_ms": 662.155750,
-        "effective_tflops": 3.604693
-      },
-      {
-        "name": "mma-64-output-rows-precise",
-        "batch_rows": 4646,
-        "warmup_iterations": 2,
-        "measured_iterations": 5,
-        "gpu_ms": 194.601567,
-        "wall_ms": 194.844700,
-        "effective_tflops": 3.680020,
-        "metal_owned_buffer_bytes": 227541008,
-        "footprint_peak_bytes": 305988992,
-        "max_abs_error_first_8": 0.0025806427
-      },
-      {
-        "name": "mma-64-output-rows-precise",
-        "batch_rows": 15485,
-        "warmup_iterations": 2,
-        "measured_iterations": 5,
-        "gpu_ms": 618.205008,
-        "wall_ms": 618.406817,
-        "effective_tflops": 3.860966,
-        "weight_bytes": 38535168,
-        "metadata_bytes": 4816896,
-        "input_bytes": 166526976,
-        "output_bytes": 444071936,
-        "metal_owned_buffer_bytes": 653950992,
-        "footprint_peak_bytes": 731366656,
-        "max_abs_error_first_8": 0.0025806427,
-        "speedup_vs_32_output_rows": 1.071094
-      }
-    ],
-    "sparse_seed_central_band": [
-      {
-        "evaluation": 0,
-        "query_rows": 15485,
-        "kv_projection_rows": 15485,
-        "mlp_rows": 15485,
-        "projection_macs_fraction_of_dense": 1.0,
-        "reason": "no prior branch cache"
-      },
-      {
-        "evaluation": 1,
-        "query_rows": 3054,
-        "kv_projection_rows": 3420,
-        "mlp_rows": 2583,
-        "projection_macs_fraction_of_dense": 0.183700
-      },
-      {
-        "evaluation": 2,
-        "query_rows": 4914,
-        "kv_projection_rows": 5280,
-        "mlp_rows": 4144,
-        "projection_macs_fraction_of_dense": 0.292231
-      },
-      {
-        "evaluation": 3,
-        "query_rows": 7993,
-        "kv_projection_rows": 8359,
-        "mlp_rows": 7203,
-        "projection_macs_fraction_of_dense": 0.490294
-      }
-    ],
-    "real_weight_boundary": {
-      "tensor": "transformer_blocks.0.mlp.fc1",
-      "batch_rows": 11,
-      "activation_dtype": "BF16",
-      "output_dtype": "BF16",
-      "gpu_ms": 5.322375,
-      "reference": "scalar C with FP32 accumulation and BF16 output rounding",
-      "max_abs_error_first_8": 0.00282287598,
-      "status": "passed"
-    },
-    "summary_projection_identity": "For bias-free H3 K/V, W*mean(normalized hidden) equals mean(W*normalized hidden).",
-    "quality_status": "one real Q4/BF16 projection boundary passes; complete block and trajectory gates remain open"
+  {
+   "name": "mma-64-h3-native-audio-summary",
+   "route": "86 exact text rows; 13 audio summaries; one video leaf expanded",
+   "query_tile_rows": 64,
+   "measured_iterations": 3,
+   "maximum_route_entries": 95,
+   "attention_gpu_ms": 70.902375,
+   "summary_gpu_ms": 3.451847,
+   "max_abs_error_first_head": 3.80142592e-06
   },
-  "video_vae_optimization": {
-    "scope": "real 2.604B-parameter ViT3D Video VAE on Apple M3 Pro",
-    "architecture": {
-      "layers": 36,
-      "hidden": 2048,
-      "heads": 32,
-      "head_dimension": 64,
-      "ffn_pair_width": 8192,
-      "reference_tile": {"pixels": [256, 256], "latent_frames": 7, "tokens": 1792, "rows_with_registers": 1797},
-      "corrected_480p_schedule": {"temporal_chunks": 7, "spatial_tiles_per_chunk": 15, "transformer_block_calls": 3780},
-      "dense_mac_per_row_per_block": 67108864,
-      "corrected_480p_dense_mac": 455847696138240
-    },
-    "exact_precompute_and_runtime": [
-      "one no-copy Metal buffer for each complete mapped weight image",
-      "438 Video VAE tensor bindings resolved once before the tile loop",
-      "24 complex ViT3D RoPE coefficients per row generated once per tile geometry",
-      "four transformer blocks encoded per command buffer instead of one",
-      "64 activation rows and 64 output channels per FP16 simdgroup-matrix tile",
-      "32 K/V rows shared by eight attention queries in threadgroup memory"
-    ],
-    "n_to_n_timeline": {
-      "workload": "864x480x124, 240 prompt tokens, Turbo-4, seed 42, exact 256-pixel Video VAE tiles",
-      "projection_formula": "1907.577705 measured baseline seconds outside Video VAE + 105 * measured 256x256x22 Video VAE task seconds",
-      "invalid_fast_run_excluded": {"total_seconds": 7249.519, "reason": "86 of 124 frames were flat"},
-      "milestones": [
-        {"name": "correct seven-chunk baseline", "stage": "Video VAE", "stage_after_seconds": 7387.292038, "stage_timing": "measured", "n_to_n_seconds": 9294.869743, "delta_seconds": null, "speedup_vs_baseline": 1.0, "reason": "establish the released seven-chunk temporal graph; this is the valid baseline, not an optimization", "evidence": "measured complete N-to-N"},
-        {"name": "whole-image buffers, static bindings, RoPE and four-layer command grouping", "stage": "Video VAE setup and execution; H3 resource binding", "stage_before_seconds": 7387.292038, "stage_after_seconds": 7205.000040, "stage_delta_seconds": -182.291998, "stage_timing": "Video VAE before measured and after projected", "h3_smoke_before_seconds": 17.122752, "h3_smoke_after_seconds": 7.571732, "h3_smoke_delta_seconds": -9.551020, "h3_smoke_included_in_n_to_n_projection": false, "n_to_n_seconds": 9112.577745, "delta_seconds": -182.291998, "speedup_vs_baseline": 1.020004, "component_seconds": 68.619048, "reason": "reuse fixed Metal images, bindings and RoPE and encode four Video VAE layers per command buffer", "evidence": "Video VAE projected; H3 32x32 smoke measured separately; exact setup bundle not timed per subchange"},
-        {"name": "32-row simdgroup-matrix GEMM", "stage": "Video VAE dense projections and MLP", "stage_before_seconds": 7205.000040, "stage_after_seconds": 716.561895, "stage_delta_seconds": -6488.438145, "stage_timing": "projected", "n_to_n_seconds": 2624.139600, "delta_seconds": -6488.438145, "speedup_vs_baseline": 3.542064, "component_seconds": 6.824399, "reason": "map scalar dense linear work to M3 simdgroup-matrix hardware with FP32 accumulation", "evidence": "projected"},
-        {"name": "eight-query exact tiled attention", "stage": "Video VAE self-attention", "stage_before_seconds": 716.561895, "stage_after_seconds": 659.524425, "stage_delta_seconds": -57.037470, "stage_timing": "projected", "n_to_n_seconds": 2567.102130, "delta_seconds": -57.037470, "speedup_vs_baseline": 3.620764, "component_seconds": 6.281185, "reason": "reuse 32 K/V rows across eight queries in threadgroup memory while preserving key order", "evidence": "projected"},
-        {"name": "32-row shared-weight GEMM", "stage": "Video VAE dense projections and MLP", "stage_before_seconds": 659.524425, "stage_after_seconds": 637.239960, "stage_delta_seconds": -22.284465, "stage_timing": "projected", "n_to_n_seconds": 2544.817665, "delta_seconds": -22.284465, "speedup_vs_baseline": 3.652470, "component_seconds": 6.068952, "reason": "share staged weights across neighboring activation rows to reduce repeated weight traffic", "evidence": "projected"},
-        {"name": "64-row shared-weight GEMM", "stage": "Video VAE dense projections and MLP", "stage_before_seconds": 637.239960, "stage_after_seconds": 528.169950, "stage_delta_seconds": -109.070010, "stage_timing": "projected", "n_to_n_seconds": 2435.747655, "delta_seconds": -109.070010, "speedup_vs_baseline": 3.816023, "component_seconds": 5.030190, "reason": "amortize every staged weight tile across twice as many activation rows", "evidence": "projected"},
-        {"name": "full current validation", "stage": "full graph measurement; no new optimization", "stage_before_seconds": 528.169950, "stage_after_seconds": 487.273811, "stage_delta_seconds": -40.896139, "stage_timing": "Video VAE before projected and after measured", "non_video_vae_before_seconds": 1907.577705, "non_video_vae_after_seconds": 1931.434426, "non_video_vae_delta_seconds": 23.856721, "n_to_n_seconds": 2418.708237, "delta_seconds_vs_projection": -17.039418, "speedup_vs_baseline": 3.842907, "reason": "replace single-task linear scaling with a complete measurement; do not claim the net projection difference as optimization", "evidence": "measured complete N-to-N"},
-        {"name": "exact BF16 direct output and four-layer H3 command groups", "stage": "H3 dense-attention storage and command submission", "attention_before_ms": 5024.974042, "attention_after_ms": 5012.634167, "reference_fp32_scratch_bytes": 448401408, "direct_fp32_scratch_bytes": 0, "h3_smoke_before_seconds": 17.407398, "h3_smoke_after_seconds": 17.147884, "stage_timing": "measured component and 128x128 smoke", "n_to_n_seconds": null, "reason": "spill FP32 fragments into dead score-tile storage, emit BF16 directly and synchronize once per four layers", "evidence": "112100352 irregular-input BF16 values and all smoke media hashes identical; full 480p exact run not remeasured"},
-        {"name": "experimental compiled tree attention", "stage": "H3 dense attention", "stage_before_seconds": 1898.120497, "stage_after_seconds": 974.544700, "stage_delta_seconds": -923.575797, "stage_timing": "measured complete N-to-N before and after", "n_to_n_before_seconds": 2418.708237, "n_to_n_seconds": 1489.401301, "delta_seconds": -929.306936, "speedup_vs_previous": 1.623947, "speedup_vs_baseline": 6.240675, "reason": "compile fixed geometry into a tree-major row permutation, summaries, query blocks and static routes; update dynamic K/V summaries on Metal", "evidence": "measured complete N-to-N; functional pass; visual-quality regression; opt-in only"}
-      ]
-    },
-    "optimization_ledger": [
-      {
-        "step": 0,
-        "kind": "correctness baseline",
-        "observation": "one-sequence decode produced 86 flat frames",
-        "change": "released seven-latent temporal tasks with five-latent stride and five-frame overlap",
-        "reason": "performance is not valid until the released temporal decoder contract is preserved",
-        "before": {"total_seconds": 7249.519, "video_vae_seconds": 5342.026, "flat_frames": 86},
-        "after": {"total_seconds": 9294.869743, "video_vae_seconds": 7387.292038, "flat_frames": 0},
-        "gate": "124/124 frames and four prompt-aligned shots"
-      },
-      {
-        "step": 1,
-        "kind": "profile",
-        "observation": "Video VAE consumed 79.477091 percent of the valid 480p runtime",
-        "change": "prioritize Video VAE before H3",
-        "reason": "largest measured Amdahl term",
-        "measurement": {"total_seconds": 9294.869743, "video_vae_seconds": 7387.292038, "denoise_seconds": 1881.824388},
-        "gate": "same prompt, seed, Turbo-4 schedule and exact 256-pixel tiles fixed for comparisons"
-      },
-      {
-        "step": 2,
-        "kind": "exact resource binding",
-        "observation": "tensor-backed Metal resources were recreated inside repeated graph execution",
-        "change": "one no-copy Metal buffer per complete mapped checkpoint with tensor offsets reused",
-        "reason": "fixed model resources do not belong in the inner execution loop",
-        "measurement": {"workload": "32x32 Turbo-4 denoise smoke", "before_seconds": 17.122752, "after_seconds": 7.571732},
-        "isolated_full_vae_timing": null,
-        "gate": "final smoke frames and audio unchanged"
-      },
-      {
-        "step": 3,
-        "kind": "exact graph precompute",
-        "observation": "438 tensor bindings, RoPE and per-layer synchronization repeat for every same-shaped tile",
-        "change": "resolve bindings once, precompute 24 complex RoPE coefficients per row, encode four layers per command buffer",
-        "reason": "weight graph and tile geometry are compile-time invariants",
-        "isolated_timing": null,
-        "combined_scalar_reference_seconds": 68.619048,
-        "gate": "binding, RoPE and command grouping regressions exact"
-      },
-      {
-        "step": 4,
-        "kind": "Metal GEMM",
-        "observation": "scalar dense projections dominate; real w1 is 932.992583 ms while scalar-query attention is 63.254375 ms",
-        "change": "32-row FP16 simdgroup-matrix GEMM with FP32 accumulation",
-        "reason": "map dense linear layers to M3 matrix hardware without changing the FP16 public boundary",
-        "before_seconds": 68.619048,
-        "after_seconds": 6.824399,
-        "speedup": 10.055,
-        "gate": {"psnr_db": 66.821340, "ssim": 0.999875}
-      },
-      {
-        "step": 5,
-        "kind": "exact tiled attention",
-        "observation": "scalar queries repeatedly load the same keys and values",
-        "change": "eight queries share 32 K/V rows while retaining original key order",
-        "reason": "reuse K/V in threadgroup memory without changing softmax traversal",
-        "before_seconds": 6.824399,
-        "after_seconds": 6.281185,
-        "speedup": 1.086,
-        "kernel_before_ms": 63.254375,
-        "kernel_after_ms": 45.424225,
-        "gate": {"differing_fp16_values": 0, "compared_values": 3680256, "frames_bit_identical": 22}
-      },
-      {
-        "step": 6,
-        "kind": "shared-weight GEMM",
-        "observation": "neighboring activation rows reload the same weight tiles",
-        "change": "share staged weight tiles across 32 activation rows",
-        "reason": "amortize weight traffic across simdgroups",
-        "before_seconds": 6.281185,
-        "after_seconds": 6.068952,
-        "speedup": 1.035,
-        "gate": "22/22 frames bit identical to prior step"
-      },
-      {
-        "step": 7,
-        "kind": "larger shared-weight GEMM",
-        "observation": "a staged 64x32 weight tile can serve more activation rows",
-        "change": "64 activation rows and 64 output channels per dispatch",
-        "reason": "amortize each staged tile over twice as many activation rows",
-        "before_seconds": 6.068952,
-        "after_seconds": 5.030190,
-        "speedup": 1.207,
-        "w1_scalar_ms": 932.992583,
-        "w1_selected_ms": 37.685250,
-        "gate": "bit identical to 32-row MMA; final component PSNR 66.821340 dB and SSIM 0.999875 versus scalar"
-      },
-      {
-        "step": 8,
-        "kind": "full N-to-N validation",
-        "observation": "one-tile scaling is a projection and cannot establish cache, thermal or media behavior",
-        "change": "run the complete prompt-to-media graph",
-        "reason": "replace projection with measured 480p evidence",
-        "projected_video_vae_seconds": 528.169950,
-        "measured_video_vae_seconds": 487.273811,
-        "video_vae_speedup_vs_valid_baseline": 15.160454,
-        "measured_total_seconds": 2418.708237,
-        "total_speedup_vs_valid_baseline": 3.842907,
-        "executed_work": {"conditioner_layers": 50, "h3_layer_calls": 200, "video_vae_block_calls": 3780, "audio_upsample_stages": 7},
-        "gate": {"video_frames": 124, "flat_frames": 0, "encoded_video_psnr_db": 43.720170, "encoded_video_ssim": 0.984754, "audio_bit_identical": true}
-      }
-    ],
-    "timing_semantics": {
-      "model_runtime_seconds": 2418.708237,
-      "shell_wall_seconds": 2484.38,
-      "shell_only_seconds": 65.671763,
-      "shell_only_work": "preflight SHA-256 of the 28.22 GB text encoder and 780 MB Turbo adapter plus shell overhead",
-      "cache_hits_skip": ["network transfer", "offline checkpoint import", "offline packing"],
-      "cache_hits_do_not_skip": ["conditioner", "H3 denoise", "Video VAE", "Audio VAE", "mux"],
-      "post_run_verification_included": false
-    },
-    "rejected_or_deferred": [
-      {"candidate": "16-query attention", "measurement_ms": 62.300242, "selected_8_query_ms": 45.424225, "decision": "rejected", "reason": "occupancy loss exceeds additional K/V reuse"},
-      {"candidate": "MTLBinaryArchive default loading", "with_archive_setup_ms": 36.619, "without_archive_setup_ms": 32.106, "decision": "rejected as default", "reason": "measured startup increased"},
-      {"candidate": "272x272 spatial tile", "reference_seconds": 14.152762, "candidate_seconds": 10.268616, "psnr_db": 46.319993, "ssim": 0.993609, "decision": "research only", "reason": "complete-run quality gate remains open"},
-      {"candidate": "indirect command buffer", "decision": "deferred", "reason": "CPU encoding is negligible after four-layer grouping and setBytes constants must first become persistent buffers"}
-    ],
-    "one_256_tile_22_frame_component": {
-      "command": "build/minimax-h3-m3-e2e --video-vae-smoke OUTPUT_DIR 256 256 22",
-      "scalar_gemm_and_scalar_attention_seconds": 68.619048,
-      "optimized_seconds": 5.030190,
-      "speedup": 13.641443,
-      "optimized_peak_footprint_bytes": 318146368,
-      "quality_against_scalar": {"psnr_db": 66.821340, "ssim": 0.999875},
-      "boundary": "deterministic synthetic latent through real weights; not prompt-to-media E2E"
-    },
-    "kernel_measurements": {
-      "attention_rows_1797": {
-        "reference_gpu_ms": 63.254375,
-        "tiled8_gpu_ms": 45.424225,
-        "speedup": 1.392525,
-        "differing_fp16_values": 0,
-        "rejected_tiled16_gpu_ms": 62.300242
-      },
-      "w1_rows_1797_output_16384_input_2048": {
-        "scalar_gpu_ms": 932.992583,
-        "mma32_gpu_ms": 55.722931,
-        "mma64_weight_tiled_gpu_ms": 37.685250,
-        "mma64_vs_scalar": 24.757467,
-        "mma64_differing_from_mma32_fp16_values": 0
-      }
-    },
-    "tile_geometry_experiment": {
-      "geometry": {"width": 256, "height": 480, "frames": 22},
-      "reference_256_height_tiles": 3,
-      "reference_seconds": 14.152762,
-      "candidate_272_height_tiles": 2,
-      "candidate_seconds": 10.268616,
-      "speedup": 1.378254,
-      "quality_against_256_tile_oracle": {"psnr_db": 46.319993, "ssim": 0.993609},
-      "status": "experimental; not enabled by default pending perceptual review"
-    },
-    "metal_api_decisions": {
-      "metallib": "enabled; MSL is compiled to AIR and metallib at build time",
-      "binary_archive": "rejected as default: 36.619 ms setup with archive versus 32.106 ms without on this run",
-      "indirect_command_buffer": "not yet useful: four-block grouping makes CPU encode time negligible relative to GPU work; constants must first move from setBytes to buffers",
-      "metal4_machine_learning": "not a deployment option on the pinned macOS 15.7.3 runtime; SDK declarations require macOS 26",
-      "mps": "benchmark oracle only; production path remains custom MSL"
-    },
-    "corrected_480p_measurement": {
-      "default_256_tile_projected_seconds": 528.169950,
-      "default_256_tile_measured_seconds": 487.273811,
-      "measured_vs_projection_percent": -7.742989,
-      "pre_optimization_seconds": 7387.292038,
-      "speedup_vs_pre_optimization": 15.160454,
-      "experimental_272_tile_projected_seconds": 326.679080,
-      "projection_method": "single real-weight tile time multiplied by 7 temporal chunks and 15 or 8 spatial tiles",
-      "status": "exact 256-tile graph measured end to end; experimental 272-tile graph remains projected"
-    }
+  {
+   "name": "mma-64-compiled-conditioning-summary",
+   "route": "11 text seed summaries; 13 audio summaries; one video leaf expanded",
+   "query_tile_rows": 64,
+   "warmup_iterations": 2,
+   "measured_iterations": 5,
+   "tree_nodes": 366,
+   "route_entries": 27369,
+   "maximum_route_entries": 106,
+   "summary_gpu_ms": 3.870908,
+   "summary_wall_ms": 4.00935,
+   "attention_gpu_ms": 45.020433,
+   "attention_wall_ms": 45.214592,
+   "qkv_bytes": 665978880,
+   "summary_bytes": 10493952,
+   "output_bytes": 221992960,
+   "metal_owned_buffer_bytes": 898599392,
+   "footprint_before_bytes": 1737536,
+   "footprint_peak_bytes": 1028113984,
+   "max_abs_error_first_head": 9.47213266e-07,
+   "speedup_vs_first_kernel": 57.057707,
+   "speedup_vs_external_peer_time": 1.322288,
+   "quality_status": "not validated against dense H3 trajectory"
   },
-  "real_weight_runs": [
-    {
-      "name": "downstream-bf16-component-gate",
-      "status": "passed",
-      "n_to_n": false,
-      "conditioner": "fixed one-row state; tokenizer and Qwen conditioner bypassed",
-      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
-      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
-      "geometry": {"width": 32, "height": 32, "frames": 22, "fps": 24},
-      "seed": 42,
-      "sequence_rows": 82,
-      "durations_seconds": {
-        "transformer_download": 1607.877462,
-        "denoise": 232.054895,
-        "video_download": 684.208929,
-        "video_decode": 2.245662,
-        "audio_download": 79.394022,
-        "audio_decode": 2.541665,
-        "mux": 0.709436,
-        "total": 2612.518197
-      },
-      "process_cpu_seconds": {"user": 248.063532, "system": 333.892360},
-      "peak_footprint_bytes": 147950592,
-      "result": "real-weight H3, Video VAE, Audio VAE and mux completed; playable MP4",
-      "quality_status": "structural component gate only; no prompt or reference-media parity claim"
-    },
-    {
-      "name": "free-prompt-n-to-n-gate",
-      "status": "passed-with-quality-limit",
-      "n_to_n": true,
-      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from a user-supplied prompt",
-      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
-      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
-      "prompt": "a jeweled hummingbird hovering beside a red orchid, cinematic natural light",
-      "geometry": {"width": 128, "height": 128, "frames": 22, "fps": 24},
-      "seed": 314159,
-      "prompt_tokens": 15,
-      "sequence_rows": 201,
-      "durations_seconds": {
-        "tokenizer": 0.008322,
-        "text_download": 7.132294,
-        "text_encode": 2.258068,
-        "transformer_download": 1597.824761,
-        "denoise": 287.148395,
-        "video_download": 684.234126,
-        "video_decode": 20.094570,
-        "audio_download": 79.463098,
-        "audio_decode": 2.478901,
-        "mux": 0.490161,
-        "total": 2700.482112
-      },
-      "stage_sum_excluding_h3_weight_downloads_seconds": 319.610711,
-      "total_excluding_h3_weight_downloads_seconds": 338.960127,
-      "process_cpu_seconds": {"user": 213.405619, "system": 299.468569},
-      "peak_footprint_bytes": 173843520,
-      "output": {
-        "path": "artifacts/hummingbird-128x128-euler30/minimax-h3.mp4",
-        "sha256": "576737d39aa5d2f5b24dd2e189cd7ee8dcc3544c9f78ca61ce28458a39c04225",
-        "video_frames": 22,
-        "audio_sample_rate_hz": 32000,
-        "audio_channels": 2
-      },
-      "post_run_mux_correction": "removed -shortest after it truncated the generated 22-frame stream to 20 frames at the AAC boundary; corrected remux took 0.06 s and is excluded from generation timing",
-      "quality_status": "coarse prompt correspondence at 128x128; red flower, green background and a moving dark/white subject are visible, but the subject is not sharply identifiable and reference parity is not established"
-    },
-    {
-      "name": "corrected-480p-turbo4-n-to-n-pre-video-vae-optimization",
-      "status": "passed-with-reference-parity-open",
-      "n_to_n": true,
-      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
-      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
-      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
-      "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
-      "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
-      "geometry": {"width": 864, "height": 480, "frames": 124, "fps": 24},
-      "seed": 42,
-      "sampling": {"profile": "turbo-v4-step600-ema", "evaluations": 4},
-      "prompt_tokens": 240,
-      "sequence_rows": 15639,
-      "durations_seconds": {
-        "tokenizer": 0.009321,
-        "text_download": 4.784617,
-        "text_encode": 4.713666,
-        "transformer_download": 0.0,
-        "turbo_compile": 0.865239,
-        "denoise": 1881.824388,
-        "video_download": 0.0,
-        "video_decode": 7387.292038,
-        "audio_download": 0.0,
-        "audio_decode": 13.531083,
-        "mux": 0.600629,
-        "total": 9294.869743
-      },
-      "process_cpu_seconds": {"user": 12.160168, "system": 40.497675},
-      "peak_footprint_bytes": 4429110144,
-      "maximum_resident_set_bytes": 1714831360,
-      "swaps": 0,
-      "output": {
-        "path": "artifacts/anime-room-864x480-turbo4/minimax-h3.mp4",
-        "sha256": "5736387060ef3d7e0541609320fe591f04f6c4e03fe4c5cb67c2b95fd5fa7acc",
-        "video_frames_declared": 124,
-        "video_frames_decoded": 124,
-        "audio_sample_rate_hz": 32000,
-        "audio_channels": 2
-      },
-      "quality_status": "visual prompt response passed with four distinct shots and zero flat frames; sampled spatial-tile and temporal-chunk boundaries are coherent; same-prompt official full-precision parity and audio semantic listening remain open"
-    },
-    {
-      "name": "optimized-480p-turbo4-n-to-n",
-      "status": "passed-with-reference-parity-open",
-      "n_to_n": true,
-      "repository_commit": "54cdbd3",
-      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
-      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
-      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
-      "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
-      "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
-      "geometry": {"width": 864, "height": 480, "frames": 124, "fps": 24},
-      "seed": 42,
-      "sampling": {"profile": "turbo-v4-step600-ema", "evaluations": 4},
-      "prompt_tokens": 240,
-      "sequence_rows": 15639,
-      "durations_seconds": {
-        "tokenizer": 0.007698,
-        "metal_setup": 0.043712,
-        "text_download": 4.693886,
-        "text_encode": 4.567422,
-        "transformer_download": 0.0,
-        "turbo_compile": 0.868117,
-        "rope_precompute": 0.000996,
-        "denoise": 1898.120497,
-        "video_download": 0.0,
-        "video_precompute": 0.007911,
-        "video_decode": 487.273811,
-        "audio_download": 0.0,
-        "audio_decode": 13.760077,
-        "mux": 0.671221,
-        "other_measured_runtime": 8.692889,
-        "total": 2418.708237,
-        "outer_wall_including_preflight_hashes": 2484.38
-      },
-      "denoise_layer_subtotal_seconds": {
-        "qkv_and_output_projections": 248.383771,
-        "dense_attention": 1143.532739,
-        "mlp": 495.065992,
-        "sum": 1886.982502,
-        "calls_per_category": 200
-      },
-      "comparison_to_pre_optimization": {
-        "runtime_speedup": 3.842907,
-        "runtime_reduction_percent": 73.978030,
-        "video_vae_speedup": 15.160454,
-        "video_vae_reduction_percent": 93.403891,
-        "denoise_change_percent": 0.865974
-      },
-      "process_cpu_seconds": {"user": 11.030184, "system": 30.704046},
-      "outer_process_tree_cpu_seconds": {"user": 72.80, "system": 35.23},
-      "peak_footprint_bytes": 4440725568,
-      "maximum_resident_set_bytes": 1062879232,
-      "page_faults": 1103285,
-      "swaps": 0,
-      "output": {
-        "local_run_path": "tmp/minimax-h3-runs/20260816-480p-e2e-54cdbd3/minimax-h3.mp4",
-        "sha256": "afd7d15af4409e5dfe0d72d3092abdc31198a95ad822758dc6dbc5090b0d0bf6",
-        "bytes": 867085,
-        "duration_seconds": 5.167,
-        "video_codec": "H.264",
-        "video_frames_declared": 124,
-        "video_frames_decoded": 124,
-        "audio_codec": "AAC",
-        "audio_sample_rate_hz": 32000,
-        "audio_channels": 2,
-        "audio_source_sha256": "37dff2b1ead54637d402ffaf1fee4f7a4077dcccf3d2f02a5efbda9942439d73"
-      },
-      "verification": {
-        "flat_frames": 0,
-        "minimum_luma_range": 180,
-        "mean_luma_range": 206.943548,
-        "maximum_luma_range": 235,
-        "adjacent_frame_differences": 123,
-        "adjacent_difference_yavg_min": 0.025275,
-        "adjacent_difference_yavg_mean": 4.494335,
-        "adjacent_difference_yavg_max": 87.761300,
-        "scene_changes_seconds": [1.541667, 2.583333, 3.916667],
-        "comparison_to_pre_optimization_encoded_video": {"psnr_db": 43.720170, "ssim": 0.984754},
-        "audio_source_bit_identical_to_pre_optimization": true,
-        "visual_review": "four prompt-aligned shots; no sampled spatial seam or temporal-chunk break"
-      },
-      "quality_status": "visual prompt response and media structure passed; same-prompt official full-precision parity and audio semantic listening remain open"
-    },
-    {
-      "name": "experimental-480p-turbo4-compiled-tree-attention",
-      "status": "functional-pass-quality-regression",
-      "n_to_n": true,
-      "default_runtime": false,
-      "runtime_switch": "MINIMAX_H3_TREE_ATTENTION=conservative",
-      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
-      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
-      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
-      "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
-      "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
-      "geometry": {"width": 864, "height": 480, "frames": 124, "fps": 24},
-      "seed": 42,
-      "sampling": {"profile": "turbo-v4-step600-ema", "evaluations": 4},
-      "prompt_tokens": 240,
-      "sequence_rows": 15639,
-      "compiled_tree": {
-        "exact_conditioning_rows": 654,
-        "nodes": 342,
-        "query_blocks": 307,
-        "route_entries": 140284,
-        "maximum_route_entries": 548,
-        "tensor_and_summary_bytes": 906608640,
-        "runtime_summary_policy": "rebuild leaf, frame, temporal and root K/V summaries for every dynamic layer"
-      },
-      "durations_seconds": {
-        "tokenizer": 0.008059,
-        "metal_setup": 0.026800,
-        "text_download": 4.273334,
-        "text_encode": 4.635396,
-        "transformer_download": 0.0,
-        "turbo_compile": 0.877777,
-        "rope_precompute": 0.000916,
-        "denoise": 974.544700,
-        "video_download": 0.0,
-        "video_precompute": 0.007417,
-        "video_decode": 483.809133,
-        "audio_download": 0.0,
-        "audio_decode": 13.697438,
-        "mux": 0.648403,
-        "other_measured_runtime": 6.871928,
-        "total": 1489.401301,
-        "outer_wall_including_preflight_hashes": 1557.24
-      },
-      "comparison_to_exact_run": {
-        "total_delta_seconds": -929.306936,
-        "runtime_speedup": 1.623947,
-        "runtime_reduction_percent": 38.421622,
-        "denoise_delta_seconds": -923.575797,
-        "denoise_speedup": 1.947700,
-        "denoise_reduction_percent": 48.657385,
-        "peak_footprint_delta_bytes": 490242048,
-        "peak_footprint_increase_percent": 11.039684
-      },
-      "comparison_to_pre_optimization": {
-        "runtime_speedup": 6.240675,
-        "runtime_reduction_percent": 83.976093
-      },
-      "process_cpu_seconds": {"user": 3.751192, "system": 11.124034},
-      "outer_process_tree_cpu_seconds": {"user": 69.68, "system": 15.63},
-      "peak_footprint_bytes": 4930967616,
-      "maximum_resident_set_bytes": 1361362944,
-      "page_faults": 1103210,
-      "swaps": 0,
-      "output": {
-        "local_run_path": "tmp/minimax-h3-runs/20260817-480p-tree-conservative/minimax-h3.mp4",
-        "sha256": "4c773da92ff290babf02a5b1a5553b9f320ab45db43cfe3b7a43fa1598c7b97c",
-        "bytes": 1747361,
-        "duration_seconds": 5.167,
-        "video_codec": "H.264",
-        "video_frames_declared": 124,
-        "video_frames_decoded": 124,
-        "audio_codec": "AAC",
-        "audio_sample_rate_hz": 32000,
-        "audio_channels": 2,
-        "audio_source_sha256": "2f7d9606379760c9de4ace90145c60fe77ccc229ab439c9a45753801f885940f"
-      },
-      "verification": {
-        "flat_frames": 0,
-        "minimum_luma_range": 175,
-        "mean_luma_range": 212.250,
-        "maximum_luma_range": 239,
-        "adjacent_frame_differences": 123,
-        "adjacent_difference_yavg_min": 0.289653,
-        "adjacent_difference_yavg_mean": 9.814484,
-        "adjacent_difference_yavg_max": 87.718600,
-        "scene_changes_seconds": [0.458333, 0.708333, 1.083333, 1.416667, 1.708333, 1.791667, 2.125, 2.375, 4.458333, 4.833333],
-        "comparison_to_exact_video": {"psnr_db": 13.455967, "ssim": 0.659928},
-        "audio_peak_dbfs": -6.654165,
-        "audio_rms_dbfs": -23.470915,
-        "audio_dc_offset": 0.000009,
-        "visual_review": "four requested shot categories remain visible, but detail is softer and transitions show stronger ghosting than the exact run",
-        "contact_sheet": "artifacts/anime-room-864x480-turbo4/tree-conservative-contact-sheet.png"
-      },
-      "quality_status": "media structure passed, visual-quality gate regressed; experimental opt-in only and not a replacement for exact attention"
-    },
-    {
-      "name": "experimental-480p-turbo4-frame-safe-late-layer-attention",
-      "status": "single-prompt-ghosting-pass-exact-parity-open",
-      "n_to_n": true,
-      "default_runtime": false,
-      "runtime_switch": "MINIMAX_H3_TREE_ATTENTION=quality",
-      "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
-      "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
-      "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
-      "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
-      "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
-      "geometry": {"width": 864, "height": 480, "frames": 124, "fps": 24},
-      "seed": 42,
-      "sampling": {"profile": "turbo-v4-step600-ema", "evaluations": 4},
-      "prompt_tokens": 240,
-      "sequence_rows": 15639,
-      "compiled_tree": {
-        "profile": "frame-safe",
-        "exact_conditioning_rows": 654,
-        "nodes": 342,
-        "query_blocks": 307,
-        "route_entries": 1281310,
-        "maximum_route_entries": 14985,
-        "step_mask": "0x00000008",
-        "layer_mask": "0x3ff0000000000",
-        "approximate_attention_calls": 10,
-        "total_attention_calls": 200,
-        "tensor_and_summary_bytes": 906608640,
-        "runtime_summary_policy": "rebuild per-frame leaf K/V summaries only; conditioning and 190 of 200 H3 calls remain exact"
-      },
-      "same_run_late_layer_groups": {
-        "exact_reference_seconds": 92.597490,
-        "frame_safe_seconds": 70.313368,
-        "delta_seconds": -22.284122,
-        "speedup": 1.316926,
-        "reduction_percent": 24.065579
-      },
-      "durations_seconds": {
-        "tokenizer": 0.009389,
-        "metal_setup": 0.040799,
-        "text_download": 4.308655,
-        "text_encode": 4.639853,
-        "transformer_download": 0.0,
-        "turbo_compile": 0.869813,
-        "rope_precompute": 0.001027,
-        "denoise": 1831.966125,
-        "video_download": 0.0,
-        "video_precompute": 0.007414,
-        "video_decode": 481.876037,
-        "audio_download": 0.0,
-        "audio_decode": 13.649289,
-        "mux": 0.535732,
-        "other_measured_runtime": 6.830095,
-        "total": 2344.734228
-      },
-      "comparison_to_earlier_exact_run": {
-        "total_delta_seconds": -73.974009,
-        "runtime_speedup": 1.031549,
-        "runtime_reduction_percent": 3.058410,
-        "denoise_delta_seconds": -66.154372,
-        "denoise_speedup": 1.036111,
-        "denoise_reduction_percent": 3.485257,
-        "warning": "the complete-run difference includes run-to-run variation; use same_run_late_layer_groups to attribute route speed",
-        "peak_footprint_delta_bytes": 481181824,
-        "peak_footprint_increase_percent": 10.835658
-      },
-      "peak_footprint_bytes": 4921907392,
-      "swaps": 0,
-      "output": {
-        "local_run_path": "tmp/minimax-h3-runs/20260817-480p-frame-safe-quality/minimax-h3.mp4",
-        "sha256": "1b648fb8a59aa55998fadf6c122382c2bc827f70477122150823173d4351db33",
-        "bytes": 887547,
-        "duration_seconds": 5.167,
-        "video_codec": "H.264",
-        "video_frames_declared": 124,
-        "video_frames_decoded": 124,
-        "video_source_sha256": "632582d84fd051a4ed5c36a59bb2642e30ae4a609f0c0478882816b333b64265",
-        "audio_codec": "AAC",
-        "audio_sample_rate_hz": 32000,
-        "audio_channels": 2,
-        "audio_source_sha256": "e890f859b7fd528458896e98465e9c6c9210d7c1ee501edbe64aa3922d771a01"
-      },
-      "verification": {
-        "flat_frames": 0,
-        "minimum_luma_range": 181,
-        "mean_luma_range": 215.596774,
-        "maximum_luma_range": 241,
-        "adjacent_frame_differences": 123,
-        "adjacent_difference_yavg_min": 0.042564,
-        "adjacent_difference_yavg_mean": 4.283097,
-        "adjacent_difference_yavg_max": 85.256500,
-        "scene_changes_seconds": [1.541667, 2.583333, 3.916667],
-        "comparison_to_exact_video": {"psnr_db": 32.384649, "ssim": 0.932134},
-        "blur_mean": 5.7687158,
-        "visual_review": "same four shots and scene boundaries as exact; no double exposure in uniform or transition samples",
-        "contact_sheet": "artifacts/anime-room-864x480-turbo4/frame-safe-quality-contact-sheet.png",
-        "transition_sheet": "artifacts/anime-room-864x480-turbo4/frame-safe-quality-transitions.png"
-      },
-      "quality_status": "single-prompt temporal and ghosting gate passed; exact numeric parity, audio listening and multi-prompt quality gate remain open"
-    }
-  ],
-  "commands": {
-    "attention": "make build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib 5 2",
-    "exact_dense_attention": "make minimax-h3-m3-dense-attention-bench",
-    "projection": "make build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib 15485 5 2",
-    "n_to_n": "MINIMAX_H3_TEXT_ENCODER_URL=file://$PWD/tmp/minimax-h3-text-encoder.safetensors build/minimax-h3-m3-e2e 'a jeweled hummingbird hovering beside a red orchid, cinematic natural light' models/minimax-h3/targets/apple-m3-pro/artifacts/hummingbird-128x128-euler30 128 128 22 314159",
-    "corrected_480p": "MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt",
-    "experimental_tree_480p": "MINIMAX_H3_TREE_ATTENTION=conservative MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-tree-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt",
-    "frame_safe_quality_480p": "MINIMAX_H3_TREE_ATTENTION=quality MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-frame-safe-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt"
+  {
+   "name": "mma-64-compiled-conditioning-summary-with-lse",
+   "route": "same compiled-conditioning seed; emits one FP32 LSE per row/head for later token selection",
+   "query_tile_rows": 64,
+   "warmup_iterations": 2,
+   "measured_iterations": 5,
+   "tree_nodes": 366,
+   "route_entries": 27369,
+   "maximum_route_entries": 106,
+   "summary_gpu_ms": 4.236458,
+   "summary_wall_ms": 4.41275,
+   "attention_gpu_ms": 49.893167,
+   "attention_wall_ms": 50.1251,
+   "qkv_bytes": 665978880,
+   "summary_bytes": 10493952,
+   "output_bytes": 221992960,
+   "lse_bytes": 3468640,
+   "metal_owned_buffer_bytes": 902068032,
+   "footprint_before_bytes": 1721088,
+   "footprint_peak_bytes": 1031505280,
+   "max_abs_error_first_head": 9.47213266e-07,
+   "speedup_vs_first_kernel": 51.48526,
+   "speedup_vs_external_peer_time": 1.193149,
+   "quality_status": "not validated against dense H3 trajectory"
+  },
+  {
+   "name": "dense-attention-direct-bf16-output",
+   "scope": "one exact 15639-row, 56-head, 128-dimension attention call",
+   "warmup_iterations": 0,
+   "measured_iterations": 1,
+   "reference_fp32_scratch_bytes": 448401408,
+   "reference_gpu_ms": 5024.974042,
+   "direct_bf16_gpu_ms": 5012.634167,
+   "speedup": 1.002462,
+   "compared_bf16_values": 112100352,
+   "differing_bf16_values": 0,
+   "quality_status": "bit-identical"
+  },
+  {
+   "name": "four-layer-h3-command-groups",
+   "scope": "128x128x22 Turbo-4 exact-attention N-to-N smoke",
+   "denoise_before_seconds": 17.407398,
+   "denoise_after_seconds": 17.147884,
+   "speedup": 1.015133,
+   "video_sha256_identical": true,
+   "audio_sha256_identical": true,
+   "muxed_mp4_sha256_identical": true,
+   "quality_status": "bit-identical media"
+  },
+  {
+   "name": "dense-attention-single-pass-flash",
+   "date": "2026-08-17",
+   "finding": "the exact two-pass attention kernel recomputes every QK score for the probability pass; a single-pass online-softmax kernel with a conditional diagonal-MMA accumulator rescale, transposed key staging (transposed simdgroup_load is slow on this GPU), one exponential per score, and bf16 probability/value fragments feeding fp32 accumulators (Metal supports mixed bfloat-input MMA) runs 5007 -> 3485 ms at 15639 rows x 56 heads (1.44x)",
+   "cost_breakdown_ms": {
+    "qk_section": 1310,
+    "pv_section": 1300,
+    "staging_softmax_barriers": 875
+   },
+   "ceiling": "threadgroup fragment loads pair one-to-one with MMAs in this tile shape; further gains need a shape that reuses staged fragments across more math",
+   "rejected_variants": "16-key blocks alone (+2 percent), head-major device layout (+3 percent, L2 already covers the strided reads), single-exp restructure (neutral)"
+  },
+  {
+   "name": "frame-safe-candidate-rejection",
+   "date": "2026-08-17",
+   "verdict": "rejected: the late-layer (40-49, last Turbo step) approximation shows severe vertical streak ghosting and eye-edge echoes on the violent-motion close-up (frame 45) of the anime reference prompt under frame-level review; the whole-video adjacent-luma average that admitted it (4.283 vs 4.496 exact) averages localized motion-shot smear away and is an insufficient gate",
+   "cost_benefit": "the candidate saved 74 s of 2418 (3.1 percent); the exact-path flash kernel now saves 367 s with no approximation",
+   "policy": "quality gates for attention changes must include per-frame review of the highest-motion shot; whole-video averages alone do not gate"
   }
+ ],
+ "projection_experiments": {
+  "scope": "one synthetic W4 5376-to-14336 projection; not a complete H3 block",
+  "weight_format": "affine W4 group-64 with FP16 scale and bias",
+  "accumulation": "FP16 8x8 MMA; every 64-column partial is accumulated into FP32",
+  "equivalent_projections_per_dense_block": 5,
+  "runs": [
+   {
+    "name": "mma-32-output-rows",
+    "batch_rows": 15485,
+    "warmup_iterations": 1,
+    "measured_iterations": 3,
+    "gpu_ms": 662.15575,
+    "effective_tflops": 3.604693
+   },
+   {
+    "name": "mma-64-output-rows-precise",
+    "batch_rows": 4646,
+    "warmup_iterations": 2,
+    "measured_iterations": 5,
+    "gpu_ms": 194.601567,
+    "wall_ms": 194.8447,
+    "effective_tflops": 3.68002,
+    "metal_owned_buffer_bytes": 227541008,
+    "footprint_peak_bytes": 305988992,
+    "max_abs_error_first_8": 0.0025806427
+   },
+   {
+    "name": "mma-64-output-rows-precise",
+    "batch_rows": 15485,
+    "warmup_iterations": 2,
+    "measured_iterations": 5,
+    "gpu_ms": 618.205008,
+    "wall_ms": 618.406817,
+    "effective_tflops": 3.860966,
+    "weight_bytes": 38535168,
+    "metadata_bytes": 4816896,
+    "input_bytes": 166526976,
+    "output_bytes": 444071936,
+    "metal_owned_buffer_bytes": 653950992,
+    "footprint_peak_bytes": 731366656,
+    "max_abs_error_first_8": 0.0025806427,
+    "speedup_vs_32_output_rows": 1.071094
+   }
+  ],
+  "sparse_seed_central_band": [
+   {
+    "evaluation": 0,
+    "query_rows": 15485,
+    "kv_projection_rows": 15485,
+    "mlp_rows": 15485,
+    "projection_macs_fraction_of_dense": 1.0,
+    "reason": "no prior branch cache"
+   },
+   {
+    "evaluation": 1,
+    "query_rows": 3054,
+    "kv_projection_rows": 3420,
+    "mlp_rows": 2583,
+    "projection_macs_fraction_of_dense": 0.1837
+   },
+   {
+    "evaluation": 2,
+    "query_rows": 4914,
+    "kv_projection_rows": 5280,
+    "mlp_rows": 4144,
+    "projection_macs_fraction_of_dense": 0.292231
+   },
+   {
+    "evaluation": 3,
+    "query_rows": 7993,
+    "kv_projection_rows": 8359,
+    "mlp_rows": 7203,
+    "projection_macs_fraction_of_dense": 0.490294
+   }
+  ],
+  "real_weight_boundary": {
+   "tensor": "transformer_blocks.0.mlp.fc1",
+   "batch_rows": 11,
+   "activation_dtype": "BF16",
+   "output_dtype": "BF16",
+   "gpu_ms": 5.322375,
+   "reference": "scalar C with FP32 accumulation and BF16 output rounding",
+   "max_abs_error_first_8": 0.00282287598,
+   "status": "passed"
+  },
+  "summary_projection_identity": "For bias-free H3 K/V, W*mean(normalized hidden) equals mean(W*normalized hidden).",
+  "quality_status": "one real Q4/BF16 projection boundary passes; complete block and trajectory gates remain open"
+ },
+ "video_vae_optimization": {
+  "scope": "real 2.604B-parameter ViT3D Video VAE on Apple M3 Pro",
+  "architecture": {
+   "layers": 36,
+   "hidden": 2048,
+   "heads": 32,
+   "head_dimension": 64,
+   "ffn_pair_width": 8192,
+   "reference_tile": {
+    "pixels": [
+     256,
+     256
+    ],
+    "latent_frames": 7,
+    "tokens": 1792,
+    "rows_with_registers": 1797
+   },
+   "corrected_480p_schedule": {
+    "temporal_chunks": 7,
+    "spatial_tiles_per_chunk": 15,
+    "transformer_block_calls": 3780
+   },
+   "dense_mac_per_row_per_block": 67108864,
+   "corrected_480p_dense_mac": 455847696138240
+  },
+  "exact_precompute_and_runtime": [
+   "one no-copy Metal buffer for each complete mapped weight image",
+   "438 Video VAE tensor bindings resolved once before the tile loop",
+   "24 complex ViT3D RoPE coefficients per row generated once per tile geometry",
+   "four transformer blocks encoded per command buffer instead of one",
+   "64 activation rows and 64 output channels per FP16 simdgroup-matrix tile",
+   "32 K/V rows shared by eight attention queries in threadgroup memory"
+  ],
+  "n_to_n_timeline": {
+   "workload": "864x480x124, 240 prompt tokens, Turbo-4, seed 42, exact 256-pixel Video VAE tiles",
+   "projection_formula": "1907.577705 measured baseline seconds outside Video VAE + 105 * measured 256x256x22 Video VAE task seconds",
+   "invalid_fast_run_excluded": {
+    "total_seconds": 7249.519,
+    "reason": "86 of 124 frames were flat"
+   },
+   "milestones": [
+    {
+     "name": "correct seven-chunk baseline",
+     "stage": "Video VAE",
+     "stage_after_seconds": 7387.292038,
+     "stage_timing": "measured",
+     "n_to_n_seconds": 9294.869743,
+     "delta_seconds": null,
+     "speedup_vs_baseline": 1.0,
+     "reason": "establish the released seven-chunk temporal graph; this is the valid baseline, not an optimization",
+     "evidence": "measured complete N-to-N"
+    },
+    {
+     "name": "whole-image buffers, static bindings, RoPE and four-layer command grouping",
+     "stage": "Video VAE setup and execution; H3 resource binding",
+     "stage_before_seconds": 7387.292038,
+     "stage_after_seconds": 7205.00004,
+     "stage_delta_seconds": -182.291998,
+     "stage_timing": "Video VAE before measured and after projected",
+     "h3_smoke_before_seconds": 17.122752,
+     "h3_smoke_after_seconds": 7.571732,
+     "h3_smoke_delta_seconds": -9.55102,
+     "h3_smoke_included_in_n_to_n_projection": false,
+     "n_to_n_seconds": 9112.577745,
+     "delta_seconds": -182.291998,
+     "speedup_vs_baseline": 1.020004,
+     "component_seconds": 68.619048,
+     "reason": "reuse fixed Metal images, bindings and RoPE and encode four Video VAE layers per command buffer",
+     "evidence": "Video VAE projected; H3 32x32 smoke measured separately; exact setup bundle not timed per subchange"
+    },
+    {
+     "name": "32-row simdgroup-matrix GEMM",
+     "stage": "Video VAE dense projections and MLP",
+     "stage_before_seconds": 7205.00004,
+     "stage_after_seconds": 716.561895,
+     "stage_delta_seconds": -6488.438145,
+     "stage_timing": "projected",
+     "n_to_n_seconds": 2624.1396,
+     "delta_seconds": -6488.438145,
+     "speedup_vs_baseline": 3.542064,
+     "component_seconds": 6.824399,
+     "reason": "map scalar dense linear work to M3 simdgroup-matrix hardware with FP32 accumulation",
+     "evidence": "projected"
+    },
+    {
+     "name": "eight-query exact tiled attention",
+     "stage": "Video VAE self-attention",
+     "stage_before_seconds": 716.561895,
+     "stage_after_seconds": 659.524425,
+     "stage_delta_seconds": -57.03747,
+     "stage_timing": "projected",
+     "n_to_n_seconds": 2567.10213,
+     "delta_seconds": -57.03747,
+     "speedup_vs_baseline": 3.620764,
+     "component_seconds": 6.281185,
+     "reason": "reuse 32 K/V rows across eight queries in threadgroup memory while preserving key order",
+     "evidence": "projected"
+    },
+    {
+     "name": "32-row shared-weight GEMM",
+     "stage": "Video VAE dense projections and MLP",
+     "stage_before_seconds": 659.524425,
+     "stage_after_seconds": 637.23996,
+     "stage_delta_seconds": -22.284465,
+     "stage_timing": "projected",
+     "n_to_n_seconds": 2544.817665,
+     "delta_seconds": -22.284465,
+     "speedup_vs_baseline": 3.65247,
+     "component_seconds": 6.068952,
+     "reason": "share staged weights across neighboring activation rows to reduce repeated weight traffic",
+     "evidence": "projected"
+    },
+    {
+     "name": "64-row shared-weight GEMM",
+     "stage": "Video VAE dense projections and MLP",
+     "stage_before_seconds": 637.23996,
+     "stage_after_seconds": 528.16995,
+     "stage_delta_seconds": -109.07001,
+     "stage_timing": "projected",
+     "n_to_n_seconds": 2435.747655,
+     "delta_seconds": -109.07001,
+     "speedup_vs_baseline": 3.816023,
+     "component_seconds": 5.03019,
+     "reason": "amortize every staged weight tile across twice as many activation rows",
+     "evidence": "projected"
+    },
+    {
+     "name": "full current validation",
+     "stage": "full graph measurement; no new optimization",
+     "stage_before_seconds": 528.16995,
+     "stage_after_seconds": 487.273811,
+     "stage_delta_seconds": -40.896139,
+     "stage_timing": "Video VAE before projected and after measured",
+     "non_video_vae_before_seconds": 1907.577705,
+     "non_video_vae_after_seconds": 1931.434426,
+     "non_video_vae_delta_seconds": 23.856721,
+     "n_to_n_seconds": 2418.708237,
+     "delta_seconds_vs_projection": -17.039418,
+     "speedup_vs_baseline": 3.842907,
+     "reason": "replace single-task linear scaling with a complete measurement; do not claim the net projection difference as optimization",
+     "evidence": "measured complete N-to-N"
+    },
+    {
+     "name": "exact BF16 direct output and four-layer H3 command groups",
+     "stage": "H3 dense-attention storage and command submission",
+     "attention_before_ms": 5024.974042,
+     "attention_after_ms": 5012.634167,
+     "reference_fp32_scratch_bytes": 448401408,
+     "direct_fp32_scratch_bytes": 0,
+     "h3_smoke_before_seconds": 17.407398,
+     "h3_smoke_after_seconds": 17.147884,
+     "stage_timing": "measured component and 128x128 smoke",
+     "n_to_n_seconds": null,
+     "reason": "spill FP32 fragments into dead score-tile storage, emit BF16 directly and synchronize once per four layers",
+     "evidence": "112100352 irregular-input BF16 values and all smoke media hashes identical; full 480p exact run not remeasured"
+    },
+    {
+     "name": "experimental compiled tree attention",
+     "stage": "H3 dense attention",
+     "stage_before_seconds": 1898.120497,
+     "stage_after_seconds": 974.5447,
+     "stage_delta_seconds": -923.575797,
+     "stage_timing": "measured complete N-to-N before and after",
+     "n_to_n_before_seconds": 2418.708237,
+     "n_to_n_seconds": 1489.401301,
+     "delta_seconds": -929.306936,
+     "speedup_vs_previous": 1.623947,
+     "speedup_vs_baseline": 6.240675,
+     "reason": "compile fixed geometry into a tree-major row permutation, summaries, query blocks and static routes; update dynamic K/V summaries on Metal",
+     "evidence": "measured complete N-to-N; functional pass; visual-quality regression; opt-in only"
+    }
+   ]
+  },
+  "optimization_ledger": [
+   {
+    "step": 0,
+    "kind": "correctness baseline",
+    "observation": "one-sequence decode produced 86 flat frames",
+    "change": "released seven-latent temporal tasks with five-latent stride and five-frame overlap",
+    "reason": "performance is not valid until the released temporal decoder contract is preserved",
+    "before": {
+     "total_seconds": 7249.519,
+     "video_vae_seconds": 5342.026,
+     "flat_frames": 86
+    },
+    "after": {
+     "total_seconds": 9294.869743,
+     "video_vae_seconds": 7387.292038,
+     "flat_frames": 0
+    },
+    "gate": "124/124 frames and four prompt-aligned shots"
+   },
+   {
+    "step": 1,
+    "kind": "profile",
+    "observation": "Video VAE consumed 79.477091 percent of the valid 480p runtime",
+    "change": "prioritize Video VAE before H3",
+    "reason": "largest measured Amdahl term",
+    "measurement": {
+     "total_seconds": 9294.869743,
+     "video_vae_seconds": 7387.292038,
+     "denoise_seconds": 1881.824388
+    },
+    "gate": "same prompt, seed, Turbo-4 schedule and exact 256-pixel tiles fixed for comparisons"
+   },
+   {
+    "step": 2,
+    "kind": "exact resource binding",
+    "observation": "tensor-backed Metal resources were recreated inside repeated graph execution",
+    "change": "one no-copy Metal buffer per complete mapped checkpoint with tensor offsets reused",
+    "reason": "fixed model resources do not belong in the inner execution loop",
+    "measurement": {
+     "workload": "32x32 Turbo-4 denoise smoke",
+     "before_seconds": 17.122752,
+     "after_seconds": 7.571732
+    },
+    "isolated_full_vae_timing": null,
+    "gate": "final smoke frames and audio unchanged"
+   },
+   {
+    "step": 3,
+    "kind": "exact graph precompute",
+    "observation": "438 tensor bindings, RoPE and per-layer synchronization repeat for every same-shaped tile",
+    "change": "resolve bindings once, precompute 24 complex RoPE coefficients per row, encode four layers per command buffer",
+    "reason": "weight graph and tile geometry are compile-time invariants",
+    "isolated_timing": null,
+    "combined_scalar_reference_seconds": 68.619048,
+    "gate": "binding, RoPE and command grouping regressions exact"
+   },
+   {
+    "step": 4,
+    "kind": "Metal GEMM",
+    "observation": "scalar dense projections dominate; real w1 is 932.992583 ms while scalar-query attention is 63.254375 ms",
+    "change": "32-row FP16 simdgroup-matrix GEMM with FP32 accumulation",
+    "reason": "map dense linear layers to M3 matrix hardware without changing the FP16 public boundary",
+    "before_seconds": 68.619048,
+    "after_seconds": 6.824399,
+    "speedup": 10.055,
+    "gate": {
+     "psnr_db": 66.82134,
+     "ssim": 0.999875
+    }
+   },
+   {
+    "step": 5,
+    "kind": "exact tiled attention",
+    "observation": "scalar queries repeatedly load the same keys and values",
+    "change": "eight queries share 32 K/V rows while retaining original key order",
+    "reason": "reuse K/V in threadgroup memory without changing softmax traversal",
+    "before_seconds": 6.824399,
+    "after_seconds": 6.281185,
+    "speedup": 1.086,
+    "kernel_before_ms": 63.254375,
+    "kernel_after_ms": 45.424225,
+    "gate": {
+     "differing_fp16_values": 0,
+     "compared_values": 3680256,
+     "frames_bit_identical": 22
+    }
+   },
+   {
+    "step": 6,
+    "kind": "shared-weight GEMM",
+    "observation": "neighboring activation rows reload the same weight tiles",
+    "change": "share staged weight tiles across 32 activation rows",
+    "reason": "amortize weight traffic across simdgroups",
+    "before_seconds": 6.281185,
+    "after_seconds": 6.068952,
+    "speedup": 1.035,
+    "gate": "22/22 frames bit identical to prior step"
+   },
+   {
+    "step": 7,
+    "kind": "larger shared-weight GEMM",
+    "observation": "a staged 64x32 weight tile can serve more activation rows",
+    "change": "64 activation rows and 64 output channels per dispatch",
+    "reason": "amortize each staged tile over twice as many activation rows",
+    "before_seconds": 6.068952,
+    "after_seconds": 5.03019,
+    "speedup": 1.207,
+    "w1_scalar_ms": 932.992583,
+    "w1_selected_ms": 37.68525,
+    "gate": "bit identical to 32-row MMA; final component PSNR 66.821340 dB and SSIM 0.999875 versus scalar"
+   },
+   {
+    "step": 8,
+    "kind": "full N-to-N validation",
+    "observation": "one-tile scaling is a projection and cannot establish cache, thermal or media behavior",
+    "change": "run the complete prompt-to-media graph",
+    "reason": "replace projection with measured 480p evidence",
+    "projected_video_vae_seconds": 528.16995,
+    "measured_video_vae_seconds": 487.273811,
+    "video_vae_speedup_vs_valid_baseline": 15.160454,
+    "measured_total_seconds": 2418.708237,
+    "total_speedup_vs_valid_baseline": 3.842907,
+    "executed_work": {
+     "conditioner_layers": 50,
+     "h3_layer_calls": 200,
+     "video_vae_block_calls": 3780,
+     "audio_upsample_stages": 7
+    },
+    "gate": {
+     "video_frames": 124,
+     "flat_frames": 0,
+     "encoded_video_psnr_db": 43.72017,
+     "encoded_video_ssim": 0.984754,
+     "audio_bit_identical": true
+    }
+   }
+  ],
+  "timing_semantics": {
+   "model_runtime_seconds": 2418.708237,
+   "shell_wall_seconds": 2484.38,
+   "shell_only_seconds": 65.671763,
+   "shell_only_work": "preflight SHA-256 of the 28.22 GB text encoder and 780 MB Turbo adapter plus shell overhead",
+   "cache_hits_skip": [
+    "network transfer",
+    "offline checkpoint import",
+    "offline packing"
+   ],
+   "cache_hits_do_not_skip": [
+    "conditioner",
+    "H3 denoise",
+    "Video VAE",
+    "Audio VAE",
+    "mux"
+   ],
+   "post_run_verification_included": false
+  },
+  "rejected_or_deferred": [
+   {
+    "candidate": "16-query attention",
+    "measurement_ms": 62.300242,
+    "selected_8_query_ms": 45.424225,
+    "decision": "rejected",
+    "reason": "occupancy loss exceeds additional K/V reuse"
+   },
+   {
+    "candidate": "MTLBinaryArchive default loading",
+    "with_archive_setup_ms": 36.619,
+    "without_archive_setup_ms": 32.106,
+    "decision": "rejected as default",
+    "reason": "measured startup increased"
+   },
+   {
+    "candidate": "272x272 spatial tile",
+    "reference_seconds": 14.152762,
+    "candidate_seconds": 10.268616,
+    "psnr_db": 46.319993,
+    "ssim": 0.993609,
+    "decision": "research only",
+    "reason": "complete-run quality gate remains open"
+   },
+   {
+    "candidate": "indirect command buffer",
+    "decision": "deferred",
+    "reason": "CPU encoding is negligible after four-layer grouping and setBytes constants must first become persistent buffers"
+   }
+  ],
+  "one_256_tile_22_frame_component": {
+   "command": "build/minimax-h3-m3-e2e --video-vae-smoke OUTPUT_DIR 256 256 22",
+   "scalar_gemm_and_scalar_attention_seconds": 68.619048,
+   "optimized_seconds": 5.03019,
+   "speedup": 13.641443,
+   "optimized_peak_footprint_bytes": 318146368,
+   "quality_against_scalar": {
+    "psnr_db": 66.82134,
+    "ssim": 0.999875
+   },
+   "boundary": "deterministic synthetic latent through real weights; not prompt-to-media E2E"
+  },
+  "kernel_measurements": {
+   "attention_rows_1797": {
+    "reference_gpu_ms": 63.254375,
+    "tiled8_gpu_ms": 45.424225,
+    "speedup": 1.392525,
+    "differing_fp16_values": 0,
+    "rejected_tiled16_gpu_ms": 62.300242
+   },
+   "w1_rows_1797_output_16384_input_2048": {
+    "scalar_gpu_ms": 932.992583,
+    "mma32_gpu_ms": 55.722931,
+    "mma64_weight_tiled_gpu_ms": 37.68525,
+    "mma64_vs_scalar": 24.757467,
+    "mma64_differing_from_mma32_fp16_values": 0
+   }
+  },
+  "tile_geometry_experiment": {
+   "geometry": {
+    "width": 256,
+    "height": 480,
+    "frames": 22
+   },
+   "reference_256_height_tiles": 3,
+   "reference_seconds": 14.152762,
+   "candidate_272_height_tiles": 2,
+   "candidate_seconds": 10.268616,
+   "speedup": 1.378254,
+   "quality_against_256_tile_oracle": {
+    "psnr_db": 46.319993,
+    "ssim": 0.993609
+   },
+   "status": "experimental; not enabled by default pending perceptual review"
+  },
+  "metal_api_decisions": {
+   "metallib": "enabled; MSL is compiled to AIR and metallib at build time",
+   "binary_archive": "rejected as default: 36.619 ms setup with archive versus 32.106 ms without on this run",
+   "indirect_command_buffer": "not yet useful: four-block grouping makes CPU encode time negligible relative to GPU work; constants must first move from setBytes to buffers",
+   "metal4_machine_learning": "not a deployment option on the pinned macOS 15.7.3 runtime; SDK declarations require macOS 26",
+   "mps": "benchmark oracle only; production path remains custom MSL"
+  },
+  "corrected_480p_measurement": {
+   "default_256_tile_projected_seconds": 528.16995,
+   "default_256_tile_measured_seconds": 487.273811,
+   "measured_vs_projection_percent": -7.742989,
+   "pre_optimization_seconds": 7387.292038,
+   "speedup_vs_pre_optimization": 15.160454,
+   "experimental_272_tile_projected_seconds": 326.67908,
+   "projection_method": "single real-weight tile time multiplied by 7 temporal chunks and 15 or 8 spatial tiles",
+   "status": "exact 256-tile graph measured end to end; experimental 272-tile graph remains projected"
+  }
+ },
+ "real_weight_runs": [
+  {
+   "name": "downstream-bf16-component-gate",
+   "status": "passed",
+   "n_to_n": false,
+   "conditioner": "fixed one-row state; tokenizer and Qwen conditioner bypassed",
+   "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+   "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+   "geometry": {
+    "width": 32,
+    "height": 32,
+    "frames": 22,
+    "fps": 24
+   },
+   "seed": 42,
+   "sequence_rows": 82,
+   "durations_seconds": {
+    "transformer_download": 1607.877462,
+    "denoise": 232.054895,
+    "video_download": 684.208929,
+    "video_decode": 2.245662,
+    "audio_download": 79.394022,
+    "audio_decode": 2.541665,
+    "mux": 0.709436,
+    "total": 2612.518197
+   },
+   "process_cpu_seconds": {
+    "user": 248.063532,
+    "system": 333.89236
+   },
+   "peak_footprint_bytes": 147950592,
+   "result": "real-weight H3, Video VAE, Audio VAE and mux completed; playable MP4",
+   "quality_status": "structural component gate only; no prompt or reference-media parity claim"
+  },
+  {
+   "name": "free-prompt-n-to-n-gate",
+   "status": "passed-with-quality-limit",
+   "n_to_n": true,
+   "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from a user-supplied prompt",
+   "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+   "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+   "prompt": "a jeweled hummingbird hovering beside a red orchid, cinematic natural light",
+   "geometry": {
+    "width": 128,
+    "height": 128,
+    "frames": 22,
+    "fps": 24
+   },
+   "seed": 314159,
+   "prompt_tokens": 15,
+   "sequence_rows": 201,
+   "durations_seconds": {
+    "tokenizer": 0.008322,
+    "text_download": 7.132294,
+    "text_encode": 2.258068,
+    "transformer_download": 1597.824761,
+    "denoise": 287.148395,
+    "video_download": 684.234126,
+    "video_decode": 20.09457,
+    "audio_download": 79.463098,
+    "audio_decode": 2.478901,
+    "mux": 0.490161,
+    "total": 2700.482112
+   },
+   "stage_sum_excluding_h3_weight_downloads_seconds": 319.610711,
+   "total_excluding_h3_weight_downloads_seconds": 338.960127,
+   "process_cpu_seconds": {
+    "user": 213.405619,
+    "system": 299.468569
+   },
+   "peak_footprint_bytes": 173843520,
+   "output": {
+    "path": "artifacts/hummingbird-128x128-euler30/minimax-h3.mp4",
+    "sha256": "576737d39aa5d2f5b24dd2e189cd7ee8dcc3544c9f78ca61ce28458a39c04225",
+    "video_frames": 22,
+    "audio_sample_rate_hz": 32000,
+    "audio_channels": 2
+   },
+   "post_run_mux_correction": "removed -shortest after it truncated the generated 22-frame stream to 20 frames at the AAC boundary; corrected remux took 0.06 s and is excluded from generation timing",
+   "quality_status": "coarse prompt correspondence at 128x128; red flower, green background and a moving dark/white subject are visible, but the subject is not sharply identifiable and reference parity is not established"
+  },
+  {
+   "name": "corrected-480p-turbo4-n-to-n-pre-video-vae-optimization",
+   "status": "passed-with-reference-parity-open",
+   "n_to_n": true,
+   "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
+   "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+   "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+   "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
+   "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
+   "geometry": {
+    "width": 864,
+    "height": 480,
+    "frames": 124,
+    "fps": 24
+   },
+   "seed": 42,
+   "sampling": {
+    "profile": "turbo-v4-step600-ema",
+    "evaluations": 4
+   },
+   "prompt_tokens": 240,
+   "sequence_rows": 15639,
+   "durations_seconds": {
+    "tokenizer": 0.009321,
+    "text_download": 4.784617,
+    "text_encode": 4.713666,
+    "transformer_download": 0.0,
+    "turbo_compile": 0.865239,
+    "denoise": 1881.824388,
+    "video_download": 0.0,
+    "video_decode": 7387.292038,
+    "audio_download": 0.0,
+    "audio_decode": 13.531083,
+    "mux": 0.600629,
+    "total": 9294.869743
+   },
+   "process_cpu_seconds": {
+    "user": 12.160168,
+    "system": 40.497675
+   },
+   "peak_footprint_bytes": 4429110144,
+   "maximum_resident_set_bytes": 1714831360,
+   "swaps": 0,
+   "output": {
+    "path": "artifacts/anime-room-864x480-turbo4/minimax-h3.mp4",
+    "sha256": "5736387060ef3d7e0541609320fe591f04f6c4e03fe4c5cb67c2b95fd5fa7acc",
+    "video_frames_declared": 124,
+    "video_frames_decoded": 124,
+    "audio_sample_rate_hz": 32000,
+    "audio_channels": 2
+   },
+   "quality_status": "visual prompt response passed with four distinct shots and zero flat frames; sampled spatial-tile and temporal-chunk boundaries are coherent; same-prompt official full-precision parity and audio semantic listening remain open"
+  },
+  {
+   "name": "optimized-480p-turbo4-n-to-n",
+   "status": "passed-with-reference-parity-open",
+   "n_to_n": true,
+   "repository_commit": "54cdbd3",
+   "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
+   "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+   "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+   "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
+   "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
+   "geometry": {
+    "width": 864,
+    "height": 480,
+    "frames": 124,
+    "fps": 24
+   },
+   "seed": 42,
+   "sampling": {
+    "profile": "turbo-v4-step600-ema",
+    "evaluations": 4
+   },
+   "prompt_tokens": 240,
+   "sequence_rows": 15639,
+   "durations_seconds": {
+    "tokenizer": 0.007698,
+    "metal_setup": 0.043712,
+    "text_download": 4.693886,
+    "text_encode": 4.567422,
+    "transformer_download": 0.0,
+    "turbo_compile": 0.868117,
+    "rope_precompute": 0.000996,
+    "denoise": 1898.120497,
+    "video_download": 0.0,
+    "video_precompute": 0.007911,
+    "video_decode": 487.273811,
+    "audio_download": 0.0,
+    "audio_decode": 13.760077,
+    "mux": 0.671221,
+    "other_measured_runtime": 8.692889,
+    "total": 2418.708237,
+    "outer_wall_including_preflight_hashes": 2484.38
+   },
+   "denoise_layer_subtotal_seconds": {
+    "qkv_and_output_projections": 248.383771,
+    "dense_attention": 1143.532739,
+    "mlp": 495.065992,
+    "sum": 1886.982502,
+    "calls_per_category": 200
+   },
+   "comparison_to_pre_optimization": {
+    "runtime_speedup": 3.842907,
+    "runtime_reduction_percent": 73.97803,
+    "video_vae_speedup": 15.160454,
+    "video_vae_reduction_percent": 93.403891,
+    "denoise_change_percent": 0.865974
+   },
+   "process_cpu_seconds": {
+    "user": 11.030184,
+    "system": 30.704046
+   },
+   "outer_process_tree_cpu_seconds": {
+    "user": 72.8,
+    "system": 35.23
+   },
+   "peak_footprint_bytes": 4440725568,
+   "maximum_resident_set_bytes": 1062879232,
+   "page_faults": 1103285,
+   "swaps": 0,
+   "output": {
+    "local_run_path": "tmp/minimax-h3-runs/20260816-480p-e2e-54cdbd3/minimax-h3.mp4",
+    "sha256": "afd7d15af4409e5dfe0d72d3092abdc31198a95ad822758dc6dbc5090b0d0bf6",
+    "bytes": 867085,
+    "duration_seconds": 5.167,
+    "video_codec": "H.264",
+    "video_frames_declared": 124,
+    "video_frames_decoded": 124,
+    "audio_codec": "AAC",
+    "audio_sample_rate_hz": 32000,
+    "audio_channels": 2,
+    "audio_source_sha256": "37dff2b1ead54637d402ffaf1fee4f7a4077dcccf3d2f02a5efbda9942439d73"
+   },
+   "verification": {
+    "flat_frames": 0,
+    "minimum_luma_range": 180,
+    "mean_luma_range": 206.943548,
+    "maximum_luma_range": 235,
+    "adjacent_frame_differences": 123,
+    "adjacent_difference_yavg_min": 0.025275,
+    "adjacent_difference_yavg_mean": 4.494335,
+    "adjacent_difference_yavg_max": 87.7613,
+    "scene_changes_seconds": [
+     1.541667,
+     2.583333,
+     3.916667
+    ],
+    "comparison_to_pre_optimization_encoded_video": {
+     "psnr_db": 43.72017,
+     "ssim": 0.984754
+    },
+    "audio_source_bit_identical_to_pre_optimization": true,
+    "visual_review": "four prompt-aligned shots; no sampled spatial seam or temporal-chunk break"
+   },
+   "quality_status": "visual prompt response and media structure passed; same-prompt official full-precision parity and audio semantic listening remain open"
+  },
+  {
+   "name": "experimental-480p-turbo4-compiled-tree-attention",
+   "status": "functional-pass-quality-regression",
+   "n_to_n": true,
+   "default_runtime": false,
+   "runtime_switch": "MINIMAX_H3_TREE_ATTENTION=conservative",
+   "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
+   "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+   "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+   "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
+   "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
+   "geometry": {
+    "width": 864,
+    "height": 480,
+    "frames": 124,
+    "fps": 24
+   },
+   "seed": 42,
+   "sampling": {
+    "profile": "turbo-v4-step600-ema",
+    "evaluations": 4
+   },
+   "prompt_tokens": 240,
+   "sequence_rows": 15639,
+   "compiled_tree": {
+    "exact_conditioning_rows": 654,
+    "nodes": 342,
+    "query_blocks": 307,
+    "route_entries": 140284,
+    "maximum_route_entries": 548,
+    "tensor_and_summary_bytes": 906608640,
+    "runtime_summary_policy": "rebuild leaf, frame, temporal and root K/V summaries for every dynamic layer"
+   },
+   "durations_seconds": {
+    "tokenizer": 0.008059,
+    "metal_setup": 0.0268,
+    "text_download": 4.273334,
+    "text_encode": 4.635396,
+    "transformer_download": 0.0,
+    "turbo_compile": 0.877777,
+    "rope_precompute": 0.000916,
+    "denoise": 974.5447,
+    "video_download": 0.0,
+    "video_precompute": 0.007417,
+    "video_decode": 483.809133,
+    "audio_download": 0.0,
+    "audio_decode": 13.697438,
+    "mux": 0.648403,
+    "other_measured_runtime": 6.871928,
+    "total": 1489.401301,
+    "outer_wall_including_preflight_hashes": 1557.24
+   },
+   "comparison_to_exact_run": {
+    "total_delta_seconds": -929.306936,
+    "runtime_speedup": 1.623947,
+    "runtime_reduction_percent": 38.421622,
+    "denoise_delta_seconds": -923.575797,
+    "denoise_speedup": 1.9477,
+    "denoise_reduction_percent": 48.657385,
+    "peak_footprint_delta_bytes": 490242048,
+    "peak_footprint_increase_percent": 11.039684
+   },
+   "comparison_to_pre_optimization": {
+    "runtime_speedup": 6.240675,
+    "runtime_reduction_percent": 83.976093
+   },
+   "process_cpu_seconds": {
+    "user": 3.751192,
+    "system": 11.124034
+   },
+   "outer_process_tree_cpu_seconds": {
+    "user": 69.68,
+    "system": 15.63
+   },
+   "peak_footprint_bytes": 4930967616,
+   "maximum_resident_set_bytes": 1361362944,
+   "page_faults": 1103210,
+   "swaps": 0,
+   "output": {
+    "local_run_path": "tmp/minimax-h3-runs/20260817-480p-tree-conservative/minimax-h3.mp4",
+    "sha256": "4c773da92ff290babf02a5b1a5553b9f320ab45db43cfe3b7a43fa1598c7b97c",
+    "bytes": 1747361,
+    "duration_seconds": 5.167,
+    "video_codec": "H.264",
+    "video_frames_declared": 124,
+    "video_frames_decoded": 124,
+    "audio_codec": "AAC",
+    "audio_sample_rate_hz": 32000,
+    "audio_channels": 2,
+    "audio_source_sha256": "2f7d9606379760c9de4ace90145c60fe77ccc229ab439c9a45753801f885940f"
+   },
+   "verification": {
+    "flat_frames": 0,
+    "minimum_luma_range": 175,
+    "mean_luma_range": 212.25,
+    "maximum_luma_range": 239,
+    "adjacent_frame_differences": 123,
+    "adjacent_difference_yavg_min": 0.289653,
+    "adjacent_difference_yavg_mean": 9.814484,
+    "adjacent_difference_yavg_max": 87.7186,
+    "scene_changes_seconds": [
+     0.458333,
+     0.708333,
+     1.083333,
+     1.416667,
+     1.708333,
+     1.791667,
+     2.125,
+     2.375,
+     4.458333,
+     4.833333
+    ],
+    "comparison_to_exact_video": {
+     "psnr_db": 13.455967,
+     "ssim": 0.659928
+    },
+    "audio_peak_dbfs": -6.654165,
+    "audio_rms_dbfs": -23.470915,
+    "audio_dc_offset": 9e-06,
+    "visual_review": "four requested shot categories remain visible, but detail is softer and transitions show stronger ghosting than the exact run",
+    "contact_sheet": "artifacts/anime-room-864x480-turbo4/tree-conservative-contact-sheet.png"
+   },
+   "quality_status": "media structure passed, visual-quality gate regressed; experimental opt-in only and not a replacement for exact attention"
+  },
+  {
+   "name": "experimental-480p-turbo4-frame-safe-late-layer-attention",
+   "status": "single-prompt-ghosting-pass-exact-parity-open",
+   "n_to_n": true,
+   "default_runtime": false,
+   "runtime_switch": "MINIMAX_H3_TREE_ATTENTION=quality",
+   "conditioner": "exact Qwen tokenizer and streamed 50-layer Q8 Qwen conditioner from the original 942-byte Chinese prompt",
+   "artifact_repository": "Sawfwair/MiniMax-H3-FL2VA-MLX-4bit",
+   "artifact_revision": "e1244ad93d60c737c7e0f065a1c9372f3de7caf8",
+   "prompt_path": "artifacts/anime-room-864x480-turbo4/prompt.txt",
+   "prompt_sha256": "6cd3a19fef1f66204942a10211dcba136587e09c73c82f065311035e452c7ae0",
+   "geometry": {
+    "width": 864,
+    "height": 480,
+    "frames": 124,
+    "fps": 24
+   },
+   "seed": 42,
+   "sampling": {
+    "profile": "turbo-v4-step600-ema",
+    "evaluations": 4
+   },
+   "prompt_tokens": 240,
+   "sequence_rows": 15639,
+   "compiled_tree": {
+    "profile": "frame-safe",
+    "exact_conditioning_rows": 654,
+    "nodes": 342,
+    "query_blocks": 307,
+    "route_entries": 1281310,
+    "maximum_route_entries": 14985,
+    "step_mask": "0x00000008",
+    "layer_mask": "0x3ff0000000000",
+    "approximate_attention_calls": 10,
+    "total_attention_calls": 200,
+    "tensor_and_summary_bytes": 906608640,
+    "runtime_summary_policy": "rebuild per-frame leaf K/V summaries only; conditioning and 190 of 200 H3 calls remain exact"
+   },
+   "same_run_late_layer_groups": {
+    "exact_reference_seconds": 92.59749,
+    "frame_safe_seconds": 70.313368,
+    "delta_seconds": -22.284122,
+    "speedup": 1.316926,
+    "reduction_percent": 24.065579
+   },
+   "durations_seconds": {
+    "tokenizer": 0.009389,
+    "metal_setup": 0.040799,
+    "text_download": 4.308655,
+    "text_encode": 4.639853,
+    "transformer_download": 0.0,
+    "turbo_compile": 0.869813,
+    "rope_precompute": 0.001027,
+    "denoise": 1831.966125,
+    "video_download": 0.0,
+    "video_precompute": 0.007414,
+    "video_decode": 481.876037,
+    "audio_download": 0.0,
+    "audio_decode": 13.649289,
+    "mux": 0.535732,
+    "other_measured_runtime": 6.830095,
+    "total": 2344.734228
+   },
+   "comparison_to_earlier_exact_run": {
+    "total_delta_seconds": -73.974009,
+    "runtime_speedup": 1.031549,
+    "runtime_reduction_percent": 3.05841,
+    "denoise_delta_seconds": -66.154372,
+    "denoise_speedup": 1.036111,
+    "denoise_reduction_percent": 3.485257,
+    "warning": "the complete-run difference includes run-to-run variation; use same_run_late_layer_groups to attribute route speed",
+    "peak_footprint_delta_bytes": 481181824,
+    "peak_footprint_increase_percent": 10.835658
+   },
+   "peak_footprint_bytes": 4921907392,
+   "swaps": 0,
+   "output": {
+    "local_run_path": "tmp/minimax-h3-runs/20260817-480p-frame-safe-quality/minimax-h3.mp4",
+    "sha256": "1b648fb8a59aa55998fadf6c122382c2bc827f70477122150823173d4351db33",
+    "bytes": 887547,
+    "duration_seconds": 5.167,
+    "video_codec": "H.264",
+    "video_frames_declared": 124,
+    "video_frames_decoded": 124,
+    "video_source_sha256": "632582d84fd051a4ed5c36a59bb2642e30ae4a609f0c0478882816b333b64265",
+    "audio_codec": "AAC",
+    "audio_sample_rate_hz": 32000,
+    "audio_channels": 2,
+    "audio_source_sha256": "e890f859b7fd528458896e98465e9c6c9210d7c1ee501edbe64aa3922d771a01"
+   },
+   "verification": {
+    "flat_frames": 0,
+    "minimum_luma_range": 181,
+    "mean_luma_range": 215.596774,
+    "maximum_luma_range": 241,
+    "adjacent_frame_differences": 123,
+    "adjacent_difference_yavg_min": 0.042564,
+    "adjacent_difference_yavg_mean": 4.283097,
+    "adjacent_difference_yavg_max": 85.2565,
+    "scene_changes_seconds": [
+     1.541667,
+     2.583333,
+     3.916667
+    ],
+    "comparison_to_exact_video": {
+     "psnr_db": 32.384649,
+     "ssim": 0.932134
+    },
+    "blur_mean": 5.7687158,
+    "visual_review": "same four shots and scene boundaries as exact; no double exposure in uniform or transition samples",
+    "contact_sheet": "artifacts/anime-room-864x480-turbo4/frame-safe-quality-contact-sheet.png",
+    "transition_sheet": "artifacts/anime-room-864x480-turbo4/frame-safe-quality-transitions.png"
+   },
+   "quality_status": "single-prompt temporal and ghosting gate passed; exact numeric parity, audio listening and multi-prompt quality gate remain open"
+  },
+  {
+   "name": "optimized-480p-turbo4-flash-attention-n-to-n",
+   "date": "2026-08-17",
+   "workload": "864x480x124 Turbo-4, anime four-shot prompt, seed 42, exact path with the single-pass attention kernel",
+   "durations_seconds": {
+    "denoise": 1542.3,
+    "video_decode": 479.51,
+    "audio_decode": 13.55,
+    "total": 2051.49
+   },
+   "previous_exact_total_seconds": 2418.71,
+   "speedup_end_to_end": 1.179,
+   "quality_gates": {
+    "scene_cuts": "frames 36/61/93 identical to the exact reference",
+    "adjacent_frame_luma_mean": "2.574 vs 2.668 exact reference (subsampled)",
+    "frame_review": "shots 1-4 sampled at frames 45/75/100: no ghosting, no double exposure; the violent-motion close-up (frame 45) that exposed the rejected late-layer approximation renders clean",
+    "kernel_parity": "standalone kernel differs from the two-pass kernel by at most one bf16 ulp (max abs 6.1e-5 on 0.0149 max magnitude); a 30-step 128x128 smoke stays on the same visual trajectory"
+   }
+  }
+ ],
+ "commands": {
+  "attention": "make build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-attention-bench build/minimax-h3-m3-attention.metallib 5 2",
+  "exact_dense_attention": "make minimax-h3-m3-dense-attention-bench",
+  "projection": "make build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib && build/minimax-h3-m3-gemm-bench build/minimax-h3-m3-attention.metallib 15485 5 2",
+  "n_to_n": "MINIMAX_H3_TEXT_ENCODER_URL=file://$PWD/tmp/minimax-h3-text-encoder.safetensors build/minimax-h3-m3-e2e 'a jeweled hummingbird hovering beside a red orchid, cinematic natural light' models/minimax-h3/targets/apple-m3-pro/artifacts/hummingbird-128x128-euler30 128 128 22 314159",
+  "corrected_480p": "MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt",
+  "experimental_tree_480p": "MINIMAX_H3_TREE_ATTENTION=conservative MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-tree-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt",
+  "frame_safe_quality_480p": "MINIMAX_H3_TREE_ATTENTION=quality MINIMAX_H3_WIDTH=864 MINIMAX_H3_HEIGHT=480 MINIMAX_H3_FRAMES=124 MINIMAX_H3_SEED=42 MINIMAX_H3_TEXT_ENCODER=$PWD/tmp/minimax-h3-text-encoder.safetensors MINIMAX_H3_TURBO_ADAPTER=file://$PWD/tmp/minimax_h3_turbo_v4_step600_ema.safetensors MINIMAX_H3_OUTPUT_DIR=$PWD/tmp/minimax-h3-runs/reproduction-frame-safe-480p tools/minimax_h3_generate.sh < models/minimax-h3/targets/apple-m3-pro/artifacts/anime-room-864x480-turbo4/prompt.txt"
+ }
 }
