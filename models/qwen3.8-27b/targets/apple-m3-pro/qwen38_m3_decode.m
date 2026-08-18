@@ -197,6 +197,17 @@ enum {
     /* 64-row output tiles for the small-batch MMA verify (measured
      * ~8% cheaper than 32-row tiles); QWEN38_VERIFY_WIDE=0 compares. */
     int wide_verify;
+    /* Restricted draft-head vocabulary: the chain's head computes the
+     * static low-id prefix plus rare context tokens instead of all
+     * 248,320 rows. Drafts are guesses the full-vocabulary verify
+     * checks, so a missing token costs one rejected draft, never a
+     * wrong output. 0 disables (QWEN38_DRAFT_VOCAB). */
+    uint32_t draft_vocab;
+    id<MTLBuffer> draft_extra_ids;
+    uint32_t draft_extra_count;
+    uint32_t draft_ctx_processed;
+    uint32_t draft_ctx_last_token;
+    uint8_t *draft_seen;
     id<MTLResidencySet> residency API_AVAILABLE(macos(15.0));
 
     id<MTLComputePipelineState> rms_half;
@@ -219,6 +230,8 @@ enum {
     id<MTLComputePipelineState> convert_hidden;
     id<MTLComputePipelineState> lm_head;
     id<MTLComputePipelineState> argmax;
+    id<MTLComputePipelineState> lm_head_gathered;
+    id<MTLComputePipelineState> argmax_limited;
 
     id<MTLBuffer> hidden_half;
     id<MTLBuffer> normalized;
@@ -299,6 +312,9 @@ enum {
 @end
 
 @implementation Q38DecodeRuntime
+- (void)dealloc {
+    free(draft_seen);
+}
 @end
 
 struct qwen38_m3_model {
@@ -1329,6 +1345,8 @@ static int initialize_pipelines(Q38DecodeRuntime *r, NSString **message) {
     MAKE(convert_hidden, @"qwen38_f32_to_f16_hidden");
     MAKE(lm_head, @"qwen38_q4_lm_head");
     MAKE(argmax, @"qwen38_argmax");
+    MAKE(lm_head_gathered, @"qwen38_q4_lm_head_gathered");
+    MAKE(argmax_limited, @"qwen38_argmax_limited");
 #undef MAKE
     r->prefill16 = prefill_pipelines(r, 16, message);
     if (r->prefill16 == nil) return -1;
@@ -1535,6 +1553,20 @@ qwen38_m3_model *qwen38_m3_model_open(
         const char *verify_wide = getenv("QWEN38_VERIFY_WIDE");
         r->wide_verify = verify_wide == NULL ||
                          strcmp(verify_wide, "0") != 0;
+        const char *draft_vocab = getenv("QWEN38_DRAFT_VOCAB");
+        long draft_rows = draft_vocab != NULL ? atol(draft_vocab) : 65536;
+        if (draft_rows < 0 || draft_rows >= QWEN38_VOCAB_SIZE)
+            draft_rows = 0;
+        r->draft_vocab = (uint32_t)draft_rows;
+        r->draft_extra_ids = [r->device
+            newBufferWithLength:(size_t)8192 * sizeof(uint32_t)
+                        options:MTLResourceStorageModeShared];
+        r->draft_seen = calloc((QWEN38_VOCAB_SIZE + 7) / 8, 1);
+        if (r->draft_extra_ids == nil || r->draft_seen == NULL) {
+            decode_error(error_message, error_message_capacity,
+                         @"cannot allocate draft vocabulary buffers");
+            return NULL;
+        }
         qwen38_m3_model *model = calloc(1, sizeof(*model));
         if (model == NULL) {
             decode_error(error_message, error_message_capacity,
@@ -1751,7 +1783,8 @@ static void encode_mtp_pass(Q38DecodeRuntime *r,
                             uint32_t batch, uint32_t token_slot,
                             uint32_t start_j,
                             id<MTLBuffer> hidden, NSUInteger hidden_offset,
-                            int with_head, int normalize_hidden) {
+                            int with_head, int normalize_hidden,
+                            int restricted_head) {
     Q38PrefillPipelines *p = prefill_set_for_batch(r, batch);
     if (normalize_hidden) {
         [encoder setComputePipelineState:p->rms_f32];
@@ -1809,9 +1842,29 @@ static void encode_mtp_pass(Q38DecodeRuntime *r,
             [encoder setBuffer:r->global->lm_head_metadata offset:0
                     atIndex:2];
             [encoder setBuffer:r->mtp_logits offset:0 atIndex:3];
+            uint32_t head_rows = restricted_head && r->draft_vocab != 0 ?
+                r->draft_vocab : QWEN38_VOCAB_SIZE;
             [encoder dispatchThreadgroups:
-                MTLSizeMake((QWEN38_VOCAB_SIZE + 7) / 8, 1, 1)
+                MTLSizeMake((head_rows + 7) / 8, 1, 1)
                     threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            if (head_rows != QWEN38_VOCAB_SIZE &&
+                r->draft_extra_count != 0) {
+                uint32_t extra = r->draft_extra_count;
+                [encoder setComputePipelineState:r->lm_head_gathered];
+                [encoder setBuffer:r->final_normalized offset:0 atIndex:0];
+                [encoder setBuffer:r->global->lm_head_quants offset:0
+                        atIndex:1];
+                [encoder setBuffer:r->global->lm_head_metadata offset:0
+                        atIndex:2];
+                [encoder setBuffer:r->draft_extra_ids offset:0 atIndex:3];
+                [encoder setBytes:&extra length:sizeof(extra) atIndex:4];
+                [encoder setBytes:&head_rows length:sizeof(head_rows)
+                          atIndex:5];
+                [encoder setBuffer:r->mtp_logits offset:0 atIndex:6];
+                [encoder dispatchThreadgroups:
+                    MTLSizeMake((extra + 7) / 8, 1, 1)
+                        threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+            }
         }
     } else {
         encode_prefill_gemm_f16(r, p, encoder, r->mtp_fused,
@@ -1845,7 +1898,7 @@ static int run_mtp_pass(qwen38_m3_model *model, uint32_t batch,
         id<MTLComputeCommandEncoder> encoder =
             [command computeCommandEncoder];
         encode_mtp_pass(r, encoder, batch, 0, start_j, hidden,
-                        hidden_offset, with_head, normalize_hidden);
+                        hidden_offset, with_head, normalize_hidden, 0);
         [encoder endEncoding];
         [command commit];
         [command waitUntilCompleted];
@@ -1921,12 +1974,24 @@ static int fused_step_submit(qwen38_m3_model *model, uint32_t depth,
         for (uint32_t i = 0; i < depth; ++i) {
             encode_mtp_pass(r, encoder, 1, i, position + i,
                             i == 0 ? hidden : r->final_normalized,
-                            i == 0 ? hidden_offset : 0, 1, 0);
+                            i == 0 ? hidden_offset : 0, 1, 0, 1);
             uint32_t slot = i + 1;
-            [encoder setComputePipelineState:r->argmax];
-            [encoder setBuffer:r->mtp_logits offset:0 atIndex:0];
-            [encoder setBuffer:r->p_token_ids offset:0 atIndex:1];
-            [encoder setBytes:&slot length:sizeof(slot) atIndex:2];
+            if (r->draft_vocab != 0) {
+                uint32_t limit = r->draft_vocab;
+                uint32_t extra = r->draft_extra_count;
+                [encoder setComputePipelineState:r->argmax_limited];
+                [encoder setBuffer:r->mtp_logits offset:0 atIndex:0];
+                [encoder setBuffer:r->p_token_ids offset:0 atIndex:1];
+                [encoder setBytes:&slot length:sizeof(slot) atIndex:2];
+                [encoder setBytes:&limit length:sizeof(limit) atIndex:3];
+                [encoder setBytes:&extra length:sizeof(extra) atIndex:4];
+                [encoder setBuffer:r->draft_extra_ids offset:0 atIndex:5];
+            } else {
+                [encoder setComputePipelineState:r->argmax];
+                [encoder setBuffer:r->mtp_logits offset:0 atIndex:0];
+                [encoder setBuffer:r->p_token_ids offset:0 atIndex:1];
+                [encoder setBytes:&slot length:sizeof(slot) atIndex:2];
+            }
             [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1)
                     threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
         }
@@ -1951,7 +2016,7 @@ static int fused_step_submit(qwen38_m3_model *model, uint32_t depth,
                                 r->global->lm_head_metadata,
                                 r->p_logits2, QWEN38_VOCAB_SIZE, 80);
         encode_mtp_pass(r, encoder, depth, 1, position + 1,
-                        r->p_post_normalized, 0, 0, 0);
+                        r->p_post_normalized, 0, 0, 0, 0);
         [encoder endEncoding];
         [command commit];
         [command waitUntilCompleted];
@@ -2405,6 +2470,32 @@ void qwen38_m3_model_mtp_context(qwen38_m3_model *model,
     if (model == NULL) return;
     model->mtp_ctx = tokens;
     model->mtp_ctx_count = count;
+    if (model->runtime == NULL) return;
+    Q38DecodeRuntime *r = (__bridge Q38DecodeRuntime *)model->runtime;
+    if (r->draft_vocab == 0 || tokens == NULL) return;
+    /* Incrementally collect rare context tokens (ids past the static
+     * prefix) for the restricted draft head. A shrinking or rewritten
+     * history means a new request; start over. */
+    if (count < r->draft_ctx_processed ||
+        (r->draft_ctx_processed > 0 &&
+         tokens[r->draft_ctx_processed - 1] != r->draft_ctx_last_token)) {
+        memset(r->draft_seen, 0, (QWEN38_VOCAB_SIZE + 7) / 8);
+        r->draft_extra_count = 0;
+        r->draft_ctx_processed = 0;
+    }
+    uint32_t *extras = r->draft_extra_ids.contents;
+    for (uint32_t i = r->draft_ctx_processed; i < count; ++i) {
+        uint32_t id = tokens[i];
+        if (id < r->draft_vocab || id >= QWEN38_VOCAB_SIZE) continue;
+        uint8_t *cell = r->draft_seen + (id >> 3);
+        uint8_t bit = (uint8_t)(1u << (id & 7u));
+        if ((*cell & bit) != 0) continue;
+        if (r->draft_extra_count >= 8192) break;
+        *cell |= bit;
+        extras[r->draft_extra_count++] = id;
+    }
+    r->draft_ctx_processed = count;
+    if (count > 0) r->draft_ctx_last_token = tokens[count - 1];
 }
 
 /* Latest context position whose four-token suffix matches (ctx[n-3],

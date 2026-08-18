@@ -21,83 +21,83 @@
   "prefill_parity_test": "36/36 pass across 12 lengths from 16 to 131 tokens and three execution modes; argmax identical on every run, zero NaN; exact mode remains bitwise for runs without 32-token chunks",
   "smoke": "2+2 -> 4; C max2 correct; capital-of-France in Chinese -> Paris",
   "mtp_image_smoke": "one through ten generated correctly; 19 visible tokens, first token 1.54 s, 13.0 decode tok/s, 13 drafts accepted over 7 steps",
-  "mtp_output_parity": "default fast verify: 3/5 five-workload cases token-identical to plain greedy; prose and essay flip one numerical near-tie each onto an alternate fluent greedy continuation; QWEN38_VERIFY_FAST=0 restores 5/5 token-identity (9.81 aggregate e2e); every emitted token remains the argmax of a true model forward"
+  "mtp_output_parity": "default fast verify: 4/5 five-workload cases token-identical to plain greedy; prose flips one numerical near-tie onto an alternate fluent greedy continuation; QWEN38_VERIFY_FAST=0 restores 5/5 token-identity; every emitted token remains the argmax of a true model forward"
  },
  "throughput_matrix": {
-  "method": "five-case resident-chat matrix, one process per arm, greedy seed 42; adaptive MTP with replay-free partial accepts, wide-tile eight-wide half-MMA verify, depth ceiling 7 and four-gram context-lookup drafting",
+  "method": "five-case resident-chat matrix, one process per arm, greedy seed 42; adaptive MTP with replay-free partial accepts, wide-tile eight-wide half-MMA verify, depth ceiling 7, four-gram context-lookup drafting and a restricted draft-head vocabulary",
   "measured_at": "2026-08-17",
   "cases": [
    {
     "case": "C max2 (code, short)",
     "match": true,
     "tokens": 28,
-    "decode_off": 7.79,
-    "decode_on": 35.95,
-    "wall_off": 4.5,
-    "wall_on": 2.0,
+    "decode_off": 7.87,
+    "decode_on": 40.79,
+    "wall_off": 4.4,
+    "wall_on": 1.9,
     "accepts": "26/4",
-    "e2e_tok_s_off": 6.25,
-    "e2e_tok_s_on": 14.17
+    "e2e_tok_s_off": 6.36,
+    "e2e_tok_s_on": 15.01
    },
    {
     "case": "hash table prose",
     "match": false,
-    "tokens": 533,
-    "decode_off": 7.89,
-    "decode_on": 10.74,
-    "wall_off": 67.9,
-    "wall_on": 50.5,
-    "accepts": "310/224",
-    "e2e_tok_s_off": 7.81,
-    "e2e_tok_s_on": 10.56
+    "tokens": 524,
+    "decode_off": 8.27,
+    "decode_on": 11.04,
+    "wall_off": 64.8,
+    "wall_on": 48.3,
+    "accepts": "294/230",
+    "e2e_tok_s_off": 8.19,
+    "e2e_tok_s_on": 10.84
    },
    {
     "case": "LRUCache (code, long)",
     "match": true,
     "tokens": 1155,
-    "decode_off": 7.7,
-    "decode_on": 15.96,
-    "wall_off": 151.1,
-    "wall_on": 73.7,
-    "accepts": "856/303",
-    "e2e_tok_s_off": 7.64,
-    "e2e_tok_s_on": 15.66
+    "decode_off": 8.04,
+    "decode_on": 17.96,
+    "wall_off": 144.7,
+    "wall_on": 65.7,
+    "accepts": "862/293",
+    "e2e_tok_s_off": 7.98,
+    "e2e_tok_s_on": 17.59
    },
    {
     "case": "virtual memory essay",
-    "match": false,
-    "tokens": 1577,
-    "decode_off": 8.12,
-    "decode_on": 9.72,
-    "wall_off": 181.5,
-    "wall_on": 163.8,
-    "accepts": "850/727",
-    "e2e_tok_s_off": 8.06,
-    "e2e_tok_s_on": 9.63
+    "match": true,
+    "tokens": 1463,
+    "decode_off": 8.06,
+    "decode_on": 10.04,
+    "wall_off": 182.7,
+    "wall_on": 147.2,
+    "accepts": "776/689",
+    "e2e_tok_s_off": 8.01,
+    "e2e_tok_s_on": 9.94
    },
    {
     "case": "notes summary (159-tok prompt)",
     "match": true,
     "tokens": 128,
-    "decode_off": 8.36,
-    "decode_on": 12.42,
+    "decode_off": 8.32,
+    "decode_on": 13.48,
     "wall_off": 18.3,
-    "wall_on": 13.6,
-    "accepts": "84/46",
-    "e2e_tok_s_off": 7.01,
-    "e2e_tok_s_on": 9.43
+    "wall_on": 13.0,
+    "accepts": "86/44",
+    "e2e_tok_s_off": 6.99,
+    "e2e_tok_s_on": 9.87
    }
   ],
   "aggregate": {
    "completion_tokens_plain": 3305,
-   "completion_tokens_mtp": 3421,
-   "decode_tok_s_mtp_off": 8.22,
-   "decode_tok_s_mtp_on": 11.58,
-   "e2e_tok_s_mtp_off": 7.81,
-   "e2e_tok_s_mtp_on": 11.27,
-   "e2e_speedup": 1.44,
-   "wall_off_s": 423.3,
-   "wall_on_s": 303.6,
+   "completion_tokens_mtp": 3298,
+   "decode_tok_s_mtp_off": 8.08,
+   "decode_tok_s_mtp_on": 12.32,
+   "e2e_tok_s_mtp_off": 7.96,
+   "e2e_tok_s_mtp_on": 11.95,
+   "e2e_speedup": 1.5,
+   "wall_off_s": 415.0,
+   "wall_on_s": 276.0,
    "definition": "end-to-end = completion tokens / full request wall (prompt prefill + first token + decode); decode = tokens per interval after the first token; per-case token counts differ between arms where the fast verify takes an alternate greedy branch"
   }
  },
@@ -233,6 +233,13 @@
    },
    "why_it_works_now": "the 2026-08-16 chat-layer version lost (7.17 vs 7.97) because a partial accept paid a wide verify plus a replay; with replay-free rollback and a flat-cost verify a misfired lookup step costs roughly one shallow MTP step",
    "ema_note": "the acceptance EMA counts accepted drafts plus at most one miss per step (chain positions past the first reject were never tested); the uncensored update crashed the estimate by 0.85^7 on one bad deep step"
+  },
+  "restricted_draft_vocabulary": {
+   "measured_at": "2026-08-17",
+   "design": "the draft chain's head computes the static low-id vocabulary prefix (64K rows; Qwen BPE ids are approximately frequency-ordered) plus rare context tokens collected incrementally per request (limit 8192 extras), instead of all 248,320 rows; the verify keeps the full vocabulary, so a missing rare token costs one rejected draft, never a wrong output; QWEN38_DRAFT_VOCAB sets the prefix (0 = full head)",
+   "coverage": "on the five-workload outputs the 64K prefix plus context covers 98.3-100% of generated tokens per case (worst prose/essay ~1.5-1.7% first-occurrence misses)",
+   "cost": "draft pass 6.5 -> ~2 ms (the 636 MB full-head stream shrinks to ~170 MB plus gathered extras); fused step 217 -> 199 ms at depth 3, 253 -> 219 ms at depth 7",
+   "battery": "aggregate 11.95 e2e vs 7.96 plain (1.50x); LRUCache 17.59, C max2 15.01, prose 10.84, essay 9.94, summary 9.87; essay returned to token-identical (4/5 identical, prose alone on an alternate near-tie branch)"
   }
  }
 }

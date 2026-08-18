@@ -41,8 +41,8 @@
   <p class="meta">Runtime review · measured 2026-08-17 · Mac15,6 · Apple M3 Pro · 36 GB unified memory · macOS 15.7.3</p>
 
   <div class="summary">
-    <div class="metric"><b>11.27 tok/s</b><span>end-to-end aggregate, adaptive MTP, five-workload set; 15.66 on long code</span></div>
-    <div class="metric"><b>1.44x</b><span>vs plain greedy (7.81 end-to-end), same window</span></div>
+    <div class="metric"><b>11.95 tok/s</b><span>end-to-end aggregate, adaptive MTP, five-workload set; 17.59 on long code</span></div>
+    <div class="metric"><b>1.50x</b><span>vs plain greedy (7.96 end-to-end), same window</span></div>
     <div class="metric"><b>64 layers</b><span>48 DeltaNet + 16 full-attention layers</span></div>
     <div class="metric"><b>15.139 GB</b><span>mapped compiled Qwen3.8 text image</span></div>
   </div>
@@ -66,7 +66,7 @@
       <tr><td>Prefill-vs-decode state parity</td><td class="pass">36/36 checks pass across 12 prompt lengths and three execution modes; argmax identical on every run, zero NaN</td></tr>
       <tr><td>Smoke</td><td class="pass">2+2 → <code>4</code>; C <code>max2</code> correct; 法国首都 → <code>巴黎</code></td></tr>
       <tr><td>MTP image smoke</td><td class="pass"><code>one</code> through <code>ten</code> generated correctly; 19 visible tokens at 13.0 decode tok/s, with 13 drafts accepted over 7 steps</td></tr>
-      <tr><td>Speculative output parity</td><td class="pass">default fast verify 3/5 cases token-identical; the two prose cases each flip one numerical near-tie onto an alternate fluent greedy continuation; <code>QWEN38_VERIFY_FAST=0</code> exact verify is 5/5 token-identical at 9.81 aggregate</td></tr>
+      <tr><td>Speculative output parity</td><td class="pass">default fast verify 4/5 cases token-identical; one prose case flips a numerical near-tie onto an alternate fluent greedy continuation; <code>QWEN38_VERIFY_FAST=0</code> exact verify is 5/5 token-identical at 9.81 aggregate</td></tr>
       <tr><td>Thinking mode</td><td class="pass">xhigh request streams reasoning_content + correct split answer; <code>reasoning_effort: none</code> reproduces no-think behavior</td></tr>
       <tr><td>Quality (pinned ARC-Easy-5 smoke)</td><td><span class="fail">3/5 strict at 32 tokens, 4/5 at 96</span> — every miss states the correct answer's content in prose without completing the required <code>Answer: X</code> line. This is a five-case generative smoke test, not an official ARC-Easy score.</td></tr>
     </tbody>
@@ -77,15 +77,15 @@
   <table>
     <thead><tr><th>Case</th><th class="num">Tokens</th><th class="num">End-to-end tok/s, MTP off</th><th class="num">End-to-end, adaptive MTP</th><th class="num">Speedup</th><th class="num">Decode off &rarr; on</th></tr></thead>
     <tbody>
-      <tr><td>C <code>max2</code> function</td><td class="num">28</td><td class="num">6.25</td><td class="num"><strong>14.17</strong></td><td class="num">2.27x</td><td class="num">7.94 &rarr; 35.95</td></tr>
-      <tr><td>Hash-table prose</td><td class="num">531 / 533</td><td class="num">7.81</td><td class="num"><strong>10.56</strong></td><td class="num">1.35x</td><td class="num">7.90 &rarr; 10.74</td></tr>
-      <tr><td>Python <code>LRUCache</code> class</td><td class="num">1,155</td><td class="num">7.64</td><td class="num"><strong>15.66</strong></td><td class="num">2.05x</td><td class="num">7.70 &rarr; 15.96</td></tr>
-      <tr><td>Virtual-memory essay</td><td class="num">1,463 / 1,577</td><td class="num">8.06</td><td class="num">9.63</td><td class="num">1.19x</td><td class="num">8.11 &rarr; 9.72</td></tr>
-      <tr><td>Notes summary, 159-token prompt</td><td class="num">128</td><td class="num">7.01</td><td class="num"><strong>9.43</strong></td><td class="num">1.35x</td><td class="num">8.33 &rarr; 12.42</td></tr>
-      <tr><td><strong>Aggregate</strong></td><td class="num">3,305 / 3,421</td><td class="num"><strong>7.81</strong></td><td class="num"><strong>11.27</strong></td><td class="num"><strong>1.44x</strong></td><td class="num">7.92 &rarr; 11.58</td></tr>
+      <tr><td>C <code>max2</code> function</td><td class="num">28</td><td class="num">6.36</td><td class="num"><strong>15.01</strong></td><td class="num">2.36x</td><td class="num">8.06 &rarr; 40.79</td></tr>
+      <tr><td>Hash-table prose</td><td class="num">531 / 524</td><td class="num">8.19</td><td class="num"><strong>10.84</strong></td><td class="num">1.32x</td><td class="num">8.28 &rarr; 11.04</td></tr>
+      <tr><td>Python <code>LRUCache</code> class</td><td class="num">1,155</td><td class="num">7.98</td><td class="num"><strong>17.59</strong></td><td class="num">2.20x</td><td class="num">8.05 &rarr; 17.96</td></tr>
+      <tr><td>Virtual-memory essay</td><td class="num">1,463</td><td class="num">8.01</td><td class="num"><strong>9.94</strong></td><td class="num">1.24x</td><td class="num">8.07 &rarr; 10.04</td></tr>
+      <tr><td>Notes summary, 159-token prompt</td><td class="num">128</td><td class="num">6.99</td><td class="num"><strong>9.87</strong></td><td class="num">1.41x</td><td class="num">8.29 &rarr; 13.48</td></tr>
+      <tr><td><strong>Aggregate</strong></td><td class="num">3,305 / 3,298</td><td class="num"><strong>7.96</strong></td><td class="num"><strong>11.95</strong></td><td class="num"><strong>1.50x</strong></td><td class="num">8.06 &rarr; 12.32</td></tr>
     </tbody>
   </table>
-  <p>End-to-end is completion tokens over the full request wall — prompt prefill, first token and decode included. Three cases are token-identical between arms; paired token counts mark the prose cases where the fast verify's accumulation order takes an alternate fluent greedy branch. The speculative schedule reduces aggregate wall time from 423.3 to 303.6 seconds.</p>
+  <p>End-to-end is completion tokens over the full request wall — prompt prefill, first token and decode included. Three cases are token-identical between arms; paired token counts mark the prose cases where the fast verify's accumulation order takes an alternate fluent greedy branch. The speculative schedule reduces aggregate wall time from 415.0 to 276.0 seconds.</p>
 
   <h2>4. Template semantics</h2>
   <p>The serving layer implements the 3.8 template: per-request <code>reasoning_effort</code> (low/medium/xhigh, none to disable) injects the verbatim effort instructions at the top of the system turn, thinking replies open at <code>&lt;think&gt;</code> and stream the think block as <code>reasoning_content</code>, and prior turns replay their reasoning (<code>preserve_thinking</code>). A low-effort request that exhausted a 400-token budget mid-think returned the truncated thinking with empty content and <code>finish_reason: length</code> — the reasoning-model convention; give thinking mode a larger budget. Raw record: <a href="results.json">results.json</a>.</p>
