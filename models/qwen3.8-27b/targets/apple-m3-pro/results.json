@@ -241,5 +241,41 @@
    "cost": "draft pass 6.5 -> ~2 ms (the 636 MB full-head stream shrinks to ~170 MB plus gathered extras); fused step 217 -> 199 ms at depth 3, 253 -> 219 ms at depth 7",
    "battery": "aggregate 11.95 e2e vs 7.96 plain (1.50x); LRUCache 17.59, C max2 15.01, prose 10.84, essay 9.94, summary 9.87; essay returned to token-identical (4/5 identical, prose alone on an alternate near-tie branch)"
   }
+ },
+ "serving_bench_aiperf": {
+  "measured_at": "2026-08-17",
+  "tool": "NVIDIA AIPerf v0.12.0, streaming chat endpoint, concurrency 1, 12 requests, 128 input / 256 output synthetic tokens, greedy, random seed 42, slice duration 15 s",
+  "server": "tools/qwen38_serve.py OpenAI-compatible adapter over the resident C/Metal process, adaptive speculative decoding on",
+  "ttft_ms": {
+   "avg": 2705,
+   "p50": 2702,
+   "p90": 2726,
+   "p99": 2733,
+   "min": 2687,
+   "max": 2734,
+   "std": 13.9
+  },
+  "inter_token_latency_ms": {
+   "avg": 93.5,
+   "p50": 96.2,
+   "p90": 100.1,
+   "p99": 105.8,
+   "min": 76.8,
+   "max": 106.5
+  },
+  "decode_tok_s_per_user": {
+   "avg": 10.79,
+   "p50": 10.39,
+   "p90": 12.61,
+   "max": 13.03
+  },
+  "e2e_tok_s_per_user": {
+   "avg": 9.71,
+   "p50": 9.4,
+   "p90": 11.17,
+   "max": 11.49
+  },
+  "prefill_tok_s": 47.4,
+  "note": "synthetic random prompts draft-accept below natural text, so decode sits under the five-workload record (11.95 aggregate); TTFT spread across 12 requests is 47 ms - prefill is effectively deterministic"
  }
 }
