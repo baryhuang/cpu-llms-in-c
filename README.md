@@ -1,4 +1,4 @@
-# cpu-llms-in-c
+# llm.c
 
 Compile a pinned model for a pinned hardware target, then run it without a general inference framework.
 
