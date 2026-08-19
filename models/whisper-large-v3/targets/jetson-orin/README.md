@@ -73,6 +73,20 @@ in all runs.
 
 | 4 | cuBLAS f32-output (skip f16→f32 convert epilogue, fp32 accumulate) | large-v3 | 2.974 (ctl 2.977) | 0.301 % | 4,458 MB | accepted — neutral e2e, transcripts byte-identical |
 | 4 | cuBLAS f32-output | turbo | **7.770** (ctl 7.426) | 0.301 % | 2,360 MB | **accepted — +4.6%, transcripts byte-identical** |
+| 5 | Bias epilogue in mmf tensor-core GEMM + mmvf fusion wiring (`MUL_MAT→ADD`) | large-v3 | **3.036** (ctl 2.827) | 0.301 % | 4,458 MB | **accepted — +7.4% cumulative fusion win, transcripts byte-identical** |
+| 5 | Bias epilogue (`MUL_MAT→ADD`) | turbo | **7.803** (ctl 7.374) | 0.301 % | 2,362 MB | **accepted — +5.8% cumulative fusion win, transcripts byte-identical** |
+
+Increment 5 detail: decode GEMMs already run at ~85% of the memory-bandwidth
+floor, so the remaining decode cost was glue — every projection's bias add
+ran as a separate 3–12 µs kernel (~9k per large-v3 file). A `bias` pointer
+threaded through ggml's mmf tensor-core kernel applies the bias in the
+existing writeback loop (`__fadd_rn`, rounding identical to the unfused add
+kernel), and single-column matmuls route through mmvf's existing fusion
+args. `k_bin_bcast` add launches per large-v3 file: 17,656 at baseline →
+4,301 now. The A/B pair (fused vs `GGML_CUDA_DISABLE_FUSION=1`, one
+session) measures the cumulative fusion effect of increments 3+5 on top of
+increment 4; increment 3's own pair measured +3.7%/+6.0%, so the bias
+epilogue contributes roughly the additional half on large-v3.
 
 Increment 4 detail: ggml's cuBLAS fp16 path on this arch computed in f16
 with an f16 temporary output, then ran a `convert_unary` kernel to get the

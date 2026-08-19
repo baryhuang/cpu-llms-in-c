@@ -199,6 +199,23 @@
       "quality_gate": "GOLD: all 64 transcripts byte-identical to stock despite fp32-accumulate rounding change; WER 0.00301 both models; RSS +18-28 MB (f32 dst buffers) - acceptable at 2.4/4.5 GB of 7 GB",
       "per_file_records": "benchmarks/increment4-e2e-*.json",
       "note": "session drift visible again: fused-only arm measured 2.925 in the inc3 session and 2.977 as this session's control - only adjacent same-session pairs are compared"
+    },
+    {
+      "id": "increment5-mmf-bias-epilogue-ACCEPTED",
+      "date": "2026-08-19",
+      "tool": "native patch: bias pointer threaded through ggml mmf tensor-core kernel writeback (__fadd_rn epilogue) + MUL_MAT->ADD fusion pattern routing to mmf (beam decode) or mmvf fusion args (single column); A/B fused vs GGML_CUDA_DISABLE_FUSION=1, adjacent runs one session, on top of increments 3+4",
+      "machine_state": "MAXN_SUPER, jetson_clocks",
+      "e2e_status": "ACCEPTED",
+      "arms": [
+        {"arm": "large-v3 ctl (all fusions off)", "rtfx_processing": 2.827, "wer": 0.00301, "peak_rss_mb": 4465.8},
+        {"arm": "large-v3 fused (inc3+inc5)", "rtfx_processing": 3.036, "wer": 0.00301, "peak_rss_mb": 4458.3},
+        {"arm": "turbo ctl", "rtfx_processing": 7.374, "wer": 0.00301, "peak_rss_mb": 2362.0},
+        {"arm": "turbo fused", "rtfx_processing": 7.803, "wer": 0.00301, "peak_rss_mb": 2362.0}
+      ],
+      "gains": "cumulative fusion pair: large-v3 +7.4% (inc3 pair alone was +3.7%), turbo +5.8% (inc3 alone +6.0%); k_bin_bcast add launches per large-v3 file 17,656 (baseline) -> 4,301; mmf GEMM time unchanged with epilogue folded in (486ms/8,960 calls)",
+      "quality_gate": "GOLD: all 64 transcripts byte-identical to no-fusion control; WER 0.00301 both models; RSS unchanged",
+      "per_file_records": "benchmarks/increment5-e2e-*.json",
+      "context": "decode GEMMs measured at ~85% of the 102 GB/s bandwidth floor (16.6 ms/step vs ~14 ms theoretical for 1.45 GB weights + 0.25 GB cross-KV per step), so decode headroom is glue/launches, not GEMM math"
     }
   ],
   "observations": [
