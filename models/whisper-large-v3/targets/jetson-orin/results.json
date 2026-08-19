@@ -1,0 +1,99 @@
+{
+  "target": "jetson-orin-nano-super",
+  "machine": {
+    "board": "NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super",
+    "soc": "tegra234",
+    "cpu_cores": 6,
+    "ram_gb_unified": 7,
+    "gpu": "Orin, compute capability 8.7, VRAM reported 7485 MiB (unified)",
+    "l4t": "R39.2.1 (2026-08-07)",
+    "kernel": "6.8.12-1021-tegra",
+    "cuda": "13.2 (nvcc 13.2.r13.2 build 37953736)",
+    "power_mode": "MAXN_SUPER",
+    "jetson_clocks": true
+  },
+  "methodology": {
+    "inference_arm": "whisper.cpp commit 4834a2327d008ace3ec5a9ed00f51454bcabbc1c (2026-08-18), cmake -DGGML_CUDA=1 -DCMAKE_CUDA_ARCHITECTURES=87, GPU offload + flash attention defaults",
+    "stage_bench": "whisper.cpp public whisper-bench, -t 6",
+    "e2e": "pinned LibriSpeech test-clean subset: 32 files, 251.1 s, list sha256 19bcb46351a8317e7faf4d29c6a45e7b638a2ad23e31d38c73c82b51f079dbf6; whisper-cli -t 6 --language en per file, default beam search; processing = whisper.cpp reported total-load per file; RTFx = 251.1 / sum(processing)",
+    "wer": "jiwer on OpenAI EnglishTextNormalizer-normalized refs/hyps (whisper-normalizer package; Open ASR Leaderboard method); 665 normalized reference words",
+    "quality_gate": "corpus WER must not regress vs same-model baseline; per-file WER deltas reviewed"
+  },
+  "model_pins": {
+    "ggml-large-v3.bin": {
+      "bytes": 3095033483,
+      "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+      "source": "ggml-org/whisper.cpp (Hugging Face), converted from openai/whisper-large-v3"
+    },
+    "ggml-large-v3-turbo.bin": {
+      "bytes": 1624555275,
+      "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+      "source": "ggml-org/whisper.cpp (Hugging Face), converted from openai/whisper-large-v3-turbo"
+    }
+  },
+  "runs": [
+    {
+      "id": "baseline-whisper-bench-large-v3-turbo",
+      "date": "2026-08-19",
+      "tool": "whisper-bench -t 6",
+      "machine_state": "MAXN_SUPER, jetson_clocks, clean session",
+      "timings_ms": {
+        "load": 3918.63,
+        "encode_per_run": 678.53,
+        "decode_per_token": 10.64,
+        "batchd_per_token": 1.12,
+        "prompt_per_token": 0.10
+      }
+    },
+    {
+      "id": "baseline-whisper-bench-large-v3",
+      "date": "2026-08-19",
+      "tool": "whisper-bench -t 6",
+      "machine_state": "MAXN_SUPER, jetson_clocks, clean session",
+      "timings_ms": {
+        "load": 35767.88,
+        "encode_per_run": 759.93,
+        "decode_per_token": 55.85,
+        "batchd_per_token": 6.55,
+        "prompt_per_token": 0.61
+      }
+    },
+    {
+      "id": "baseline-e2e-large-v3-turbo",
+      "date": "2026-08-19",
+      "tool": "whisper-cli per file, run_e2e driver",
+      "machine_state": "MAXN_SUPER, jetson_clocks, back-to-back with large-v3 arm",
+      "summary": {
+        "files": 32,
+        "audio_s": 251.1,
+        "processing_s": 35.1,
+        "rtfx_processing": 7.157,
+        "wer": 0.00301,
+        "word_errors": "2 / 665, files 1089-134686-0004 and -0016",
+        "wall_incl_32_model_loads_s": 80.0
+      },
+      "per_file_record": "benchmarks/baseline-e2e-large-v3-turbo.json"
+    },
+    {
+      "id": "baseline-e2e-large-v3",
+      "date": "2026-08-19",
+      "tool": "whisper-cli per file, run_e2e driver",
+      "machine_state": "MAXN_SUPER, jetson_clocks, back-to-back with turbo arm",
+      "summary": {
+        "files": 32,
+        "audio_s": 251.1,
+        "processing_s": 86.1,
+        "rtfx_processing": 2.917,
+        "wer": 0.00301,
+        "word_errors": "2 / 665, files 1089-134686-0008 and -0016",
+        "wall_incl_32_model_loads_s": 820.1
+      },
+      "per_file_record": "benchmarks/baseline-e2e-large-v3.json"
+    }
+  ],
+  "observations": [
+    "Encoder cost is nearly identical between the two models (both 32 encoder layers); turbo's advantage is entirely the 4-layer decoder: 10.64 vs 55.85 ms/token single-stream decode.",
+    "large-v3 cold model load is 35.8 s for the 3.1 GB fp16 image; any non-resident serving pattern is load-dominated (820 s wall vs 86 s processing across 32 invocations).",
+    "Identical corpus WER (0.301%) between models is coincidence: 2 errors each on different files; 11 of 32 raw transcripts differ before normalization."
+  ]
+}
