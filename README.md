@@ -39,7 +39,9 @@ and two approximate attention paths (a hierarchical tree and a late-layer
 candidate) are all rejected on frame-level review: each duplicates or smears
 line work in high-motion close-ups in ways whole-video luma averages fail to
 catch. Attention quality gates now require per-frame review of the
-highest-motion shot. The
+highest-motion shot, and prompts are checked against the model's shot
+budget — one to two shots per six seconds — before artifacts are
+attributed to the runtime. The
 [target record](models/minimax-h3/targets/apple-m3-pro/README.md#video-vae-structure-and-optimization)
 separates measured end-to-end results, component gates and projections.
 Its [optimization ledger](models/minimax-h3/targets/apple-m3-pro/README.md#optimization-ledger)

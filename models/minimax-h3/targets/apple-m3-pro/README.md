@@ -14,6 +14,20 @@ kernel (2,051.492 s) duplicates line work in the shot-4 close-up. Attention
 quality gates now include per-frame review of the highest-motion shot.
 Official full-precision parity and the speed target remain open.
 
+## Prompt budget
+
+Line-work quality depends on the prompt respecting the model's shot
+budget. Published MiniMax H3 guidance calls for one committed visual
+style, action-first subject description, and one to two shots per six
+seconds with at least 1.5 seconds per shot. A four-shot prompt packed
+into 5.2 seconds renders duplicated, misaligned line work in every
+attention path, including exact; the same runtime renders a
+guide-conformant single-shot prompt with clean single-drawn lines
+(`classroom-single-shot-prompt-gate` in [`results.json`](results.json)).
+Quality gates therefore review prompts against this budget before
+attributing artifacts to the runtime, and attention changes are
+reviewed per-frame on the highest-motion shot.
+
 ## N-to-N optimization timeline
 
 | Runtime milestone | Affected stage | Affected-stage time before → after | 480p N-to-N time and change | Reason | Evidence |
