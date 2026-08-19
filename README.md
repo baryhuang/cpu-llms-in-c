@@ -1,8 +1,8 @@
 # llm-in-c
 
-LLM inference in C, compiled for one pinned model on one pinned chip. No framework, nothing general — on purpose.
+LLM inference in C, compiled per model and per chip.
 
-[karpathy/llm.c](https://github.com/karpathy/llm.c) trains GPTs in simple, raw C/CUDA that reads anywhere and runs anywhere. This repository is the opposite end of the pipeline: deployment. An offline compiler fixes tensor formats, graph rewrites, memory placement and schedules for one exact checkpoint on one exact machine; the target receives immutable model images, a compact C runtime and only the kernels that model–hardware pair needs.
+An offline compiler fixes tensor formats, graph rewrites, memory placement and schedules for one exact checkpoint on one exact machine; the target receives immutable model images, a compact C runtime and only the kernels that model–hardware pair needs.
 
 Runtime APIs and graph control are written in C. A target backend may add the minimum platform layer required by its hardware—for example, Objective-C and Metal shaders on Apple Silicon or NEON intrinsics on Arm.
 
