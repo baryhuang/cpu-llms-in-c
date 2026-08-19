@@ -172,6 +172,14 @@
    "verdict": "rejected: the late-layer (40-49, last Turbo step) approximation shows severe vertical streak ghosting and eye-edge echoes on the violent-motion close-up (frame 45) of the anime reference prompt under frame-level review; the whole-video adjacent-luma average that admitted it (4.283 vs 4.496 exact) averages localized motion-shot smear away and is an insufficient gate",
    "cost_benefit": "the candidate saved 74 s of 2418 (3.1 percent); the exact-path flash kernel now saves 367 s with no approximation",
    "policy": "quality gates for attention changes must include per-frame review of the highest-motion shot; whole-video averages alone do not gate"
+  },
+  {
+   "name": "q4-gemm-dual-batch-fragments",
+   "date": "2026-08-18",
+   "finding": "the Q4 GEMM's 64x32 tile pairs each staged weight fragment with one multiply; keeping a second register-resident batch fragment per simdgroup (64x64 coverage on the same 16 KB of threadgroup memory) pairs each weight fragment with two multiplies: the 5376-to-14336 projection at batch 15,485 runs 620.8 -> 311.3 ms (1.99x, 7.67 effective TFLOPS) with the reference fingerprint bit-identical (max_abs_error 0.0025806427 unchanged)",
+   "rejected_variants": "a 64x64 tile via eight simdgroups and 24 KB threadgroup memory regressed 8 percent (core residency halved); vectorized nibble dequant alone was neutral; the same dual-fragment idea applied to the flash attention kernel (128-query threadgroups) was bitwise-correct but 51 percent slower - 32 fp32 accumulator fragments per simdgroup exceed the register budget that the GEMM variant stays under",
+   "e2e_status": "end-to-end certification pending: two certify attempts ran into a machine-state trap (19 GB of wired memory leaked by earlier killed GPU runs drove 8 GB of swap and page-thrashed the denoise); rerun after a clean boot, gated on frame hashes matching the prior classroom run bit for bit",
+   "lesson": "grid edits must always carry their threadsPerThreadgroup - a 64-batch grid launched with 128 threads runs correct but register-starved"
   }
  ],
  "projection_experiments": {

@@ -505,11 +505,16 @@ kernel void minimax_h3_q4_gemm_bf16_activation(
     uint spill_row0 = simdgroup_index * 8u;
     uint output_row = tid & 63u;
     uint k_base = (tid >> 6u) * 32u;
+    uint batch_row1 = batch0 + 32u + simdgroup_index * 8u;
     simdgroup_float8x8 accumulators[8];
+    simdgroup_float8x8 accumulators_b[8];
     for (uint output_fragment = 0u; output_fragment < 8u;
-         ++output_fragment)
+         ++output_fragment) {
         accumulators[output_fragment] =
             make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+        accumulators_b[output_fragment] =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    }
 
     for (uint input_group = 0u; input_group < parameters.groups_per_row;
          ++input_group) {
@@ -522,11 +527,20 @@ kernel void minimax_h3_q4_gemm_bf16_activation(
                 quants + block * 32u + (k_base >> 1u));
             for (uint word = 0u; word < 4u; ++word) {
                 uint bits = words[word];
-                for (uint nibble = 0u; nibble < 8u; ++nibble) {
-                    uint k = k_base + word * 8u + nibble;
-                    weight_tile[k * 64u + output_row] = bfloat(
-                        scale * float((bits >> (4u * nibble)) & 15u) + bias);
-                }
+                float4 low = float4(as_type<uchar4>(bits & 0x0f0f0f0fu)) *
+                             scale + bias;
+                float4 high = float4(as_type<uchar4>((bits >> 4u) &
+                                                     0x0f0f0f0fu)) *
+                              scale + bias;
+                uint k = k_base + word * 8u;
+                weight_tile[(k + 0u) * 64u + output_row] = bfloat(low.x);
+                weight_tile[(k + 1u) * 64u + output_row] = bfloat(high.x);
+                weight_tile[(k + 2u) * 64u + output_row] = bfloat(low.y);
+                weight_tile[(k + 3u) * 64u + output_row] = bfloat(high.y);
+                weight_tile[(k + 4u) * 64u + output_row] = bfloat(low.z);
+                weight_tile[(k + 5u) * 64u + output_row] = bfloat(high.z);
+                weight_tile[(k + 6u) * 64u + output_row] = bfloat(low.w);
+                weight_tile[(k + 7u) * 64u + output_row] = bfloat(high.w);
             }
         } else {
             for (uint k = k_base; k < k_base + 32u; ++k)
@@ -535,8 +549,13 @@ kernel void minimax_h3_q4_gemm_bf16_activation(
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint k = 0u; k < 64u; k += 8u) {
             simdgroup_bfloat8x8 activation;
+            simdgroup_bfloat8x8 activation_b;
             simdgroup_load(activation,
                            input + batch_row0 * columns +
+                               input_group * 64u + k,
+                           columns);
+            simdgroup_load(activation_b,
+                           input + batch_row1 * columns +
                                input_group * 64u + k,
                            columns);
             for (uint output_fragment = 0u; output_fragment < 8u;
@@ -548,23 +567,32 @@ kernel void minimax_h3_q4_gemm_bf16_activation(
                 simdgroup_multiply_accumulate(accumulators[output_fragment],
                                                activation, weight,
                                                accumulators[output_fragment]);
+                simdgroup_multiply_accumulate(
+                    accumulators_b[output_fragment], activation_b, weight,
+                    accumulators_b[output_fragment]);
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    for (uint output_fragment = 0u; output_fragment < 8u;
-         ++output_fragment)
-        simdgroup_store(accumulators[output_fragment],
-                        spill + spill_row0 * 64u + output_fragment * 8u,
-                        64u);
-    simdgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint value = 0u; value < 16u; ++value) {
-        uint linear = tid * 16u + value;
-        uint batch_row = batch0 + (linear >> 6u);
-        uint matrix_row = output_row0 + (linear & 63u);
-        if (batch_row < parameters.batch && matrix_row < parameters.rows)
-            output[batch_row * parameters.rows + matrix_row] =
-                bfloat(spill[linear]);
+    for (uint half_tile = 0u; half_tile < 2u; ++half_tile) {
+        for (uint output_fragment = 0u; output_fragment < 8u;
+             ++output_fragment)
+            simdgroup_store(half_tile == 0u
+                                ? accumulators[output_fragment]
+                                : accumulators_b[output_fragment],
+                            spill + spill_row0 * 64u + output_fragment * 8u,
+                            64u);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint value = 0u; value < 16u; ++value) {
+            uint linear = tid * 16u + value;
+            uint batch_row = batch0 + half_tile * 32u + (linear >> 6u);
+            uint matrix_row = output_row0 + (linear & 63u);
+            if (batch_row < parameters.batch &&
+                matrix_row < parameters.rows)
+                output[batch_row * parameters.rows + matrix_row] =
+                    bfloat(spill[linear]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 }
 

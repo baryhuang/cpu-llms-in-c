@@ -71,6 +71,17 @@ static double run_direct(id<MTLCommandQueue> queue,
                          id<MTLBuffer> value,
                          id<MTLBuffer> output,
                          uint32_t rows) {
+    return -2.0;
+}
+
+static double run_block(id<MTLCommandQueue> queue,
+                        id<MTLComputePipelineState> attention,
+                        id<MTLBuffer> query,
+                        id<MTLBuffer> key,
+                        id<MTLBuffer> value,
+                        id<MTLBuffer> output,
+                        uint32_t rows,
+                        uint32_t block_rows) {
     id<MTLCommandBuffer> command = [queue commandBuffer];
     id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
     [encoder setComputePipelineState:attention];
@@ -79,8 +90,8 @@ static double run_direct(id<MTLCommandQueue> queue,
     [encoder setBuffer:value offset:0 atIndex:2];
     [encoder setBuffer:output offset:0 atIndex:3];
     [encoder setBytes:&rows length:sizeof(rows) atIndex:4];
-    [encoder dispatchThreadgroups:MTLSizeMake((rows + 63u) / 64u,
-                                               H3_HEADS, 1u)
+    [encoder dispatchThreadgroups:MTLSizeMake(
+            (rows + block_rows - 1u) / block_rows, H3_HEADS, 1u)
                 threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
     [encoder endEncoding];
     if (wait_for(command) != 0) return -1.0;
@@ -180,10 +191,10 @@ int main(int argc, char **argv) {
         double reference_ms = run_reference(
             queue, reference, convert, query, key, value, scratch,
             reference_output, rows, elements);
-        double direct_ms = run_direct(
-            queue, direct, query, key, value, direct_output, rows);
-        double flash_ms = run_direct(
-            queue, flash, query, key, value, flash_output, rows);
+        double direct_ms = run_block(
+            queue, direct, query, key, value, direct_output, rows, 64u);
+        double flash_ms = run_block(
+            queue, flash, query, key, value, flash_output, rows, 64u);
         if (reference_ms < 0.0 || direct_ms < 0.0 || flash_ms < 0.0)
             return 1;
 

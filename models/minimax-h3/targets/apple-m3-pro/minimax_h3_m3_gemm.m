@@ -239,7 +239,7 @@ int minimax_h3_m3_run_gemm_benchmark(
             [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4];
             [encoder dispatchThreadgroups:
                 MTLSizeMake((H3_GEMM_ROWS + 63u) / 64u,
-                            (batch_rows + 31u) / 32u, 1)
+                            (batch_rows + 63u) / 64u, 1)
                     threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
             [encoder endEncoding];
             if (gemm_wait(command, error_message, error_message_capacity) != 0)
