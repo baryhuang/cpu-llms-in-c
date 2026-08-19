@@ -66,6 +66,42 @@ Optimization levers this baseline points at, in order: shrink decoder
 bytes/token (quantization, gated on WER), then amortize or shrink model
 load, then encoder.
 
+## Quantization modes on the certified build (2026-08-19, one session)
+
+All ten arms measured back to back on the certified patched build, same
+methodology and gates as everything else. whisper.cpp quantization is
+**weights-only** — activations stay fp16 in every mode — so in
+cross-device terms every row here is `wNa16`: q4_0/q4_K are the
+w4a16-class formats, q8_0 the i8-weights class. The int8-activation
+failure mode seen on NPUs (turbo decoder collapsing after 2 steps)
+structurally cannot happen on this path, and the per-file gate would
+catch it if it did.
+
+| Model | Mode | File size | E2E RTFx | Decode ms/tok | WER | Peak RSS |
+|---|---|---:|---:|---:|---:|---:|
+| large-v3 | fp16 | 3.10 GB | 3.01 | 54.8 | 0.301 % | 4,457 MB |
+| large-v3 | q8_0 | 1.66 GB | 3.71 | 27.7 | 0.150 % | 3,069 MB |
+| large-v3 | q5_0 | 1.08 GB | 3.92 | 19.5 | 0.150 % | 2,522 MB |
+| large-v3 | q4_K | 0.89 GB | 3.49 | 20.1 | 0.301 % | 2,339 MB |
+| large-v3 | **q4_0** | 0.89 GB | **4.20** | **17.7** | 0.150 % | 2,322 MB |
+| turbo | fp16 | 1.62 GB | 7.68 | 10.5 | 0.301 % | 2,351 MB |
+| turbo | q8_0 | 0.87 GB | 7.81 | 5.2 | 0.301 % | 1,609 MB |
+| turbo | q5_0 | 0.57 GB | 7.59 | 3.2 | 0.301 % | 1,323 MB |
+| turbo | q4_K | 0.47 GB | 7.24 | 3.3 | 0.150 % | 1,228 MB |
+| turbo | **q4_0** | 0.47 GB | **7.97** | **2.7** | 0.301 % | 1,227 MB |
+
+Quality gate: **no per-file regression in any arm** — the only per-file
+differences are quant arms *fixing* one of the two baseline errors
+(large-v3 q8_0/q5_0/q4_0 fix `1089-134686-0008`; turbo q4_K fixes
+`1089-134686-0004`). Zero swap in all arms. q4_0 is the throughput
+winner on both models (+39 % over fp16 on large-v3); q4_K's k-quant
+dequant costs more compute on this GPU and loses to the simpler q4_0
+despite identical file size. Turbo's e2e barely moves with quantization
+because its e2e is encoder-bound — but decode drops to 2.7 ms/token,
+which is what matters for streaming/low-latency use. Raw records:
+`benchmarks/battery2-e2e-*.json`. Mainline remains fp16 per owner
+decision; these are measured reference arms.
+
 ## Optimization ledger
 
 Every increment appends here with before/after measured by the same
