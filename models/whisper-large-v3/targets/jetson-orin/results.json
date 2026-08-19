@@ -232,6 +232,20 @@
       "gains": "+1.3% large-v3, +1.5% turbo - small but consistent across both models; fusion decisions provably unchanged (gates only skip checks that would fail), transcripts identical by construction and by measurement (0/64 differ)",
       "open_question": "whisper-bench single-stream decode is ~8% faster with GGML_CUDA_DISABLE_FUSION=1 (50.6 vs 54.8 ms/tok, reproduced 3 sessions, present in stock whisper.cpp too); op-gating did NOT recover it, so the cost is elsewhere in the fusion machinery (bench-level decode only - e2e beam decode favors fusion). Not yet located.",
       "per_file_records": "benchmarks/increment6-e2e-*.json"
+    },
+    {
+      "id": "certification-stock-vs-full-patch",
+      "date": "2026-08-19",
+      "tool": "one session: pristine upstream whisper.cpp 4834a23 (build-graphs tree; its only delta, GGML_CUDA_GRAPHS=ON, separately measured e2e-neutral) vs full target patch (increments 3-6); whisper-bench + e2e per model, adjacent pairs",
+      "machine_state": "MAXN_SUPER, jetson_clocks",
+      "arms": [
+        {"arm": "large-v3 upstream", "rtfx_processing": 2.867, "wer": 0.00301, "peak_rss_mb": 4432.7, "encode_ms_bench": 764.28},
+        {"arm": "large-v3 patched", "rtfx_processing": 3.048, "wer": 0.00301, "peak_rss_mb": 4457.3, "encode_ms_bench": 676.81},
+        {"arm": "turbo upstream", "rtfx_processing": 7.092, "wer": 0.00301, "peak_rss_mb": 2331.1, "processing_s": 35.4, "encode_ms_bench": 673.38},
+        {"arm": "turbo patched", "rtfx_processing": 7.789, "wer": 0.00301, "peak_rss_mb": 2355.5, "processing_s": 32.2, "encode_ms_bench": 589.82}
+      ],
+      "certified": "large-v3 +6.3% (2.867 -> 3.048), turbo +9.8% (7.092 -> 7.789); encoder bench -11.4% / -12.4%; all 64 transcripts byte-identical to upstream; RSS +25 MB (f32 GEMM output buffers); swap 0",
+      "per_file_records": "benchmarks/certification-e2e-*.json"
     }
   ],
   "observations": [

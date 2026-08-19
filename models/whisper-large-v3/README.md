@@ -44,4 +44,4 @@ averages can hide localized regressions.
 
 | Target | Status |
 |---|---|
-| [`targets/jetson-orin/`](targets/jetson-orin/README.md) | Baseline measured; optimization in progress |
+| [`targets/jetson-orin/`](targets/jetson-orin/README.md) | Certified: turbo 7.79 RTFx (+9.8% over upstream), large-v3 3.05 RTFx (+6.3%), transcripts byte-identical |

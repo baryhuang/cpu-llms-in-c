@@ -4,6 +4,22 @@ Baseline and incremental optimization of Whisper large-v3 and large-v3-turbo
 on one exact machine, measured end to end by one public methodology for every
 arm and every increment.
 
+## Certified result (2026-08-19, one session, pristine upstream vs full patch)
+
+| Model | Upstream whisper.cpp | This target's patch | Gain | WER | Transcripts |
+|---|---:|---:|---:|---:|---|
+| large-v3 fp16 | 2.87 RTFx | **3.05 RTFx** | **+6.3 %** | 0.301 % both | 64/64 byte-identical |
+| large-v3-turbo fp16 | 7.09 RTFx | **7.79 RTFx** | **+9.8 %** | 0.301 % both | 64/64 byte-identical |
+
+The patch ([`patches/`](patches/), increments 3–6 below) contains four
+native CUDA changes: whisper-shaped kernel fusions (fused LayerNorm,
+fused bias-GELU), cuBLAS f32-output (removes the f16→f32 convert
+epilogue), a bias epilogue inside the mmf tensor-core GEMM, and op-gated
+fusion dispatch. Encoder pass −11–12 % (764→677 ms large-v3, 673→590 ms
+turbo). Model quality is untouched at fp16 end to end: every transcript
+byte-identical to upstream. Raw records:
+`benchmarks/certification-e2e-*.json`.
+
 ## The machine
 
 | Fact | Value |
