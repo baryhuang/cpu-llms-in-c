@@ -1180,6 +1180,17 @@
     "kernel_parity": "0.19 percent of standalone kernel outputs differ from the two-pass kernel by exactly one bf16 ulp"
    },
    "history": "a first version of this run (2,051.49 s) used bf16 probability fragments in the value matmul; it was rejected after user review found displaced duplicate line work in the shot-4 close-up (frame 116) that the scene-cut and luma gates missed"
+  },
+  {
+   "name": "classroom-single-shot-prompt-gate",
+   "date": "2026-08-18",
+   "workload": "864x480x124 Turbo-4, seed 42, single-continuous-shot bright-classroom anime prompt written to the published MiniMax H3 prompt guidance (one committed style, action-first subject, 1-2 shots per 6 seconds)",
+   "durations_seconds": {
+    "total": 2103.44
+   },
+   "quality": "clean production-grade line work at 3x zoom - single-drawn hair, face and window contours, no duplicated or misaligned edges; smooth single-shot motion",
+   "finding": "the duplicated line work reported on the four-shot anime-room prompt is the model's response to an over-packed shot schedule (four shots in 5.2 seconds, under the guide's 1.5-second minimum per shot) and appears in the exact attention path as well; the runtime with the single-pass fp32-probability kernel renders a within-budget prompt cleanly",
+   "prompt_file": "tmp/minimax-h3-runs/classroom-prompt.txt"
   }
  ],
  "commands": {
