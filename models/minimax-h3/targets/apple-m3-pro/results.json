@@ -1199,7 +1199,12 @@
    },
    "quality": "clean production-grade line work at 3x zoom - single-drawn hair, face and window contours, no duplicated or misaligned edges; smooth single-shot motion",
    "finding": "the duplicated line work reported on the four-shot anime-room prompt is the model's response to an over-packed shot schedule (four shots in 5.2 seconds, under the guide's 1.5-second minimum per shot) and appears in the exact attention path as well; the runtime with the single-pass fp32-probability kernel renders a within-budget prompt cleanly",
-   "prompt_file": "tmp/minimax-h3-runs/classroom-prompt.txt"
+   "prompt_file": "tmp/minimax-h3-runs/classroom-prompt.txt",
+   "clean_boot_rerun": {
+    "date": "2026-08-19",
+    "total_seconds": 2045.33,
+    "determinism": "all 124 output frames bit-identical (md5) to the previous day's run of the same configuration across a reboot"
+   }
   }
  ],
  "commands": {
