@@ -76,6 +76,22 @@ in all runs.
 | 5 | Bias epilogue in mmf tensor-core GEMM + mmvf fusion wiring (`MUL_MAT→ADD`) | large-v3 | **3.036** (ctl 2.827) | 0.301 % | 4,458 MB | **accepted — +7.4% cumulative fusion win, transcripts byte-identical** |
 | 5 | Bias epilogue (`MUL_MAT→ADD`) | turbo | **7.803** (ctl 7.374) | 0.301 % | 2,362 MB | **accepted — +5.8% cumulative fusion win, transcripts byte-identical** |
 
+| 6 | Op-gated fusion pattern checks (CPU-side) | large-v3 | **3.048** (ctl 3.008) | 0.301 % | — | accepted — +1.3%, identical by construction |
+| 6 | Op-gated fusion pattern checks | turbo | **7.773** (ctl 7.661) | 0.301 % | — | accepted — +1.5%, identical by construction |
+
+Increment 6 detail: every fusion-pattern check in `ggml_cuda_try_fuse` now
+short-circuits unless the node's op matches the pattern's first op, and the
+three MUL_MAT scan loops early-out on op mismatch. Fusion decisions are
+provably unchanged (the gates only skip checks that would have failed), so
+transcripts are identical by construction — and measured so. Consistent
++1.3–1.5% e2e on both models. Open question kept honestly: whisper-bench
+single-stream decode runs ~8% faster under `GGML_CUDA_DISABLE_FUSION=1`
+than with fusion enabled (50.6 vs 54.8 ms/token, reproduced in three
+sessions, present in stock whisper.cpp too) and the op-gates did NOT
+recover it — the cost sits somewhere else in the fusion machinery and is
+not yet located; e2e beam decode shows the opposite sign, so fusion stays
+enabled.
+
 Increment 5 detail: decode GEMMs already run at ~85% of the memory-bandwidth
 floor, so the remaining decode cost was glue — every projection's bias add
 ran as a separate 3–12 µs kernel (~9k per large-v3 file). A `bias` pointer

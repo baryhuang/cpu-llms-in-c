@@ -1,5 +1,5 @@
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index f2e381e..2af3ab2 100644
+index f2e381e..979a35a 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -1505,8 +1505,12 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
@@ -16,7 +16,7 @@ index f2e381e..2af3ab2 100644
      } else if (compute_type == GGML_TYPE_BF16) {
          prefer_f32_output = !GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_CDNA(cc);
      }
-@@ -3102,6 +3106,74 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
+@@ -3102,6 +3106,119 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
          return false;
      }
  
@@ -55,6 +55,51 @@ index f2e381e..2af3ab2 100644
 +        return true;
 +    }
 +
++    // mul_mat + bias-add (whisper-style): MUL_MAT -> ADD(mm, bias), bias a contiguous
++    // row vector of length ne0. Fused as an epilogue in the mmf tensor-core kernel
++    // (beam decode) or via mmvf's fusion args (single-stream decode).
++    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_MUL_MAT && ops.begin()[1] == GGML_OP_ADD) {
++        const ggml_tensor * mm  = cgraph->nodes[node_idx];
++        const ggml_tensor * add = cgraph->nodes[node_idx+1];
++
++        if (mm->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32) {
++            return false;
++        }
++        if (add->src[0] != mm) {
++            return false;
++        }
++        const ggml_tensor * bias = add->src[1];
++        if (bias->type != GGML_TYPE_F32 || !ggml_is_contiguous(bias)) {
++            return false;
++        }
++        if (ggml_nelements(bias) != mm->ne[0] || bias->ne[0] != mm->ne[0]) {
++            return false;
++        }
++        if (!ggml_is_contiguous(add) || !ggml_are_same_shape(add, mm)) {
++            return false;
++        }
++        const ggml_tensor * src0 = mm->src[0];
++        const ggml_tensor * src1 = mm->src[1];
++        if (src1->type != GGML_TYPE_F32) {
++            return false;
++        }
++        const bool mm_bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
++                                          ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
++        if (mm_bad_padding_clear) {
++            return false;
++        }
++        const int cc        = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
++        const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
++        if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, src1->ne[1])) {
++            // mmvf fusion path: single column, no batch dims
++            return mm->ne[1] == 1 && mm->ne[2] == 1 && mm->ne[3] == 1;
++        }
++        if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[1], /*mul_mat_id =*/ false)) {
++            return true;
++        }
++        return false;
++    }
++
 +    // bias-add + GELU (whisper-style): ADD(x, bias) -> GELU, bias a contiguous
 +    // row vector of length ne0 broadcast over rows.
 +    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_UNARY
@@ -91,23 +136,457 @@ index f2e381e..2af3ab2 100644
      if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
          const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
          const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
-@@ -3956,6 +4028,16 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3361,7 +3478,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+     }
+ 
+     //RoPE + view + set-rows
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
++    if (node->op == GGML_OP_ROPE && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
+         ggml_tensor * rope     = cgraph->nodes[i];
+         ggml_tensor * set_rows = cgraph->nodes[i + 2];
+ 
+@@ -3509,6 +3626,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+ 
+     // gate + glu + up, with optional scale/bias on both lanes.
+     for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
++        if (node->op != op) {
++            continue;
++        }
+         const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
+ 
+         if (op == GGML_OP_MUL_MAT) {
+@@ -3799,6 +3919,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+ 
+     // mul_mat + scale + optional bias
+     for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
++        if (node->op != op) {
++            continue;
++        }
+         const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
+ 
+         for (const bool with_bias : { false, true }) {
+@@ -3887,6 +4010,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+ 
+     // mul_mat + add
+     for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
++        if (node->op != op) {
++            continue;
++        }
+         const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
+ 
+         if (!ggml_can_fuse(cgraph, i, { op, bias_op })) {
+@@ -3946,49 +4072,76 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+         return fused_node_count - 1;
+     }
+ 
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
++    if (node->op == GGML_OP_RMS_NORM && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {
+         ggml_cuda_op_rms_norm_mul_rope_fused(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2], cgraph->nodes[i + 4]);
+         return 4;
+     }
+ 
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE }, {})) {
++    if (node->op == GGML_OP_RMS_NORM && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE }, {})) {
+         ggml_cuda_op_rms_norm_mul_rope_fused(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2], nullptr);
          return 2;
      }
  
-+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
++    if (node->op == GGML_OP_NORM && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
 +        ggml_cuda_op_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
 +        return 2;
 +    }
 +
-+    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_GELU })) {
++    if (node->op == GGML_OP_MUL_MAT && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD }, {})) {
++        ggml_tensor * add  = cgraph->nodes[i + 1];
++        const ggml_tensor * bias = add->src[1];
++        const ggml_tensor * src0 = node->src[0];
++        const ggml_tensor * src1 = node->src[1];
++        const int cc_mm = ggml_cuda_info().devices[cuda_ctx->device].cc;
++        if (ggml_cuda_should_use_mmvf(src0->type, cc_mm, src0->ne, src0->nb, src1->ne[1])) {
++            ggml_cuda_mm_fusion_args_host fusion_data{};
++            fusion_data.x_bias = bias;
++            ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, nullptr, add, &fusion_data);
++        } else {
++            ggml_cuda_mul_mat_f(*cuda_ctx, src0, src1, nullptr, add, bias);
++        }
++        return 1;
++    }
++
++    if (node->op == GGML_OP_ADD && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_GELU })) {
 +        ggml_cuda_op_add_gelu_fused(*cuda_ctx, node, cgraph->nodes[i + 1]);
 +        return 1;
 +    }
 +
-     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
++    if (node->op == GGML_OP_RMS_NORM && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
          ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
          return 2;
+     }
+ 
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
++    if (node->op == GGML_OP_RMS_NORM && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
+         ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1]);
+         return 1;
+     }
+ 
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
++    if (node->op == GGML_OP_SSM_CONV && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+         ggml_cuda_op_ssm_conv(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+         return 2;
+     }
+ 
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
++    if (node->op == GGML_OP_SSM_CONV && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+         ggml_cuda_op_ssm_conv(*cuda_ctx, node, /*bias_add_node=*/ nullptr, cgraph->nodes[i + 1]);
+         return 1;
+     }
+ 
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL }, { GGML_UNARY_OP_SILU }) ||
+-        ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL }, { GGML_UNARY_OP_SIGMOID }) ||
+-        ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL }, { GGML_UNARY_OP_SOFTPLUS })) {
++    if (node->op == GGML_OP_UNARY &&
++        (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL }, { GGML_UNARY_OP_SILU }) ||
++         ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL }, { GGML_UNARY_OP_SIGMOID }) ||
++         ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL }, { GGML_UNARY_OP_SOFTPLUS }))) {
+         ggml_cuda_op_unary_mul(*cuda_ctx, node, cgraph->nodes[i + 1]);
+         return 1;
+     }
+ 
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_SQR }, { GGML_UNARY_OP_RELU })) {
++    if (node->op == GGML_OP_UNARY && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_UNARY, GGML_OP_SQR }, { GGML_UNARY_OP_RELU })) {
+         ggml_cuda_op_relu_sqr(*cuda_ctx, node, cgraph->nodes[i + 1]);
+         return 1;
+     }
+ 
+-    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
++    if (node->op == GGML_OP_SCALE && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
+         ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i + 2], node);
+         return 2;
+     }
+diff --git a/ggml/src/ggml-cuda/mmf.cu b/ggml/src/ggml-cuda/mmf.cu
+index 646a589..589a1be 100644
+--- a/ggml/src/ggml-cuda/mmf.cu
++++ b/ggml/src/ggml-cuda/mmf.cu
+@@ -10,10 +10,14 @@ static __forceinline__ int mmf_get_rows_per_block(const int cc) {
+     }
+ }
+ 
+-void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
++void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
++                         const ggml_tensor * fused_bias) {
+     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
+     GGML_ASSERT(!ids ||  ids->type == GGML_TYPE_I32);
+     GGML_ASSERT(         dst->type == GGML_TYPE_F32);
++    GGML_ASSERT(!fused_bias || (!ids && fused_bias->type == GGML_TYPE_F32));
++
++    const float * bias_d = fused_bias ? (const float *) fused_bias->data : nullptr;
+ 
+ 
+     GGML_TENSOR_BINARY_OP_LOCALS;
+@@ -105,7 +109,7 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
+             const float * src0_d = (const float *) src0->data;
+             constexpr int vals_per_T = 1;
+             mul_mat_f_switch_rows_per_block<float>(
+-                rows_per_block, src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
++                rows_per_block, src0_d, src1_d, ids_d, dst_d, bias_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
+                 ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
+                 ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
+         } break;
+@@ -113,7 +117,7 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
+             const half2 * src0_d = (const half2 *) src0->data;
+             constexpr int vals_per_T = 2;
+             mul_mat_f_switch_rows_per_block<half2>(
+-                rows_per_block, src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
++                rows_per_block, src0_d, src1_d, ids_d, dst_d, bias_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
+                 ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
+                 ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
+         } break;
+@@ -121,7 +125,7 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
+             const nv_bfloat162 * src0_d = (const nv_bfloat162 *) src0->data;
+             constexpr int vals_per_T = 2;
+             mul_mat_f_switch_rows_per_block<nv_bfloat162>(
+-                rows_per_block, src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
++                rows_per_block, src0_d, src1_d, ids_d, dst_d, bias_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
+                 ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
+                 ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
+         } break;
+diff --git a/ggml/src/ggml-cuda/mmf.cuh b/ggml/src/ggml-cuda/mmf.cuh
+index d55cc1e..b46e0e7 100644
+--- a/ggml/src/ggml-cuda/mmf.cuh
++++ b/ggml/src/ggml-cuda/mmf.cuh
+@@ -41,7 +41,8 @@ struct mmf_ids_data {
+     int sis1 = 0;
+ };
+ 
+-void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst);
++void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
++                         const ggml_tensor * fused_bias = nullptr);
+ 
+ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const int64_t * scr0_ne, const size_t * src0_nb, const int src1_ncols, bool mul_mat_id);
+ 
+@@ -49,6 +50,7 @@ template <typename T, int rows_per_block, int cols_per_block, int nwarps, bool h
+ __launch_bounds__(ggml_cuda_get_physical_warp_size()*nwarps, 1)
+ static __global__ void mul_mat_f(
+         const T * __restrict__ x, const float * __restrict__ y, const int32_t * __restrict__ ids, float * __restrict__ dst,
++        const float * __restrict__ bias,
+         const int ncols, const int ncols_dst_total, const int nchannels_dst, const int stride_row, const int stride_col_y, const int stride_col_dst,
+         const int stride_col_id, const int stride_row_id,
+         const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
+@@ -270,7 +272,9 @@ static __global__ void mul_mat_f(
+         if constexpr (!has_ids) {
+ #pragma unroll
+             for (int i0 = 0; i0 < sizeof(sum)/sizeof(sum[0]); ++i0) {
+-                dst[j*stride_col_dst + row0 + i0*warp_size + threadIdx.x] = sum[i0];
++                const int row = row0 + i0*warp_size + threadIdx.x;
++                // fused bias epilogue: __fadd_rn matches the rounding of the unfused add kernel
++                dst[j*stride_col_dst + row] = bias ? __fadd_rn(sum[i0], bias[row]) : sum[i0];
+             }
+         } else {
+             const int slot = (j < cols_per_block) ? slot_map[j] : -1;
+@@ -284,7 +288,7 @@ static __global__ void mul_mat_f(
+     }
+     }
+ #else
+-    GGML_UNUSED_VARS(x, y, ids, dst,
++    GGML_UNUSED_VARS(x, y, ids, dst, bias,
+         ncols, ncols_dst_total, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+         stride_col_id, stride_row_id,
+         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+@@ -572,6 +576,7 @@ static __global__ void mul_mat_f_ids(
+ template<typename T, int rows_per_block, int cols_per_block, int nwarps>
+ static inline void mul_mat_f_switch_ids(
+         const T * x, const float * y, const int32_t * ids, float * dst,
++        const float * bias,
+         const int64_t ncols_x, const int64_t ncols_dst, const int64_t nchannels_dst,
+         const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst,
+         const int64_t stride_col_id, const int64_t stride_row_id,
+@@ -605,12 +610,12 @@ static inline void mul_mat_f_switch_ids(
+         block_nums_ids.y *= col_tiles;
+ 
+         mul_mat_f<T, rows_per_block, cols_per_block, nwarps, true><<<block_nums_ids, block_dims, nbytes_shared_total, stream>>>
+-            (x, y, ids, dst, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++            (x, y, ids, dst, bias, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+              stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+              sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+     } else {
+         mul_mat_f<T, rows_per_block, cols_per_block, nwarps, false><<<block_nums, block_dims, nbytes_shared_total, stream>>>
+-            (x, y, ids, dst, ncols_x, cols_per_block, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++            (x, y, ids, dst, bias, ncols_x, cols_per_block, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+              stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+              sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+     }
+@@ -619,6 +624,7 @@ static inline void mul_mat_f_switch_ids(
+ template <typename T, int rows_per_block, int cols_per_block>
+ void mul_mat_f_cuda(
+         const T * x, const float * y, const int32_t * ids, float * dst,
++        const float * bias,
+         const int64_t ncols_x, const int64_t nrows_x, const int64_t ncols_dst,
+         const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst,
+         const int64_t stride_col_id, const int64_t stride_row_id,
+@@ -668,56 +674,56 @@ void mul_mat_f_cuda(
+     switch (nwarps_best) {
+         case 1: {
+             mul_mat_f_switch_ids<T, rows_per_block, cols_per_block, 1>(
+-                x, y, ids, dst, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, block_nums, block_dims, nbytes_shared_total, stream,
+                 ids_data);
+         } break;
+         case 2: {
+             mul_mat_f_switch_ids<T, rows_per_block, cols_per_block, 2>(
+-                x, y, ids, dst, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, block_nums, block_dims, nbytes_shared_total, stream,
+                 ids_data);
+         } break;
+         case 3: {
+             mul_mat_f_switch_ids<T, rows_per_block, cols_per_block, 3>(
+-                x, y, ids, dst, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, block_nums, block_dims, nbytes_shared_total, stream,
+                 ids_data);
+         } break;
+         case 4: {
+             mul_mat_f_switch_ids<T, rows_per_block, cols_per_block, 4>(
+-                x, y, ids, dst, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, block_nums, block_dims, nbytes_shared_total, stream,
+                 ids_data);
+         } break;
+         case 5: {
+             mul_mat_f_switch_ids<T, rows_per_block, cols_per_block, 5>(
+-                x, y, ids, dst, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, block_nums, block_dims, nbytes_shared_total, stream,
+                 ids_data);
+         } break;
+         case 6: {
+             mul_mat_f_switch_ids<T, rows_per_block, cols_per_block, 6>(
+-                x, y, ids, dst, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, block_nums, block_dims, nbytes_shared_total, stream,
+                 ids_data);
+         } break;
+         case 7: {
+             mul_mat_f_switch_ids<T, rows_per_block, cols_per_block, 7>(
+-                x, y, ids, dst, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, block_nums, block_dims, nbytes_shared_total, stream,
+                 ids_data);
+         } break;
+         case 8: {
+             mul_mat_f_switch_ids<T, rows_per_block, cols_per_block, 8>(
+-                x, y, ids, dst, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, ncols_dst, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, block_nums, block_dims, nbytes_shared_total, stream,
+                 ids_data);
+@@ -733,6 +739,7 @@ void mul_mat_f_cuda(
+ template <typename T, int rows_per_block>
+ static void mul_mat_f_switch_cols_per_block(
+         const T * x, const float * y, const int32_t * ids, float * dst,
++        const float * bias,
+         const int64_t ncols_x, const int64_t nrows_x, const int64_t ncols_dst,
+         const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst,
+         const int64_t stride_col_id, const int stride_row_id,
+@@ -747,82 +754,82 @@ static void mul_mat_f_switch_cols_per_block(
+ 
+     switch (ncols_case) {
+         case  1: {
+-            mul_mat_f_cuda<T,  rows_per_block, 1>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T,  rows_per_block, 1>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case  2: {
+-            mul_mat_f_cuda<T,  rows_per_block, 2>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T,  rows_per_block, 2>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case  3: {
+-            mul_mat_f_cuda<T,  rows_per_block, 3>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T,  rows_per_block, 3>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case  4: {
+-            mul_mat_f_cuda<T,  rows_per_block, 4>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T,  rows_per_block, 4>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case  5: {
+-            mul_mat_f_cuda<T,  rows_per_block, 5>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T,  rows_per_block, 5>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y,  stride_sample_dst, stream, ids_data);
+         } break;
+         case  6: {
+-            mul_mat_f_cuda<T,  rows_per_block, 6>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T,  rows_per_block, 6>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case  7: {
+-            mul_mat_f_cuda<T,  rows_per_block, 7>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T,  rows_per_block, 7>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case  8: {
+-            mul_mat_f_cuda<T,  rows_per_block, 8>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T,  rows_per_block, 8>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case  9: {
+-            mul_mat_f_cuda<T,  rows_per_block, 9>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T,  rows_per_block, 9>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case 10: {
+-            mul_mat_f_cuda<T, rows_per_block, 10>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T, rows_per_block, 10>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case 11: {
+-            mul_mat_f_cuda<T, rows_per_block, 11>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T, rows_per_block, 11>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case 12: {
+-            mul_mat_f_cuda<T, rows_per_block, 12>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T, rows_per_block, 12>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case 13: {
+-            mul_mat_f_cuda<T, rows_per_block, 13>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T, rows_per_block, 13>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case 14: {
+-            mul_mat_f_cuda<T, rows_per_block, 14>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T, rows_per_block, 14>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case 15: {
+-            mul_mat_f_cuda<T, rows_per_block, 15>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T, rows_per_block, 15>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case 16: {
+-            mul_mat_f_cuda<T, rows_per_block, 16>(x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++            mul_mat_f_cuda<T, rows_per_block, 16>(x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y,  nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+@@ -835,6 +842,7 @@ static void mul_mat_f_switch_cols_per_block(
+ template <typename T>
+ static void mul_mat_f_switch_rows_per_block(
+         const int rows_per_block, const T * x, const float * y, const int32_t * ids, float * dst,
++        const float * bias,
+         const int64_t ncols_x, const int64_t nrows_x, const int64_t ncols_dst,
+         const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst,
+         const int64_t stride_col_id, const int stride_row_id,
+@@ -845,13 +853,13 @@ static void mul_mat_f_switch_rows_per_block(
+     switch (rows_per_block) {
+         case MMF_ROWS_PER_BLOCK: {
+             mul_mat_f_switch_cols_per_block<T, MMF_ROWS_PER_BLOCK>(
+-                x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+         case MMF_ROWS_PER_BLOCK_CDNA: {
+             mul_mat_f_switch_cols_per_block<T, MMF_ROWS_PER_BLOCK_CDNA>(
+-                x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
++                x, y, ids, dst, bias, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                 stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                 nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+         } break;
+@@ -863,6 +871,7 @@ static void mul_mat_f_switch_rows_per_block(
+ #define DECL_MMF_CASE_HELPER(T, nrows_dst, ncols_dst) \
+     template void mul_mat_f_cuda<T, nrows_dst, ncols_dst>( \
+         const T * x, const float * y, const int32_t * ids, float * dst, \
++        const float * bias, \
+         const int64_t ncols_x, const int64_t nrows_x, int64_t ncols_dst_total, const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst, \
+         const int64_t stride_col_id, const int64_t stride_row_id, \
+         const int64_t nchannels_x, const int64_t nchannels_y, const int64_t nchannels_dst, \
 diff --git a/ggml/src/ggml-cuda/norm.cu b/ggml/src/ggml-cuda/norm.cu
 index c3758cd..30f1c7f 100644
 --- a/ggml/src/ggml-cuda/norm.cu
