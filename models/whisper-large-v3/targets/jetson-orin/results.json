@@ -91,6 +91,44 @@
       "per_file_record": "benchmarks/baseline-e2e-large-v3.json"
     },
     {
+      "id": "profile1-nsys-kernel-level",
+      "date": "2026-08-19",
+      "tool": "nsys profile -t cuda --stats=true (public NVIDIA Nsight Systems), whisper-cli on file 1089-134686-0000 (10.44 s), fp16 models",
+      "machine_state": "MAXN_SUPER, jetson_clocks, quiet box",
+      "large_v3": {
+        "kernel_launches": 47335,
+        "api_launch_time_ms": 716.5,
+        "top_kernels_ms": {
+          "mul_mat_f half2 beam5 decode GEMM": 484.8,
+          "flash_attn_ext_f16 64x64x8 decode": 349.1,
+          "k_bin_bcast add (17,656 launches)": 196.2,
+          "mul_mat_f half2 n8": 182.6,
+          "cublas ampere_h16816gemm encoder": 160.1,
+          "flash_attn_ext_f16 64x64x64 encoder (32 layers)": 129.2,
+          "convert_unary half-to-float": 105.6,
+          "convert_unary float-to-half": 87.9
+        }
+      },
+      "turbo": {
+        "kernel_launches": 7211,
+        "api_launch_time_ms": 271.1,
+        "top_kernels_ms": {
+          "cublas ampere_h16816gemm encoder": 136.5,
+          "flash_attn_ext_f16 64x64x64 encoder (32 layers, 4.04 ms each)": 129.3,
+          "k_bin_bcast add": 103.9,
+          "convert_unary half-to-float (243 calls)": 89.8,
+          "cutlass h16816gemm 128x128": 75.6,
+          "convert_unary float-to-half (241 calls)": 73.9
+        }
+      },
+      "findings": [
+        "Kernel-launch overhead is first-order on Orin's CPU: 15-38 us per cudaLaunchKernel, 47,335 launches for one large-v3 file (716 ms API time). GGML_CUDA_GRAPHS is OFF in the default whisper.cpp build (option is marked llama.cpp-only) -> increment 2 = graphs-enabled build.",
+        "Format-conversion waste: convert_unary fp16<->fp32 pairs cost ~164 ms/file on turbo (~24% of the encoder pass). Cause located in ggml_cuda_mul_mat_cublas_impl: on SM 8.7 compute_type=F16 with prefer_f32_output=false, so fp32 activations convert to f16 in and the f16 GEMM output converts back to f32 out.",
+        "Unfused glue: thousands of 3-12 us elementwise kernels (bin_bcast add/mul, norm, scale, cpy, gelu) per file; each costs more to launch than to run.",
+        "Encoder attention: flash_attn_ext_f16<64,64,64> = 4.0 ms x 32 layers on both models; with GEMMs this is the fp16-bound encoder floor (~660-760 ms/file) that dominates e2e after decode shrinks."
+      ]
+    },
+    {
       "id": "battery1-quant-reference-arms",
       "date": "2026-08-19",
       "tool": "whisper-quantize (public, part of whisper.cpp) + whisper-bench -t 6 + whisper-cli e2e under GNU time -v",
@@ -110,6 +148,22 @@
         "resolution_caveat": "665 reference words; one error = 0.15% WER; per-file transcript diffs used below corpus resolution"
       },
       "per_file_records": "benchmarks/battery1-e2e-*.json"
+    },
+    {
+      "id": "increment2-cuda-graphs-REJECTED",
+      "date": "2026-08-19",
+      "tool": "whisper.cpp rebuilt with -DGGML_CUDA_GRAPHS=ON (build-graphs), A/B vs graphs-off build, adjacent pairs one session",
+      "machine_state": "MAXN_SUPER, jetson_clocks",
+      "e2e_status": "REJECTED - measured no effect",
+      "arms": [
+        {"arm": "large-v3 ctl (graphs off)", "rtfx_processing": 2.865, "wer": 0.00301, "peak_rss_mb": 4437.0},
+        {"arm": "large-v3 graphs on", "rtfx_processing": 2.864, "wer": 0.00301, "peak_rss_mb": 4439.4},
+        {"arm": "turbo ctl (graphs off)", "rtfx_processing": 7.168, "wer": 0.00301, "peak_rss_mb": 2337.8},
+        {"arm": "turbo graphs on", "rtfx_processing": 7.209, "wer": 0.00301, "peak_rss_mb": 2339.0}
+      ],
+      "bench_deltas": "decode ms/tok flat (55.80 vs 56.04 large, 10.64 vs 10.67 turbo); batchd -6% both (6.53->6.12, 1.12->1.04) within session noise",
+      "root_cause": "ggml CUDA graphs require a 2-call warmup with unchanged node properties (ggml_backend_cuda_graph_compute); whisper's decode graph changes tensor properties every step (growing KV positions), so warmup never completes and no graph is captured. The option is marked llama.cpp-only upstream for this reason.",
+      "lesson": "Launch-overhead reduction on whisper must come from reducing kernel count (fusion), not from graph capture."
     }
   ],
   "observations": [

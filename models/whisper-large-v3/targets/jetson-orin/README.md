@@ -65,6 +65,16 @@ in all runs.
 | 1 | q5_0 quantization | large-v3 | 3.83 | 0.150 % | 2,485 MB | gate passed; reference arm, not mainline |
 | 1 | q8_0 quantization | turbo | 7.58 | 0.301 % | 1,579 MB | gate passed; reference arm, not mainline |
 | 1 | q5_0 quantization | turbo | 7.42 | 0.301 % | 1,293 MB | gate passed; reference arm, not mainline |
+| 2 | `GGML_CUDA_GRAPHS=ON` build | large-v3 | 2.864 (ctl 2.865) | 0.301 % | 4,439 MB | **no effect — rejected** |
+| 2 | `GGML_CUDA_GRAPHS=ON` build | turbo | 7.209 (ctl 7.168) | 0.301 % | 2,339 MB | **no effect — rejected** |
+
+Increment 2 root cause (negative result kept): ggml's CUDA-graph path
+requires two consecutive executions of the same graph with unchanged node
+properties before it captures ("warmup"). Whisper's decode step changes
+tensor properties every call (growing KV positions), so warmup never
+completes and no graph is ever captured — the 47k-launch overhead stands.
+Launch-overhead elimination on this workload must come from kernel fusion
+instead, which the profile independently ranks as the top lever.
 
 Baseline row 0 here is the same-window re-measure from the six-arm battery
 (2.78 vs the first session's 2.92 — ~5 % session drift, which is exactly why
