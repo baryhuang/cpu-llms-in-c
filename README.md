@@ -21,7 +21,7 @@ Every performance claim belongs to one exact model revision and one exact target
 
 | Model | CPU / SoC | Execution path | Measured result | Evidence |
 |---|---|---|---|---|
-| Qwen3.8-27B | Apple M3 Pro, 36 GB unified memory | C runtime + Metal kernels, affine Q4, FP16 KV, adaptive MTP | **11.95 end-to-end tok/s** five-workload aggregate, up to **17.59** on long code; 7.96 tok/s without MTP | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [raw results](models/qwen3.8-27b/targets/apple-m3-pro/results.json) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) |
+| Qwen3.8-27B | Apple M3 Pro, 36 GB unified memory | C runtime + Metal kernels, affine Q4, FP16 KV, adaptive MTP | **11.95 end-to-end tok/s** five-workload aggregate, up to **17.59** on long code; 7.96 tok/s without MTP, against 8.29 for mlx-lm on the same weights and machine | [model](models/qwen3.8-27b/README.md) · [target](models/qwen3.8-27b/targets/apple-m3-pro/README.md) · [raw results](models/qwen3.8-27b/targets/apple-m3-pro/results.json) · [review](models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html) |
 | MiniMax-H3 | Apple M3 Pro, 36 GB unified memory | C/Metal tokenizer, streamed Q8 conditioner, affine-Q4/BF16 H3, single-pass exact attention, optimized Video VAE, Audio VAE | Exact 864×480×124 Turbo-4: **2,194.44 s** (was 2,418.71 s); all three scene cuts stable, per-frame review clean; zero swap | [model](models/minimax-h3/README.md) · [target](models/minimax-h3/targets/apple-m3-pro/README.md) · [raw results](models/minimax-h3/targets/apple-m3-pro/results.json) · [review](models/minimax-h3/targets/apple-m3-pro/H3-ATTENTION-QUALITY-REVIEW.html) |
 | Qwen3.5-0.8B | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, model-specialized DeltaNet state | **3.64 prompt tok/s**, **2.60 decode tok/s**, 488 MiB generation RSS, zero swap | [model](models/qwen3.5-0.8b/README.md) · [target](models/qwen3.5-0.8b/targets/a113x/README.md) · [raw results](models/qwen3.5-0.8b/targets/a113x/results.json) |
 | Whisper small.en | Amlogic A113X, 4× Cortex-A53, 2 GB | C11 + NEON, mixed Q4/Q8 encoder and cached decoder | 11 s audio in **45.0 s**, 251 MiB RSS, zero swap; 0/22 word errors on the pinned JFK sample | [model](models/whisper-small.en/README.md) · [target](models/whisper-small.en/targets/a113x/README.md) · [raw results](models/whisper-small.en/targets/a113x/results.json) |
@@ -74,7 +74,24 @@ One separate 36-token-prompt, 28-token-reply comparison used resident models and
 | This runtime, adaptive MTP | **9.01 tok/s** | **3.109 s** |
 | llama.cpp build 10360, Unsloth Q4_K_M | 5.76 tok/s | 4.864 s |
 
-The llama.cpp checkpoint uses a different Q4 format, so this is a runtime-level comparison, not token-level quantization parity. Exact sources, hashes, prompts, output checks and per-case timings are in the [target record](models/qwen3.8-27b/targets/apple-m3-pro/results.json).
+The llama.cpp checkpoint uses a different Q4 format, so this is a runtime-level comparison, not token-level quantization parity.
+
+The stronger local baseline on this machine is Apple's own stack. The
+five-workload set was run through mlx-lm 0.31.3 and oMLX 0.5.7 against the
+same `mlx-community/Qwen3.8-27B-4bit` checkpoint this runtime compiles from:
+
+| Stack | Five-workload aggregate | Long-code case |
+|---|---:|---:|
+| mlx-lm 0.31.3 / mlx 0.32.0 | 8.29 tok/s | 8.36 tok/s |
+| oMLX 0.5.7 | 8.28 tok/s | 8.30 tok/s |
+| This runtime, plain | 7.96 tok/s | 7.98 tok/s |
+| This runtime, adaptive MTP | **11.95 tok/s** | **17.59 tok/s** |
+
+Without speculation this runtime is 0.96× the best Apple stack. 15.139 GB of
+mapped weights over 117–118 GB/s measured is a first-order ceiling near 7.8
+tokens/s for any decoder that reads every weight once per token, and all three
+non-speculative arms land within 6% of it. The speculative arm clears the
+bound by amortizing one weight pass over several accepted tokens. Exact sources, hashes, prompts, output checks and per-case timings are in the [target record](models/qwen3.8-27b/targets/apple-m3-pro/results.json).
 
 ## How the repository is organized
 

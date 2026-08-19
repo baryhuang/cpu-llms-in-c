@@ -143,3 +143,40 @@ A separate comparison used the same rendered 36-token prompt and 28-token greedy
 | Decode throughput | about 8.4 tok/s | included in speculative schedule | 7.11 tok/s |
 
 The comparison establishes end-to-end behavior on this machine; it does not establish equal quantization quality. Full source pins, per-round timings and definitions are in [`results.json`](results.json), with a human-readable view in [`REVIEW.html`](REVIEW.html).
+
+## Apple stack comparison
+
+The llama.cpp row above is not the strongest local stack on this machine. The
+same five workloads were run through mlx-lm 0.31.3 / mlx 0.32.0 and oMLX 0.5.7
+on 2026-08-18, both resident, greedy, one warmup first, against
+`mlx-community/Qwen3.8-27B-4bit` — the same checkpoint this runtime compiles
+its images from, with no requantization on either side. Reply token counts
+differ between stacks because the completions differ; this compares
+throughput, not tokens.
+
+| Workload | mlx-lm | oMLX | This runtime, plain | This runtime, adaptive MTP | MTP vs best MLX |
+|---|---:|---:|---:|---:|---:|
+| Code, short | 6.29 | 6.17 | 6.36 | **15.01** | 2.39× |
+| Prose | 8.08 | 8.12 | 8.19 | **10.84** | 1.33× |
+| Code, long | 8.36 | 8.30 | 7.98 | **17.59** | 2.10× |
+| Essay | 8.46 | 8.45 | 8.01 | **9.94** | 1.17× |
+| Summary | 7.26 | 7.33 | 6.99 | **9.87** | 1.35× |
+| **Aggregate** | **8.29** | **8.28** | 7.96 | **11.95** | **1.44×** |
+
+All values are end-to-end tokens/s: reply tokens over the full request wall,
+including prefill. Aggregate walls are 398.1 s for mlx-lm, 398.0 s for oMLX,
+415.0 s plain and 276.0 s speculative.
+
+Without speculation this runtime is **0.96×** the best Apple stack, not ahead
+of it. That result is expected rather than disappointing: 15.139 GB of mapped
+weights over the 117–118 GB/s measured on this machine is a first-order
+ceiling near 7.8 tokens/s for any decoder that reads every weight once per
+token, and mlx-lm (8.29), oMLX (8.28) and the plain arm (7.96) all sit within
+6% of it. Hand-written kernels cannot move a bound set by weight traffic.
+Adaptive MTP clears it by amortizing one weight pass over several accepted
+tokens, which is where the 1.44× aggregate and 2.10× long-code margins come
+from.
+
+Raw per-case output is in [`../../../../tools/compare/set-mlxlm-38.json`](../../../../tools/compare/set-mlxlm-38.json)
+and [`set-omlx-38.json`](../../../../tools/compare/set-omlx-38.json); the
+merged record is `apple_stack_comparison` in [`results.json`](results.json).

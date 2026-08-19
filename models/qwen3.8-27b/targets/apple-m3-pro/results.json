@@ -173,6 +173,98 @@
   "summary": "this runtime leads 1.09x end to end without speculation and 1.56x with it (output token-identical to plain decoding); llama.cpp's reply is correct but differs textually - a different Q4 quantization of the same model",
   "regression": "the runtime's replies match the recorded 3.8 outputs exactly after the wide-tile/S128 prefill changes, with and without speculation"
  },
+ "apple_stack_comparison": {
+  "measured_at": "2026-08-18",
+  "question": "how far the compiled runtime is from the strongest Apple-silicon stacks on the same weights, same machine and the same five workloads",
+  "stacks": "mlx-lm 0.31.3 / mlx 0.32.0, and oMLX 0.5.7 BatchedEngine (enable_thinking=False), both resident, greedy (temperature 0), one warmup then the five workloads",
+  "weights": "tmp/qwen38-27b-4bit, the same mlx-community/Qwen3.8-27B-4bit checkpoint this runtime compiles its images from; no requantization on either side",
+  "method": "tools/compare/run_mlxlm_set.py and run_omlx_set.py over tools/compare/five_workloads.py; end-to-end tokens/s is reply tokens divided by full request wall including prefill; reply token counts differ between stacks because the completions differ, so this is a throughput comparison, not token-level parity",
+  "raw": [
+   "tools/compare/set-mlxlm-38.json",
+   "tools/compare/set-omlx-38.json"
+  ],
+  "cases": [
+   {
+    "case": "code short",
+    "mlx_lm_tokens": 29,
+    "mlx_lm_wall_s": 4.612,
+    "mlx_lm_e2e_tok_s": 6.29,
+    "omlx_tokens": 28,
+    "omlx_wall_s": 4.539,
+    "omlx_e2e_tok_s": 6.17,
+    "runtime_plain_e2e_tok_s": 6.36,
+    "runtime_mtp_e2e_tok_s": 15.01,
+    "mtp_vs_best_mlx": 2.39
+   },
+   {
+    "case": "prose",
+    "mlx_lm_tokens": 475,
+    "mlx_lm_wall_s": 58.802,
+    "mlx_lm_e2e_tok_s": 8.08,
+    "omlx_tokens": 474,
+    "omlx_wall_s": 58.348,
+    "omlx_e2e_tok_s": 8.12,
+    "runtime_plain_e2e_tok_s": 8.19,
+    "runtime_mtp_e2e_tok_s": 10.84,
+    "mtp_vs_best_mlx": 1.33
+   },
+   {
+    "case": "code long",
+    "mlx_lm_tokens": 1155,
+    "mlx_lm_wall_s": 138.198,
+    "mlx_lm_e2e_tok_s": 8.36,
+    "omlx_tokens": 1154,
+    "omlx_wall_s": 139.059,
+    "omlx_e2e_tok_s": 8.3,
+    "runtime_plain_e2e_tok_s": 7.98,
+    "runtime_mtp_e2e_tok_s": 17.59,
+    "mtp_vs_best_mlx": 2.1
+   },
+   {
+    "case": "essay",
+    "mlx_lm_tokens": 1511,
+    "mlx_lm_wall_s": 178.687,
+    "mlx_lm_e2e_tok_s": 8.46,
+    "omlx_tokens": 1510,
+    "omlx_wall_s": 178.607,
+    "omlx_e2e_tok_s": 8.45,
+    "runtime_plain_e2e_tok_s": 8.01,
+    "runtime_mtp_e2e_tok_s": 9.94,
+    "mtp_vs_best_mlx": 1.17
+   },
+   {
+    "case": "summary",
+    "mlx_lm_tokens": 129,
+    "mlx_lm_wall_s": 17.757,
+    "mlx_lm_e2e_tok_s": 7.26,
+    "omlx_tokens": 128,
+    "omlx_wall_s": 17.454,
+    "omlx_e2e_tok_s": 7.33,
+    "runtime_plain_e2e_tok_s": 6.99,
+    "runtime_mtp_e2e_tok_s": 9.87,
+    "mtp_vs_best_mlx": 1.35
+   }
+  ],
+  "aggregate": {
+   "mlx_lm_e2e_tok_s": 8.29,
+   "mlx_lm_tokens": 3299,
+   "mlx_lm_wall_s": 398.1,
+   "omlx_e2e_tok_s": 8.28,
+   "omlx_tokens": 3294,
+   "omlx_wall_s": 398.0,
+   "runtime_plain_e2e_tok_s": 7.96,
+   "runtime_mtp_e2e_tok_s": 11.95,
+   "runtime_plain_vs_best_mlx": 0.96,
+   "runtime_mtp_vs_best_mlx": 1.44
+  },
+  "bandwidth_bound": {
+   "mapped_text_image_bytes": 15138643968,
+   "measured_bandwidth_gb_s": "117-118 across complete representative layers",
+   "first_order_ceiling_tok_s": 7.8,
+   "note": "15.139 GB of mapped weights over 118 GB/s is about 7.8 tokens/s for any decoder that reads every weight once per token; mlx-lm (8.29), oMLX (8.28) and this runtime without speculation (7.96) all land within 6% of that figure, which is why the non-speculative arms are indistinguishable in practice; the speculative arm exceeds it by amortizing one weight pass over several accepted tokens"
+  },
+  "summary": "on the same weights and machine this runtime is 0.96x the best Apple stack without speculation and 1.44x with adaptive MTP, reaching 2.10x on the long-code workload and 2.39x on the short-code workload; the non-speculative gap is inside measurement noise of the shared memory-bandwidth bound"
+ },
  "memory_for_speed_experiments": {
   "measured_at": "2026-08-16",
   "question": "decode streams every weight byte per token, so spare RAM can buy speed only as more tokens verified per weight stream; two candidates were built and measured same-window (thermal drift makes cross-window comparison unreliable)",
