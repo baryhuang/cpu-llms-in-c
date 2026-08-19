@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "date": "2026-08-18",
+ "date": "2026-08-19",
  "device": {
   "model": "MacBook Pro Mac15,6",
   "soc": "Apple M3 Pro",
@@ -178,8 +178,9 @@
    "date": "2026-08-18",
    "finding": "the Q4 GEMM's 64x32 tile pairs each staged weight fragment with one multiply; keeping a second register-resident batch fragment per simdgroup (64x64 coverage on the same 16 KB of threadgroup memory) pairs each weight fragment with two multiplies: the 5376-to-14336 projection at batch 15,485 runs 620.8 -> 311.3 ms (1.99x, 7.67 effective TFLOPS) with the reference fingerprint bit-identical (max_abs_error 0.0025806427 unchanged)",
    "rejected_variants": "a 64x64 tile via eight simdgroups and 24 KB threadgroup memory regressed 8 percent (core residency halved); vectorized nibble dequant alone was neutral; the same dual-fragment idea applied to the flash attention kernel (128-query threadgroups) was bitwise-correct but 51 percent slower - 32 fp32 accumulator fragments per simdgroup exceed the register budget that the GEMM variant stays under",
-   "e2e_status": "end-to-end certification pending: two certify attempts ran into a machine-state trap (19 GB of wired memory leaked by earlier killed GPU runs drove 8 GB of swap and page-thrashed the denoise); rerun after a clean boot, gated on frame hashes matching the prior classroom run bit for bit",
-   "lesson": "grid edits must always carry their threadsPerThreadgroup - a 64-batch grid launched with 128 threads runs correct but register-starved"
+   "e2e_status": "REVERTED: on a verified clean boot (0 swap), the dual-fragment kernel runs the denoise groups at ~79 s versus 30.8 s for the original kernel on the same boot, while the standalone bench shows it 1.78x faster (348.1 ms vs 620.8, staging fixed for 256 threads, fingerprint bit-identical). The kernel wins in isolation and loses 2.6x inside the pipeline's command-buffer context; the repo keeps the original kernel",
+   "lesson": "grid edits must always carry their threadsPerThreadgroup - a 64-batch grid launched with 128 threads runs correct but register-starved; a kernel bench win must be confirmed by in-pipeline group timings on a clean machine before committing",
+   "open_question": "why the same kernel, grid and thread count diverge 4.6x between the standalone bench and the denoise encoder - candidate factors: paired activation-fragment loads whose row stride reaches 28 KB at fc2's 14,336 columns, and register-heavy 256-thread threadgroups interacting with the encoder's kernel mix; an in-context bisect harness is needed before retrying"
   }
  ],
  "projection_experiments": {

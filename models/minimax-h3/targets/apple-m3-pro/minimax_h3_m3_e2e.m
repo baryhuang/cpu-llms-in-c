@@ -876,8 +876,8 @@ static int h3_q4_linear(h3_remote_image *image,
     [encoder setBuffer:output offset:0 atIndex:4];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:5];
     [encoder dispatchThreadgroups:
-        MTLSizeMake((parameters.rows + 63u) / 64u, (batch + 63u) / 64u, 1u)
-            threadsPerThreadgroup:MTLSizeMake(256u, 1u, 1u)];
+        MTLSizeMake((parameters.rows + 63u) / 64u, (batch + 31u) / 32u, 1u)
+            threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
     return 0;
 }
 
