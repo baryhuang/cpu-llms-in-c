@@ -68,6 +68,23 @@ in all runs.
 | 2 | `GGML_CUDA_GRAPHS=ON` build | large-v3 | 2.864 (ctl 2.865) | 0.301 % | 4,439 MB | **no effect — rejected** |
 | 2 | `GGML_CUDA_GRAPHS=ON` build | turbo | 7.209 (ctl 7.168) | 0.301 % | 2,339 MB | **no effect — rejected** |
 
+| 3 | Whisper-shaped CUDA kernel fusions (native, [patch](patches/0001-whisper-shape-cuda-fusions.patch)) | large-v3 | **2.925** (ctl 2.822) | 0.301 % | 4,438 MB | **accepted — +3.7%, transcripts byte-identical** |
+| 3 | Whisper-shaped CUDA kernel fusions | turbo | **7.631** (ctl 7.198) | 0.301 % | 2,328 MB | **accepted — +6.0%, transcripts byte-identical** |
+
+Increment 3 detail: two fusion patterns added to ggml-cuda's own fusion
+framework, which previously carried only llama-shaped patterns (SwiGLU,
+RMS-norm+RoPE) — none of which whisper's LayerNorm/GELU graph ever
+matched. `NORM→MUL→ADD` becomes one fused LayerNorm kernel
+(`norm_mul_add_f32`) and `ADD→UNARY(GELU)` becomes one fused bias-GELU
+kernel (`add_bias_gelu_f32`). Explicit `__fmul_rn`/`__fadd_rn` keep
+rounding identical to the unfused chains, and the gate confirms it: all
+64 transcripts (32 files × 2 models) are byte-identical to stock. Per
+turbo file this removes ~1,400 of ~7,200 kernel launches (unfused
+LayerNorm kernels drop to zero) and cuts the encoder pass 6.5–7.9%.
+Control arm = same binary with `GGML_CUDA_DISABLE_FUSION=1` (whisper
+triggers no other fusion patterns, so that is exactly stock), adjacent
+runs in one session.
+
 Increment 2 root cause (negative result kept): ggml's CUDA-graph path
 requires two consecutive executions of the same graph with unchanged node
 properties before it captures ("warmup"). Whisper's decode step changes

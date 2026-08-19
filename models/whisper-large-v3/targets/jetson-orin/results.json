@@ -164,6 +164,24 @@
       "bench_deltas": "decode ms/tok flat (55.80 vs 56.04 large, 10.64 vs 10.67 turbo); batchd -6% both (6.53->6.12, 1.12->1.04) within session noise",
       "root_cause": "ggml CUDA graphs require a 2-call warmup with unchanged node properties (ggml_backend_cuda_graph_compute); whisper's decode graph changes tensor properties every step (growing KV positions), so warmup never completes and no graph is captured. The option is marked llama.cpp-only upstream for this reason.",
       "lesson": "Launch-overhead reduction on whisper must come from reducing kernel count (fusion), not from graph capture."
+    },
+    {
+      "id": "increment3-whisper-shape-fusions-ACCEPTED",
+      "date": "2026-08-19",
+      "tool": "native CUDA patch (patches/0001-whisper-shape-cuda-fusions.patch) on whisper.cpp 4834a23; A/B = same binary, control GGML_CUDA_DISABLE_FUSION=1 (stock: whisper triggers no other fusion patterns), adjacent runs one session",
+      "machine_state": "MAXN_SUPER, jetson_clocks",
+      "e2e_status": "ACCEPTED",
+      "change": "Two whisper-shaped patterns added to ggml-cuda's fusion framework: NORM->MUL->ADD fused into norm_mul_add_f32 (LayerNorm with weight+bias in one kernel, contiguous row-vector gamma/beta), ADD->UNARY(GELU) fused into add_bias_gelu_f32 (row-vector bias). __fmul_rn/__fadd_rn preserve unfused rounding exactly.",
+      "arms": [
+        {"arm": "large-v3 ctl", "rtfx_processing": 2.822, "wer": 0.00301, "peak_rss_mb": 4441.0, "processing_s": 89.0, "encode_ms_bench": 757.82},
+        {"arm": "large-v3 fused", "rtfx_processing": 2.925, "wer": 0.00301, "peak_rss_mb": 4437.9, "processing_s": 85.8, "encode_ms_bench": 708.29},
+        {"arm": "turbo ctl", "rtfx_processing": 7.198, "wer": 0.00301, "peak_rss_mb": 2328.3, "processing_s": 34.9, "encode_ms_bench": 676.24},
+        {"arm": "turbo fused", "rtfx_processing": 7.631, "wer": 0.00301, "peak_rss_mb": 2328.0, "processing_s": 32.9, "encode_ms_bench": 623.09}
+      ],
+      "gains": "large-v3 e2e +3.7%, turbo e2e +6.0%; encoder pass -6.5% / -7.9%; per turbo file norm_mul_add_f32 fires 611x replacing 1,833 kernels, add_bias_gelu_f32 fires 196x, ~1,400 fewer launches of ~7,200",
+      "quality_gate": "GOLD: all 64 transcripts (32 files x 2 models) byte-identical to stock; corpus WER unchanged 0.00301 both models; RSS unchanged; swap 0",
+      "per_file_records": "benchmarks/increment3-e2e-*.json",
+      "note": "single-stream decode bench showed +-8% session noise (ctl 50.6 vs historic 55.8 ms/tok) - e2e on the pinned subset is the decision metric, bench is directional only"
     }
   ],
   "observations": [
