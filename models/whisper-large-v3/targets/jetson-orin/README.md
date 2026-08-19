@@ -53,12 +53,40 @@ load, then encoder.
 ## Optimization ledger
 
 Every increment appends here with before/after measured by the same
-methodology; negative results are kept.
+methodology; negative results are kept. Memory footprint (peak RSS under
+GNU `time -v`, swap after run) is recorded with every arm; swap stayed 0
+in all runs.
 
-| # | Change | Model | E2E RTFx | WER | Verdict |
-|---|---|---|---:|---:|---|
-| 0 | Baseline: whisper.cpp CUDA fp16, defaults | large-v3 | 2.92 | 0.301 % | reference |
-| 0 | Baseline: whisper.cpp CUDA fp16, defaults | turbo | 7.16 | 0.301 % | reference |
+| # | Change | Model | E2E RTFx | WER | Peak RSS | Verdict |
+|---|---|---|---:|---:|---:|---|
+| 0 | Baseline: whisper.cpp CUDA fp16, defaults | large-v3 | 2.78 | 0.301 % | 4,439 MB | reference |
+| 0 | Baseline: whisper.cpp CUDA fp16, defaults | turbo | 7.18 | 0.301 % | 2,322 MB | reference |
+| 1 | q8_0 quantization (`whisper-quantize`) | large-v3 | 3.94 | 0.150 % | 3,034 MB | gate passed; reference arm, not mainline |
+| 1 | q5_0 quantization | large-v3 | 3.83 | 0.150 % | 2,485 MB | gate passed; reference arm, not mainline |
+| 1 | q8_0 quantization | turbo | 7.58 | 0.301 % | 1,579 MB | gate passed; reference arm, not mainline |
+| 1 | q5_0 quantization | turbo | 7.42 | 0.301 % | 1,293 MB | gate passed; reference arm, not mainline |
+
+Baseline row 0 here is the same-window re-measure from the six-arm battery
+(2.78 vs the first session's 2.92 — ~5 % session drift, which is exactly why
+compared arms run back to back); all six arms above are one back-to-back
+session.
+
+**Quant gate detail**: no per-file WER regression in any arm; large-v3
+q8_0/q5_0 each fixed one of the two baseline word errors (file
+`1089-134686-0008`), turbo's error pattern is identical across fp16/q8/q5.
+Single-stream decode fell 55.8 → 28.6 (q8) → 20.6 ms/token (q5) on
+large-v3 and 10.6 → 5.3 → 3.3 on turbo.
+
+**Why quantization is a reference arm, not the mainline** (owner decision,
+2026-08-19): peak RSS shows memory capacity is not the constraint (4.4 GB
+of 7 GB at worst), so the mainline is native C/CUDA optimization at fp16
+quality, and the remaining headroom is available to trade for speed.
+The battery also shows where the native work must aim: cutting decode
+2.7× moved turbo e2e only 7.18 → 7.42–7.58 RTFx, because per-invocation
+fixed costs — the ~660–760 ms encoder pass and per-file setup — now
+dominate the end-to-end path. Encoder and fixed-cost elimination are the
+levers with headroom; decode-side quant savings are largely amortized
+already.
 
 Raw records: [`results.json`](results.json), per-file evidence in
 [`benchmarks/`](benchmarks/).

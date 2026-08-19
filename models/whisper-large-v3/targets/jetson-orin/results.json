@@ -89,11 +89,34 @@
         "wall_incl_32_model_loads_s": 820.1
       },
       "per_file_record": "benchmarks/baseline-e2e-large-v3.json"
+    },
+    {
+      "id": "battery1-quant-reference-arms",
+      "date": "2026-08-19",
+      "tool": "whisper-quantize (public, part of whisper.cpp) + whisper-bench -t 6 + whisper-cli e2e under GNU time -v",
+      "machine_state": "MAXN_SUPER, jetson_clocks, all six arms back-to-back in one session, swap 0 before and after every arm",
+      "note": "Owner decision: memory capacity is not the constraint (fp16 peak RSS 4.4 GB of 7 GB), so quantization is recorded as a reference arm and NOT adopted as mainline; mainline is native C/CUDA optimization at fp16 quality.",
+      "arms": [
+        {"model": "ggml-large-v3.bin", "bytes": 3095033483, "rtfx_processing": 2.777, "wer": 0.00301, "peak_rss_mb": 4438.5, "decode_ms_per_tok_bench": 55.78, "encode_ms_bench": 756.22, "processing_s": 90.4},
+        {"model": "ggml-large-v3-q8_0.bin", "bytes": 1656538283, "rtfx_processing": 3.939, "wer": 0.0015, "peak_rss_mb": 3034.2, "decode_ms_per_tok_bench": 28.62, "encode_ms_bench": 705.40, "processing_s": 63.7},
+        {"model": "ggml-large-v3-q5_0.bin", "bytes": 1081140203, "rtfx_processing": 3.825, "wer": 0.0015, "peak_rss_mb": 2485.2, "decode_ms_per_tok_bench": 20.55, "encode_ms_bench": 739.22, "processing_s": 65.6},
+        {"model": "ggml-large-v3-turbo.bin", "bytes": 1624555275, "rtfx_processing": 7.183, "wer": 0.00301, "peak_rss_mb": 2321.7, "decode_ms_per_tok_bench": 10.63, "encode_ms_bench": 675.94, "processing_s": 35.0},
+        {"model": "ggml-large-v3-turbo-q8_0.bin", "bytes": 874188075, "rtfx_processing": 7.581, "wer": 0.00301, "peak_rss_mb": 1579.1, "decode_ms_per_tok_bench": 5.33, "encode_ms_bench": 631.39, "processing_s": 33.1},
+        {"model": "ggml-large-v3-turbo-q5_0.bin", "bytes": 574041195, "rtfx_processing": 7.417, "wer": 0.00301, "peak_rss_mb": 1293.0, "decode_ms_per_tok_bench": 3.31, "encode_ms_bench": 660.04, "processing_s": 33.9}
+      ],
+      "quality_gate": {
+        "corpus_wer": "no regression in any arm; large-v3 q8/q5 improved 0.00301 -> 0.0015 (fixed one of two baseline errors)",
+        "per_file": "no file regressed in any arm; large-v3 quant arms fixed 1089-134686-0008; turbo error pattern identical across fp16/q8/q5 (1089-134686-0004, -0016)",
+        "resolution_caveat": "665 reference words; one error = 0.15% WER; per-file transcript diffs used below corpus resolution"
+      },
+      "per_file_records": "benchmarks/battery1-e2e-*.json"
     }
   ],
   "observations": [
     "Encoder cost is nearly identical between the two models (both 32 encoder layers); turbo's advantage is entirely the 4-layer decoder: 10.64 vs 55.85 ms/token single-stream decode.",
     "large-v3 cold model load is 35.8 s for the 3.1 GB fp16 image; any non-resident serving pattern is load-dominated (820 s wall vs 86 s processing across 32 invocations).",
-    "Identical corpus WER (0.301%) between models is coincidence: 2 errors each on different files; 11 of 32 raw transcripts differ before normalization."
+    "Identical corpus WER (0.301%) between models is coincidence: 2 errors each on different files; 11 of 32 raw transcripts differ before normalization.",
+    "Battery1: cutting single-stream decode 2.7x (q5) moved turbo e2e only 7.18 -> 7.42 RTFx; the ~660-760 ms per-file encoder pass and per-invocation fixed costs dominate the e2e path once decode shrinks. Native optimization should attack encoder + fixed costs first.",
+    "Session drift: fp16 large-v3 measured 2.917 RTFx in the first session and 2.777 in the battery session (~5%); compared arms must run back-to-back in one session."
   ]
 }
