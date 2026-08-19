@@ -71,6 +71,22 @@ in all runs.
 | 3 | Whisper-shaped CUDA kernel fusions (native, [patch](patches/0001-whisper-shape-cuda-fusions.patch)) | large-v3 | **2.925** (ctl 2.822) | 0.301 % | 4,438 MB | **accepted — +3.7%, transcripts byte-identical** |
 | 3 | Whisper-shaped CUDA kernel fusions | turbo | **7.631** (ctl 7.198) | 0.301 % | 2,328 MB | **accepted — +6.0%, transcripts byte-identical** |
 
+| 4 | cuBLAS f32-output (skip f16→f32 convert epilogue, fp32 accumulate) | large-v3 | 2.974 (ctl 2.977) | 0.301 % | 4,458 MB | accepted — neutral e2e, transcripts byte-identical |
+| 4 | cuBLAS f32-output | turbo | **7.770** (ctl 7.426) | 0.301 % | 2,360 MB | **accepted — +4.6%, transcripts byte-identical** |
+
+Increment 4 detail: ggml's cuBLAS fp16 path on this arch computed in f16
+with an f16 temporary output, then ran a `convert_unary` kernel to get the
+fp32 the graph expects — a full extra tensor round-trip after every
+encoder GEMM (~164 ms/file on turbo). Asking cuBLAS for f32 output
+directly (fp32 accumulate) removes the temporary and the convert. On
+Orin's GA10B the fp32-accumulate GEMM costs less than the converts it
+replaces: encoder −4–6% (bench), turbo e2e +4.6%. large-v3 is
+decode-dominated, so its e2e is unchanged — kept enabled since the
+change is numerics-clean there too. Although fp32 accumulation changes
+rounding in principle, all 64 transcripts are byte-identical to stock.
+Enabled by default in the target patch; `GGML_CUDA_CUBLAS_F32_OUT=0`
+restores stock for A/B.
+
 Increment 3 detail: two fusion patterns added to ggml-cuda's own fusion
 framework, which previously carried only llama-shaped patterns (SwiGLU,
 RMS-norm+RoPE) — none of which whisper's LayerNorm/GELU graph ever

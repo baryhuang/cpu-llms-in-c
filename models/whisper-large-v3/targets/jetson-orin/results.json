@@ -182,6 +182,23 @@
       "quality_gate": "GOLD: all 64 transcripts (32 files x 2 models) byte-identical to stock; corpus WER unchanged 0.00301 both models; RSS unchanged; swap 0",
       "per_file_records": "benchmarks/increment3-e2e-*.json",
       "note": "single-stream decode bench showed +-8% session noise (ctl 50.6 vs historic 55.8 ms/tok) - e2e on the pinned subset is the decision metric, bench is directional only"
+    },
+    {
+      "id": "increment4-cublas-f32-output-ACCEPTED",
+      "date": "2026-08-19",
+      "tool": "native patch in ggml_cuda_mul_mat_cublas_impl: prefer_f32_output forced on (cuBLAS f16xf16->f32, fp32 accumulate, no f16 dst_temp + convert_unary epilogue); A/B same binary via GGML_CUDA_CUBLAS_F32_OUT, adjacent runs one session, on top of increment 3",
+      "machine_state": "MAXN_SUPER, jetson_clocks",
+      "e2e_status": "ACCEPTED (default-on in target patch)",
+      "arms": [
+        {"arm": "large-v3 ctl (f16 out + convert)", "rtfx_processing": 2.977, "wer": 0.00301, "peak_rss_mb": 4440.0, "encode_ms_bench": 702.09},
+        {"arm": "large-v3 f32out", "rtfx_processing": 2.974, "wer": 0.00301, "peak_rss_mb": 4458.0, "encode_ms_bench": 676.27},
+        {"arm": "turbo ctl", "rtfx_processing": 7.426, "wer": 0.00301, "peak_rss_mb": 2332.6, "processing_s": 33.8},
+        {"arm": "turbo f32out", "rtfx_processing": 7.77, "wer": 0.00301, "peak_rss_mb": 2360.1, "processing_s": 32.3}
+      ],
+      "gains": "turbo e2e +4.6%; encoder bench -3.7% (large-v3, 702->676ms) and -5.8% (turbo quick bench 627->590ms); large-v3 e2e neutral (decode-dominated, encoder only ~28% of processing)",
+      "quality_gate": "GOLD: all 64 transcripts byte-identical to stock despite fp32-accumulate rounding change; WER 0.00301 both models; RSS +18-28 MB (f32 dst buffers) - acceptable at 2.4/4.5 GB of 7 GB",
+      "per_file_records": "benchmarks/increment4-e2e-*.json",
+      "note": "session drift visible again: fused-only arm measured 2.925 in the inc3 session and 2.977 as this session's control - only adjacent same-session pairs are compared"
     }
   ],
   "observations": [
