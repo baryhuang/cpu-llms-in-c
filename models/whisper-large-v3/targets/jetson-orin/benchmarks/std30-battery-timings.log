@@ -1,0 +1,74 @@
+std30 battery start
+=== llmc ggml-large-v3-turbo.bin ===
+whisper_print_timings:     load time = 18946.38 ms
+whisper_print_timings:   encode time =  1111.02 ms /     1 runs (  1111.02 ms per run)
+whisper_print_timings:   decode time =     0.00 ms /     1 runs (     0.00 ms per run)
+whisper_print_timings:   batchd time =   672.26 ms /   434 runs (     1.55 ms per run)
+whisper_print_timings:    total time = 21028.98 ms
+=== llmc ggml-large-v3-turbo-q8_0.bin ===
+whisper_print_timings:     load time =  4855.95 ms
+whisper_print_timings:   encode time =   686.01 ms /     1 runs (   686.01 ms per run)
+whisper_print_timings:   decode time =     0.00 ms /     1 runs (     0.00 ms per run)
+whisper_print_timings:   batchd time =   558.78 ms /   434 runs (     1.29 ms per run)
+whisper_print_timings:    total time =  6384.31 ms
+=== llmc ggml-large-v3-turbo-q5_0.bin ===
+whisper_print_timings:     load time =  6592.40 ms
+whisper_print_timings:   encode time =   736.79 ms /     1 runs (   736.79 ms per run)
+whisper_print_timings:   decode time =     0.00 ms /     1 runs (     0.00 ms per run)
+whisper_print_timings:   batchd time =   530.26 ms /   386 runs (     1.37 ms per run)
+whisper_print_timings:    total time =  8099.76 ms
+=== llmc ggml-large-v3-turbo-q4_k.bin ===
+whisper_print_timings:     load time =  5445.34 ms
+whisper_print_timings:   encode time =   708.21 ms /     1 runs (   708.21 ms per run)
+whisper_print_timings:   decode time =    11.63 ms /     1 runs (    11.63 ms per run)
+whisper_print_timings:   batchd time =   773.93 ms /   433 runs (     1.79 ms per run)
+whisper_print_timings:    total time =  7195.60 ms
+=== llmc ggml-large-v3-turbo-q4_0.bin ===
+whisper_print_timings:     load time =  5452.91 ms
+whisper_print_timings:   encode time =   710.15 ms /     1 runs (   710.15 ms per run)
+whisper_print_timings:   decode time =     0.00 ms /     1 runs (     0.00 ms per run)
+whisper_print_timings:   batchd time =   528.17 ms /   435 runs (     1.21 ms per run)
+whisper_print_timings:    total time =  6951.04 ms
+=== llmc ggml-large-v3.bin ===
+whisper_print_timings:     load time = 35536.18 ms
+whisper_print_timings:   encode time =  1125.41 ms /     1 runs (  1125.41 ms per run)
+whisper_print_timings:   decode time =   102.68 ms /     1 runs (   102.68 ms per run)
+whisper_print_timings:   batchd time =  2574.43 ms /   382 runs (     6.74 ms per run)
+whisper_print_timings:    total time = 39927.60 ms
+=== llmc ggml-large-v3-q8_0.bin ===
+whisper_print_timings:     load time =  9126.96 ms
+whisper_print_timings:   encode time =   845.32 ms /     1 runs (   845.32 ms per run)
+whisper_print_timings:   decode time =    32.09 ms /     1 runs (    32.09 ms per run)
+whisper_print_timings:   batchd time =  2529.76 ms /   382 runs (     6.62 ms per run)
+whisper_print_timings:    total time = 12928.88 ms
+=== llmc ggml-large-v3-q5_0.bin ===
+whisper_print_timings:     load time = 12385.50 ms
+whisper_print_timings:   encode time =   900.08 ms /     1 runs (   900.08 ms per run)
+whisper_print_timings:   decode time =    24.21 ms /     1 runs (    24.21 ms per run)
+whisper_print_timings:   batchd time =  2740.71 ms /   382 runs (     7.17 ms per run)
+whisper_print_timings:    total time = 16450.46 ms
+=== llmc ggml-large-v3-q4_k.bin ===
+whisper_print_timings:     load time = 10145.14 ms
+whisper_print_timings:   encode time =   794.37 ms /     1 runs (   794.37 ms per run)
+whisper_print_timings:   decode time =    24.67 ms /     1 runs (    24.67 ms per run)
+whisper_print_timings:   batchd time =  3449.06 ms /   381 runs (     9.05 ms per run)
+whisper_print_timings:    total time = 14802.31 ms
+=== llmc ggml-large-v3-q4_0.bin ===
+whisper_print_timings:     load time = 10291.59 ms
+whisper_print_timings:   encode time =  1144.62 ms /     1 runs (  1144.62 ms per run)
+whisper_print_timings:   decode time =    22.19 ms /     1 runs (    22.19 ms per run)
+whisper_print_timings:   batchd time =  2392.01 ms /   382 runs (     6.26 ms per run)
+whisper_print_timings:    total time = 14239.10 ms
+=== stock ggml-large-v3-turbo.bin ===
+whisper_print_timings:     load time = 18578.36 ms
+whisper_print_timings:   encode time =   965.25 ms /     1 runs (   965.25 ms per run)
+whisper_print_timings:   decode time =     0.00 ms /     1 runs (     0.00 ms per run)
+whisper_print_timings:   batchd time =   696.60 ms /   434 runs (     1.61 ms per run)
+whisper_print_timings:    total time = 20544.60 ms
+=== stock ggml-large-v3.bin ===
+whisper_print_timings:     load time = 35483.45 ms
+whisper_print_timings:   encode time =  1094.38 ms /     1 runs (  1094.38 ms per run)
+whisper_print_timings:   decode time =    85.26 ms /     1 runs (    85.26 ms per run)
+whisper_print_timings:   batchd time =  2750.63 ms /   382 runs (     7.20 ms per run)
+whisper_print_timings:    total time = 40117.61 ms
+STD30-DONE
