@@ -142,6 +142,20 @@ in all runs.
 | 7 | Per-model f32-output gate | large-v3 fp16 | 2.912 (stock 2.826) | 0.301 % | 4,466 MB | accepted — +3.0% (fp16 path unchanged) |
 
 | 8 | mmvq bias fusion at beam width (two forms tried) | q4_0/q8_0 both models | flat to −13% | unchanged | — | **rejected — reverted** |
+| 9 | CPU/GPU pipelined batch driver ([`whisper_batch_pipeline.c`](whisper_batch_pipeline.c)), 2 workers | large-v3 q4_0 | **5.58 wall-RTFx** (resident-seq 4.13) | 0.150 % | 4,308 MB | **accepted — +35%, model load included in wall** |
+| 9 | CPU/GPU pipelined batch driver, 2 workers | turbo q4_0 | **10.47 wall-RTFx** (resident-seq 7.65) | 0.150 % | 2,065 MB | **accepted — +37%, first 10+ RTFx on this device** |
+
+Increment 9 detail (a new metric, honestly labeled): the per-file CLI
+pattern leaves the six Cortex-A78AE cores idle whenever the GPU runs, and
+reloads the model per file. `whisper_batch_pipeline.c` (~200 lines of C
+against the whisper.cpp API) keeps two resident pipelines on one file
+queue: one file's CPU stages — WAV decode, NEON/FP16 mel FFT, beam
+bookkeeping and sampling between GPU steps — overlap another file's GPU
+stages. **Metric: wall-RTFx over the 32-file set including model load**
+(the serving view), not the per-file processing RTFx used elsewhere — the
+two are not directly comparable; both are reported. Three workers crashes
+(CUDA context contention, boundary recorded); two is the configuration.
+WER 0.150 % in all arms, identical to the single-file q4_0 baseline.
 
 Increment 8 detail (negative result kept): fusing the per-projection bias
 add into the quantized beam-decode GEMV (`mul_mat_vec_q`) looked like the

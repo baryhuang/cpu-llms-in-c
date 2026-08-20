@@ -343,6 +343,36 @@
         "economics": "avg file 7.85s audio, large-v3 q4_0: decode ~1.0s -> ideal 2x spec saves ~0.5s; a second (turbo) encoder pass costs +0.59s plus draft decode ~0.1s -> net negative"
       },
       "caveat": "workload-dependent: on long-form audio (~450 tokens per dense 30s window) decode dominates and the same numbers flip strongly positive; also distil-large-v3.x (frozen shared encoder, 2-layer decoder) would remove the extra-encoder cost entirely - both recorded as options, not pursued"
+    },
+    {
+      "id": "technique2-mmq-int8-occupancy-CONFIG-EXHAUSTED",
+      "date": "2026-08-19",
+      "tool": "Nsight Compute on mul_mat_q (q8_0 encoder, n=1500) + two config experiments in mmq-config-ampere.cuh; reverted to upstream config",
+      "verdict": "config-level exhausted; the int8 2x prize needs kernel re-architecture (not pursued now)",
+      "evidence": {
+        "routing": "SM 8.7 takes the turing-MMA mmq path at ALL batch sizes (int8 tensor cores ARE used) - the shortfall is kernel efficiency, not routing",
+        "ncu_baseline": "254 registers/thread -> Block Limit Registers = 1 block/SM -> 16.6% achieved occupancy; compute 46.7%, memory 53.9% (both starved); kernel 748us; upstream config declares occupancy target 1 (__launch_bounds__(256,1)) - tuned for desktop Ampere, starves GA10B's 8 SMs",
+        "experiment_occupancy2": "128 regs/thread, 33% occupancy achieved, memory throughput 54->69% - but kernel only -3% (726us) and encoder -1% (662->656ms): critical path not occupancy-limited beyond this; spills offset gains",
+        "experiment_I64_tile": "crashes in encode (violates an mmq tile invariant)"
+      },
+      "remaining_path": "kernel re-architecture for GA10B (cp.async staging, smem swizzle, K-loop restructure) - multi-day, prize bounded: encoder GEMM share ~250ms of 660ms, perfect 2x = encoder -19%, e2e ~ +8% turbo / +3% large-v3"
+    },
+    {
+      "id": "increment9-cpu-gpu-pipelined-batch-ACCEPTED",
+      "date": "2026-08-19",
+      "tool": "whisper_batch_pipeline.c (committed in this dir): N resident worker pipelines over one file queue against the whisper.cpp C API; A/B nworkers=1 (resident sequential) vs nworkers=2 (pipelined), same session",
+      "e2e_status": "ACCEPTED (new serving-view metric: wall-RTFx over 32 files INCLUDING model load - not comparable to per-file processing RTFx)",
+      "motivation": "owner direction: use the CPU's features - six Cortex-A78AE OoO cores (NEON, FP16, dotprod compiled in) sit idle whenever the GPU runs; overlap one file's CPU stages (WAV decode, mel FFT, beam bookkeeping/sampling) with another file's GPU stages",
+      "arms": [
+        {"arm": "large-v3 q4_0 resident sequential (1 worker, 6 threads)", "wall_s": 60.79, "rtfx_wall": 4.13, "wer": 0.0015},
+        {"arm": "large-v3 q4_0 pipelined (2 workers, 3 threads each)", "wall_s": 44.97, "rtfx_wall": 5.583, "wer": 0.0015, "peak_rss_mb": 4207},
+        {"arm": "turbo q4_0 resident sequential", "wall_s": 32.82, "rtfx_wall": 7.651, "wer": 0.0015},
+        {"arm": "turbo q4_0 pipelined (2 workers)", "wall_s": 23.98, "rtfx_wall": 10.469, "wer": 0.0015, "peak_rss_mb": 2017}
+      ],
+      "gains": "+35% large-v3, +37% turbo over resident-sequential; vs the per-file CLI pattern the win is larger still (that pattern pays a model load per file). First 10+ RTFx on this device (turbo q4_0 10.47 wall-RTFx incl load).",
+      "boundaries": "3 workers aborts (CUDA context contention) - 2 is the configuration; dual contexts by design (quant models resident twice), fp16 large-v3 would not fit two contexts",
+      "quality_gate": "WER 0.150% in all four arms, identical to the single-file q4_0 baseline",
+      "per_file_records": "benchmarks/increment9-batch-* (both model dirs)"
     }
   ],
   "observations": [
