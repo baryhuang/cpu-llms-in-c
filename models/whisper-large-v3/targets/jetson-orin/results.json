@@ -753,20 +753,79 @@
       "tool": "reviewer's exact std30.wav (27.27s, 16kHz mono) + whisper.cpp samples/jfk.wav (11s); whisper-cli per arm, e2e = whisper.cpp total - load; llmc final build",
       "reviewer_facts_confirmed": "encoder always pads to the fixed 30s window so encoder time is audio-length-invariant (their A311Y3: 1921/1922 ms on jfk/std30; our concat experiment showed the same invariance independently); e2e varies with decode token count so cross-device e2e requires the same file - now satisfied",
       "e2e_std30_ms_total_minus_load": {
-        "jetson turbo q4_0-llmc": 1498, "jetson turbo q5_0-llmc": 1508, "jetson turbo q8_0-llmc": 1528, "jetson turbo q4_k-llmc": 1750,
-        "jetson turbo fp16-llmc": 2083, "jetson turbo fp16-stock": 1966,
-        "jetson large-v3 q8_0-llmc": 3802, "jetson large-v3 q4_0-llmc": 3948, "jetson large-v3 q5_0-llmc": 4065, "jetson large-v3 q4_k-llmc": 4657,
-        "jetson large-v3 fp16-llmc": 4391, "jetson large-v3 fp16-stock": 4634,
-        "a311y3 turbo w4a16 (reviewer)": 4500, "rk3588 npu i8 (collapsed)": 7620, "rk3588 npu fp": 12000, "rk3588 cpu q5": 54000
+        "jetson turbo q4_0-llmc": 1498,
+        "jetson turbo q5_0-llmc": 1508,
+        "jetson turbo q8_0-llmc": 1528,
+        "jetson turbo q4_k-llmc": 1750,
+        "jetson turbo fp16-llmc": 2083,
+        "jetson turbo fp16-stock": 1966,
+        "jetson large-v3 q8_0-llmc": 3802,
+        "jetson large-v3 q4_0-llmc": 3948,
+        "jetson large-v3 q5_0-llmc": 4065,
+        "jetson large-v3 q4_k-llmc": 4657,
+        "jetson large-v3 fp16-llmc": 4391,
+        "jetson large-v3 fp16-stock": 4634,
+        "a311y3 turbo w4a16 (reviewer)": 4500,
+        "rk3588 npu i8 (collapsed)": 7620,
+        "rk3588 npu fp": 12000,
+        "rk3588 cpu q5": 54000
       },
-      "e2e_jfk_ms": {"jetson turbo q4_0-llmc": 1148, "jetson large-v3 q8_0-llmc": 2095, "a311y3 turbo w4a16 (reviewer)": 3100},
+      "e2e_jfk_ms": {
+        "jetson turbo q4_0-llmc": 1148,
+        "jetson large-v3 q8_0-llmc": 2095,
+        "a311y3 turbo w4a16 (reviewer)": 3100
+      },
       "headline": "same file, full pipeline: jetson turbo q4_0-llmc 1.50s vs A311Y3 4.5s = 3.0x faster (jfk: 1.15s vs 3.1s = 2.7x); even large-v3 q8_0 (3.80s) beats their turbo",
       "notes": [
         "decode steps on std30: ~87 (434 batchd runs / beam 5) vs their 61 - segmentation/beam differences, reported as-is",
         "single-run cli e2e carries one-time GPU init (~0.2-0.4s jitter) inside the measurement; per-pair llmc-vs-stock deltas should come from the 32-file adjacent batteries, not these single runs - the cross-DEVICE gap (3x) dwarfs that noise",
         "cli first-encode includes one-time cublas/JIT init (e.g. turbo q4_0 710ms vs 594ms warm bench) - warm bench values remain the encoder anchor"
       ],
-      "records": "benchmarks/std30-battery-timings.log, benchmarks/std30-transcripts.tgz"
+      "records": "benchmarks/std30-battery-timings.log, benchmarks/std30-stock-battery-timings.log, benchmarks/std30-transcripts.tgz",
+      "stock_baseline_pairs_std30_s": {
+        "turbo fp16": [
+          1.97,
+          2.08
+        ],
+        "turbo q8_0": [
+          1.63,
+          1.53
+        ],
+        "turbo q5_0": [
+          1.56,
+          1.51
+        ],
+        "turbo q4_k": [
+          1.79,
+          1.75
+        ],
+        "turbo q4_0": [
+          1.56,
+          1.5
+        ],
+        "large-v3 fp16": [
+          4.63,
+          4.39
+        ],
+        "large-v3 q8_0": [
+          4.0,
+          3.8
+        ],
+        "large-v3 q5_0": [
+          4.09,
+          4.06
+        ],
+        "large-v3 q4_k": [
+          4.89,
+          4.66
+        ],
+        "large-v3 q4_0": [
+          3.81,
+          3.95
+        ],
+        "format": "[stock, llmc] seconds, total-load, single runs",
+        "reading": "llmc faster in 8/10 pairs (+3..7%, consistent with the 32-file adjacent batteries); two inversions (turbo fp16, large q4_0) are within the +-0.2-0.4s single-run cold-init jitter - per-pair deltas belong to the subset batteries, std30 is the cross-device metric. Even stock whisper.cpp on Jetson beats A311Y3 ~2.9x on the same file; the llmc margin comes on top."
+      }
     },
     {
       "id": "increment9-cpu-gpu-pipelined-batch-ACCEPTED",
