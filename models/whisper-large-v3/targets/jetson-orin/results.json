@@ -331,6 +331,18 @@
       "revert_verified": "q4_0 e2e back at 4.249 post-revert",
       "lesson": "kernel-count arithmetic does not transfer to pipeline reality; same family as the M3 dual-fragment GEMM rejection. Launch-overhead savings must exceed the fused kernel's own marginal cost, measured adjacent-pair.",
       "per_file_records": "benchmarks/increment8-rejected-* (both model dirs)"
+    },
+    {
+      "id": "technique1-speculative-decoding-feasibility-NOT-VIABLE-HERE",
+      "date": "2026-08-19",
+      "tool": "ggml tensor-level md5 comparison (cmp_encoders.py on device) + word-level agreement from battery3 records; no build attempted",
+      "verdict": "NOT VIABLE on the pinned short-file benchmark with turbo as draft (owner constraint: no distil models)",
+      "evidence": {
+        "encoder_sharing": "486/487 encoder tensors differ between ggml-large-v3.bin and ggml-large-v3-turbo.bin (only the deterministic sinusoidal positional embedding matches; parser sanity-checked by that match). OpenAI fine-tuned turbo's encoder, unlike distil-whisper's frozen encoder - so the draft cannot reuse the target's encoder computation.",
+        "agreement_proxy": "94.9% word-level agreement (627/661) between turbo and large-v3 outputs on the pinned set - acceptance rate itself would be healthy",
+        "economics": "avg file 7.85s audio, large-v3 q4_0: decode ~1.0s -> ideal 2x spec saves ~0.5s; a second (turbo) encoder pass costs +0.59s plus draft decode ~0.1s -> net negative"
+      },
+      "caveat": "workload-dependent: on long-form audio (~450 tokens per dense 30s window) decode dominates and the same numbers flip strongly positive; also distil-large-v3.x (frozen shared encoder, 2-layer decoder) would remove the extra-encoder cost entirely - both recorded as options, not pursued"
     }
   ],
   "observations": [
