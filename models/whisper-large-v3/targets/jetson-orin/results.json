@@ -726,6 +726,14 @@
       "remaining_path": "kernel re-architecture for GA10B (cp.async staging, smem swizzle, K-loop restructure) - multi-day, prize bounded: encoder GEMM share ~250ms of 660ms, perfect 2x = encoder -19%, e2e ~ +8% turbo / +3% large-v3"
     },
     {
+      "id": "technique2b-mmq-coalesced-loader-REJECTED",
+      "date": "2026-08-20",
+      "tool": "rewrote load_tiles_q8_0 (mma path, interior tiles): warp-contiguous aligned reads of each row's 272-byte block run into a warp-private smem staging strip + local u16 permute; reverted",
+      "motivation": "Nsight Compute: 49-52% of global sectors excessive (block_q8_0 is a 34-byte object, per-thread gathers misalign against 32-byte sectors); shared conflicts only 1%",
+      "result": "transcripts byte-identical (pure access-pattern change) BUT encoder 662 -> 1412 ms (2.1x SLOWER): the staging bounce (extra smem store+u16 load round trip per int, unroll-blocking inner loop) costs more than the recovered sectors; decode (mmvq path) unaffected. Reverted; encoder verified back at 662 ms.",
+      "conclusion_after_three_probes": "occupancy fix (mechanically successful, kernel -3%), tile shrink (crashes), coalescing fix (2.1x slower) - mmq on GA10B is not limited by any single local factor; the profile (47% issue, 54% memory, no dominant stall, latency-balanced at 8 warps) says the int8 2x needs a ground-up pipelined kernel: weight layout repacked at model load (34-byte blocks -> split aligned quants+scales arrays, enabling 16-byte cp.async double-buffering) + restructured K-loop. Multi-day project; measured prize ceiling ~+8-12% turbo e2e, ~+3-5% large-v3."
+    },
+    {
       "id": "increment9-cpu-gpu-pipelined-batch-ACCEPTED",
       "date": "2026-08-19",
       "tool": "whisper_batch_pipeline.c (committed in this dir): N resident worker pipelines over one file queue against the whisper.cpp C API; A/B nworkers=1 (resident sequential) vs nworkers=2 (pipelined), same session",
