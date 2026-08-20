@@ -44,7 +44,15 @@
     "rk3588_cpu_q5_ms": 48671,
     "note": "A311Y3/RK3588 figures from the owner's 2026-08-14/15 three-way measurement page; WER not comparable across rows (different test audio)"
   },
-  "in_progress": {
-    "i8_optimization": "q8_0 is the target mode; on large-v3 the llmc patch shows a reproducible -5.1% e2e inversion localized to the beam-5 batchd path (stock 5.85 -> llmc 6.25 ms/run) while turbo q8_0 gains +3.8%; kernel-level diagnosis running"
+  "increment7_per_model_f32out_gate": {
+    "date": "2026-08-19",
+    "change": "whisper.cpp loader auto-sets GGML_CUDA_CUBLAS_F32_OUT=0 for quantized models (f32-output helps fp16-weight models, hurts quantized ones - bisected on large-v3 q8_0)",
+    "final_vs_same_boot_stock": {
+      "fp16": [7.128, 7.645],
+      "q8_0": [7.59, 7.834],
+      "q4_0": [7.746, 8.117]
+    },
+    "notes": "turbo q4_0 (w4a16 class) reaches 8.117 RTFx, first 8+; WER 0.150% with zero per-file regression (the earlier one-word flutter did not reproduce)",
+    "records": "benchmarks/increment7-e2e-*.json"
   }
 }

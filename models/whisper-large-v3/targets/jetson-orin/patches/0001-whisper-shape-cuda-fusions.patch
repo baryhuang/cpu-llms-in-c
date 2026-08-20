@@ -1,22 +1,25 @@
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index f2e381e..979a35a 100644
+index f2e381e..105bfcd 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -1505,8 +1505,12 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
+@@ -1505,8 +1505,15 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
  
      const int cc = ggml_cuda_info().devices[ctx.device].cc;
      bool prefer_f32_output = false;
 +    // jetson-orin target default: skip the f16 dst_temp + convert-to-f32 epilogue by asking
-+    // cuBLAS for f32 output directly (fp32 accumulate). Measured on Orin GA10B: encoder -4..6%,
-+    // all transcripts byte-identical. GGML_CUDA_CUBLAS_F32_OUT=0 restores stock for A/B.
++    // cuBLAS for f32 output directly (fp32 accumulate). Measured on Orin GA10B: encoder -4..6%
++    // on fp16-weight matmuls, all transcripts byte-identical. Applied ONLY when src0 is true F16:
++    // for quantized weights (dequantized to f16 first) the fp32-accumulate GEMM costs more than
++    // the convert it saves (bisected: q8_0 e2e -10% with it, +5% over stock without it).
++    // GGML_CUDA_CUBLAS_F32_OUT=0 restores stock behavior everywhere for A/B.
 +    static const bool force_f32_output = getenv("GGML_CUDA_CUBLAS_F32_OUT") == nullptr || atoi(getenv("GGML_CUDA_CUBLAS_F32_OUT")) != 0;
      if (compute_type == GGML_TYPE_F16) {
 -        prefer_f32_output = cc == GGML_CUDA_CC_VOLTA || GGML_CUDA_CC_IS_RDNA4(cc) || GGML_CUDA_CC_IS_CDNA(cc);
-+        prefer_f32_output = force_f32_output || cc == GGML_CUDA_CC_VOLTA || GGML_CUDA_CC_IS_RDNA4(cc) || GGML_CUDA_CC_IS_CDNA(cc);
++        prefer_f32_output = (force_f32_output && src0->type == GGML_TYPE_F16) || cc == GGML_CUDA_CC_VOLTA || GGML_CUDA_CC_IS_RDNA4(cc) || GGML_CUDA_CC_IS_CDNA(cc);
      } else if (compute_type == GGML_TYPE_BF16) {
          prefer_f32_output = !GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_CDNA(cc);
      }
-@@ -3102,6 +3106,119 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
+@@ -3102,6 +3109,119 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
          return false;
      }
  
@@ -136,7 +139,7 @@ index f2e381e..979a35a 100644
      if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
          const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
          const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
-@@ -3361,7 +3478,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3361,7 +3481,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
      }
  
      //RoPE + view + set-rows
@@ -145,7 +148,7 @@ index f2e381e..979a35a 100644
          ggml_tensor * rope     = cgraph->nodes[i];
          ggml_tensor * set_rows = cgraph->nodes[i + 2];
  
-@@ -3509,6 +3626,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3509,6 +3629,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
  
      // gate + glu + up, with optional scale/bias on both lanes.
      for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
@@ -155,7 +158,7 @@ index f2e381e..979a35a 100644
          const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
  
          if (op == GGML_OP_MUL_MAT) {
-@@ -3799,6 +3919,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3799,6 +3922,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
  
      // mul_mat + scale + optional bias
      for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
@@ -165,7 +168,7 @@ index f2e381e..979a35a 100644
          const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
  
          for (const bool with_bias : { false, true }) {
-@@ -3887,6 +4010,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3887,6 +4013,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
  
      // mul_mat + add
      for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
@@ -175,7 +178,7 @@ index f2e381e..979a35a 100644
          const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
  
          if (!ggml_can_fuse(cgraph, i, { op, bias_op })) {
-@@ -3946,49 +4072,76 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3946,49 +4075,76 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
          return fused_node_count - 1;
      }
  
@@ -777,3 +780,22 @@ index 81ed873..7b4780f 100644
  void ggml_cuda_op_silu(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
  
  void ggml_cuda_op_silu_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+diff --git a/src/whisper.cpp b/src/whisper.cpp
+index 89146e2..57a9618 100644
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -1558,6 +1558,14 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
+             return false;
+         }
+ 
++        // jetson-orin target: cuBLAS f32-output helps fp16-weight models but hurts quantized
++        // ones (bisected on q8_0 e2e: -5% with it, +5% over stock without). Weight type is
++        // known here, before the first CUDA matmul, so pick the right default per model.
++        // An explicit GGML_CUDA_CUBLAS_F32_OUT in the environment always wins (overwrite=0).
++        if (wctx.wtype != GGML_TYPE_F16 && wctx.wtype != GGML_TYPE_F32) {
++            setenv("GGML_CUDA_CUBLAS_F32_OUT", "0", 0);
++        }
++
+         WHISPER_LOG_INFO("%s: n_vocab       = %d\n", __func__, hparams.n_vocab);
+         WHISPER_LOG_INFO("%s: n_audio_ctx   = %d\n", __func__, hparams.n_audio_ctx);
+         WHISPER_LOG_INFO("%s: n_audio_state = %d\n", __func__, hparams.n_audio_state);

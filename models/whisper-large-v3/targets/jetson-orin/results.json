@@ -291,6 +291,25 @@
       ],
       "artifact": "https://claude.ai/code/artifact/41b7bf0e-8de8-427e-a16d-a0520c7f9042",
       "per_file_records": "benchmarks/battery3-e2e-*.json"
+    },
+    {
+      "id": "increment7-per-model-f32out-gate-ACCEPTED",
+      "date": "2026-08-19",
+      "tool": "bisect (2x2: fusion x f32out, one session) -> fix in whisper.cpp model loader: quantized models setenv GGML_CUDA_CUBLAS_F32_OUT=0 before first CUDA matmul (explicit env wins); verified on clean boot vs same-boot stock anchors",
+      "machine_state": "clean reboot, MAXN_SUPER, jetson_clocks re-pinned, swap 0",
+      "e2e_status": "ACCEPTED",
+      "bisect_q8_large": {"stock": 3.932, "llmc_full": 3.731, "llmc_fusion_off": 3.572, "llmc_f32out_off": 4.127, "verdict": "fusions +4.5%, f32out -10% on q8; two selective in-GEMM gates (weight-type-only, weight-type+batch-width) both failed to recover - only model-wide disable works (records: increment7-bisect-q8-*.json)"},
+      "final_arms_vs_same_boot_stock": {
+        "large-v3 q8_0": [3.903, 4.127], "large-v3 q4_0": [4.056, 4.245], "large-v3 fp16": [2.826, 2.912],
+        "turbo q8_0": [7.59, 7.834], "turbo q4_0": [7.746, 8.117], "turbo fp16": [7.128, 7.645]
+      },
+      "quality_gate": "zero per-file WER regression in all six modes; error counts identical to stock per mode",
+      "lessons": [
+        "fp16 e2e drifts up to +-6% across a long-lived boot even with pinned clocks (fragmentation/thermal state); adjacent same-boot pairs only, reboot before certifying",
+        "stock build-graphs whisper-bench numbers are flattered by CUDA-graph capture (bench repeats fixed shapes, e2e never captures) - bench stock-vs-llmc deltas are not comparable, e2e decides",
+        "f32-output benefit is model-dependent, not matmul-dependent: per-matmul gates (type, batch width) failed; the right decision point is model load time where weight type is known"
+      ],
+      "per_file_records": "benchmarks/increment7-e2e-* (large-v3) and ../../../whisper-large-v3-turbo/targets/jetson-orin/benchmarks/increment7-e2e-* (turbo)"
     }
   ],
   "observations": [

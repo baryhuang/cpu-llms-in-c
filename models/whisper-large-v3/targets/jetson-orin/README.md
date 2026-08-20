@@ -137,6 +137,28 @@ in all runs.
 | 6 | Op-gated fusion pattern checks (CPU-side) | large-v3 | **3.048** (ctl 3.008) | 0.301 % | — | accepted — +1.3%, identical by construction |
 | 6 | Op-gated fusion pattern checks | turbo | **7.773** (ctl 7.661) | 0.301 % | — | accepted — +1.5%, identical by construction |
 
+| 7 | Per-model f32-output gate (quantized models auto-disable it) | large-v3 q8_0 | **4.127** (stock 3.903) | 0.150 % | 3,045 MB | **accepted — +5.7%, was −5.1% before the fix** |
+| 7 | Per-model f32-output gate | large-v3 q4_0 | **4.245** (stock 4.056) | 0.150 % | 2,313 MB | **accepted — +4.7%** |
+| 7 | Per-model f32-output gate | large-v3 fp16 | 2.912 (stock 2.826) | 0.301 % | 4,466 MB | accepted — +3.0% (fp16 path unchanged) |
+
+Increment 7 detail: battery3 exposed a reproducible q8_0 inversion (llmc
+−5.1%). A same-session 2×2 bisect (fused/nofuse × f32out on/off,
+`increment7-bisect-q8-*.json`) cleared the fusions (+4.5%) and convicted
+increment 4's f32-output: it helps fp16-weight models but hurts quantized
+ones — and two selective in-GEMM gates (by weight type, by batch width)
+failed to recover the loss; only disabling it model-wide does. The fix
+puts the decision where the weight type is actually known: whisper.cpp's
+model loader sets `GGML_CUDA_CUBLAS_F32_OUT=0` for quantized models before
+the first CUDA matmul (an explicit env always wins). Verified on a clean
+boot against fresh same-boot stock anchors: **all six modes positive**,
+zero per-file WER regression anywhere. Two negative gate designs and the
+day's drift lesson (fp16 e2e varies ±6 % across a long-lived boot; effect
+sizes must come from adjacent same-boot pairs — reboot before certifying)
+are kept in the raw records. Also noted for methodology: the stock
+build-graphs arm's *whisper-bench* numbers benefit from CUDA-graph capture
+(bench repeats fixed shapes; e2e never captures), so bench-level
+stock-vs-llmc deltas are not comparable — e2e is the decision metric.
+
 Increment 6 detail: every fusion-pattern check in `ggml_cuda_try_fuse` now
 short-circuits unless the node's op matches the pattern's first op, and the
 three MUL_MAT scan loops early-out on op mismatch. Fusion decisions are
