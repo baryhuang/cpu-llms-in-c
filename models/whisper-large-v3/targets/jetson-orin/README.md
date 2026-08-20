@@ -141,6 +141,27 @@ in all runs.
 | 7 | Per-model f32-output gate | large-v3 q4_0 | **4.245** (stock 4.056) | 0.150 % | 2,313 MB | **accepted — +4.7%** |
 | 7 | Per-model f32-output gate | large-v3 fp16 | 2.912 (stock 2.826) | 0.301 % | 4,466 MB | accepted — +3.0% (fp16 path unchanged) |
 
+| 8 | mmvq bias fusion at beam width (two forms tried) | q4_0/q8_0 both models | flat to −13% | unchanged | — | **rejected — reverted** |
+
+Increment 8 detail (negative result kept): fusing the per-projection bias
+add into the quantized beam-decode GEMV (`mul_mat_vec_q`) looked like the
+obvious w4a16 lever — ~9k separate 4 µs bias-add kernels per large-v3
+file. Upstream's fusion machinery is ncols=1-only; lifting that needed a
+latent bias-indexing fix (bias loads assumed a dst-shaped tensor), a
+relaxed entry assert, and full-ncols instantiation. Form 1 (upstream
+fused variant as-is) regressed e2e 10–13 % on large-v3: with
+`has_fusion=true` the kernel pays gate-accumulator registers and a second
+shared-memory reduction array even when only bias is used — occupancy
+collapses. Form 2 (a `has_gate` template split; bias-only variant with no
+gate registers/shared) recovered that but still measured flat to −1.5 %
+against the same-boot increment-7 anchors: the fused variant's residual
+per-call cost eats exactly what the removed bias-add launches save.
+Reverted; transcripts were byte-identical in both forms (the math was
+right — the economics weren't). Records:
+`benchmarks/increment8-rejected-*` (both model dirs). Same family as the
+Mac dual-fragment GEMM lesson: kernel-count reasoning does not transfer
+to pipeline reality without an adjacent-pair measurement.
+
 Increment 7 detail: battery3 exposed a reproducible q8_0 inversion (llmc
 −5.1%). A same-session 2×2 bisect (fused/nofuse × f32out on/off,
 `increment7-bisect-q8-*.json`) cleared the fusions (+4.5%) and convicted

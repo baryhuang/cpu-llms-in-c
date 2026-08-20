@@ -310,6 +310,27 @@
         "f32-output benefit is model-dependent, not matmul-dependent: per-matmul gates (type, batch width) failed; the right decision point is model load time where weight type is known"
       ],
       "per_file_records": "benchmarks/increment7-e2e-* (large-v3) and ../../../whisper-large-v3-turbo/targets/jetson-orin/benchmarks/increment7-e2e-* (turbo)"
+    },
+    {
+      "id": "increment8-mmvq-bias-fusion-REJECTED",
+      "date": "2026-08-19",
+      "tool": "two kernel forms tried on mmvq (quantized beam GEMV) bias fusion; e2e vs same-boot increment-7 anchors; reverted",
+      "machine_state": "same clean boot as increment 7 anchors",
+      "e2e_status": "REJECTED - reverted",
+      "form1_upstream_fused_variant": {
+        "changes": "lifted ncols=1 fusion limits (entry assert + instantiation guard) + fixed latent bias indexing (loads assumed dst-shaped bias; row-vector broadcast is correct and identical at ncols=1)",
+        "arms_vs_i7": {"large q4_0": [4.245, 3.816], "large q8_0": [4.127, 3.59], "turbo q4_0": [8.117, 7.78], "turbo q8_0": [7.834, 7.641]},
+        "cause": "has_fusion=true pays gate accumulator registers + a second shared-memory reduction array even when only bias is used - occupancy collapse"
+      },
+      "form2_bias_only_variant": {
+        "changes": "has_gate template split: bias-only variant with no gate registers/shared memory; gate/GLU fusion kept at upstream ncols=1",
+        "arms_vs_i7": {"large q4_0": [4.245, 4.246], "large q8_0": [4.127, 4.066], "turbo q4_0": [8.117, 8.032], "turbo q8_0": [7.834, 7.889]},
+        "cause": "residual fused-variant per-call cost offsets the ~9k saved 4us bias-add launches - net flat to -1.5%"
+      },
+      "quality": "transcripts byte-identical to control in both forms (real files, byte-counted - an earlier empty-file diff false-positive was caught and the check hardened)",
+      "revert_verified": "q4_0 e2e back at 4.249 post-revert",
+      "lesson": "kernel-count arithmetic does not transfer to pipeline reality; same family as the M3 dual-fragment GEMM rejection. Launch-overhead savings must exceed the fused kernel's own marginal cost, measured adjacent-pair.",
+      "per_file_records": "benchmarks/increment8-rejected-* (both model dirs)"
     }
   ],
   "observations": [
