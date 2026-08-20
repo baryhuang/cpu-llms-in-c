@@ -1,9 +1,9 @@
-# Whisper large-v3 (and large-v3-turbo)
+# Whisper large-v3
 
-OpenAI Whisper large-v3 encoder–decoder ASR. Two checkpoints are covered as
-variants of one model directory because they share the encoder architecture
-and tokenizer; turbo replaces the 32-layer decoder with a 4-layer distilled
-decoder.
+OpenAI Whisper large-v3 encoder–decoder ASR. The distilled
+[large-v3-turbo variant has its own model directory](../whisper-large-v3-turbo/README.md)
+(same encoder and tokenizer, 4-layer decoder, qualitatively different
+performance profile); shared facts are kept here.
 
 | Fact | large-v3 | large-v3-turbo |
 |---|---|---|

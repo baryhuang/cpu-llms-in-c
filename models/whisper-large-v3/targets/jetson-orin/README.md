@@ -4,6 +4,12 @@ Baseline and incremental optimization of Whisper large-v3 and large-v3-turbo
 on one exact machine, measured end to end by one public methodology for every
 arm and every increment.
 
+> Turbo is now an explicit variant model:
+> [`models/whisper-large-v3-turbo/targets/jetson-orin/`](../../../whisper-large-v3-turbo/targets/jetson-orin/README.md)
+> holds its summary and raw records (turbo `benchmarks/*.json` moved there).
+> The optimization ledger below documents the shared campaign — one patched
+> build serves both models — and stays here with the patch.
+
 ## Certified result (2026-08-19, one session, pristine upstream vs full patch)
 
 | Model | Upstream whisper.cpp | This target's patch | Gain | WER | Transcripts |

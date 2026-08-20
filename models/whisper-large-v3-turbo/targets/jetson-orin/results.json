@@ -1,0 +1,50 @@
+{
+  "target": "jetson-orin-nano-super",
+  "model": "whisper-large-v3-turbo (explicit variant of whisper-large-v3)",
+  "shared_with_large_v3": {
+    "machine_profile": "../../../whisper-large-v3/targets/jetson-orin/results.json (machine block)",
+    "methodology": "identical: whisper.cpp 4834a23, public whisper-bench + pinned 32-file LibriSpeech subset e2e, jiwer + EnglishTextNormalizer, GNU time RSS, MAXN_SUPER + jetson_clocks, adjacent same-session pairs only",
+    "patch": "../../../whisper-large-v3/targets/jetson-orin/patches/0001-whisper-shape-cuda-fusions.patch (one build serves both models)"
+  },
+  "model_pin": {
+    "ggml-large-v3-turbo.bin": {
+      "bytes": 1624555275,
+      "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+      "source": "ggml-org/whisper.cpp (Hugging Face), converted from openai/whisper-large-v3-turbo"
+    }
+  },
+  "certified_fp16": {
+    "date": "2026-08-19",
+    "upstream": {"rtfx": 7.092, "encoder_ms_30s": 673.38, "wer": 0.00301, "peak_rss_mb": 2331.1},
+    "llmc": {"rtfx": 7.789, "encoder_ms_30s": 589.82, "wer": 0.00301, "peak_rss_mb": 2355.5},
+    "gain": "+9.8% e2e, -12.4% encoder, 32/32 transcripts byte-identical",
+    "record": "benchmarks/certification-e2e-large-v3-turbo.bin-*.json"
+  },
+  "quant_modes_battery3": {
+    "date": "2026-08-19",
+    "pairs_rtfx_upstream_vs_llmc": {
+      "fp16": [7.123, 7.744],
+      "q8_0": [7.599, 7.886],
+      "q5_0": [7.385, 7.541],
+      "q4_k": [6.972, 7.12],
+      "q4_0": [7.647, 7.819]
+    },
+    "decode_ms_per_tok_llmc": {"fp16": 10.50, "q8_0": 5.20, "q5_0": 3.18, "q4_k": 3.25, "q4_0": 2.70},
+    "peak_rss_mb_llmc": {"fp16": 2352.3, "q8_0": 1610.0, "q5_0": 1323.3, "q4_k": 1226.8, "q4_0": 1228.6},
+    "quality": "no per-file regression except q4_0-llmc 2/665 vs upstream q4_0 1/665 (word-level flutter, flagged); q4_k improves WER to 0.0015 both builds",
+    "records": "benchmarks/battery3-e2e-large-v3-turbo-*.json"
+  },
+  "cross_device_encoder_30s_window": {
+    "unit": "encoder time per fixed 30 s mel window (content-independent, comparable across devices)",
+    "jetson_turbo_fp16_llmc_ms": 589,
+    "jetson_turbo_fp16_upstream_ms": 673,
+    "a311y3_npu_w4a16_ms": 1921,
+    "rk3588_npu_i8_ms": 7623,
+    "rk3588_npu_fp_ms": 12008,
+    "rk3588_cpu_q5_ms": 48671,
+    "note": "A311Y3/RK3588 figures from the owner's 2026-08-14/15 three-way measurement page; WER not comparable across rows (different test audio)"
+  },
+  "in_progress": {
+    "i8_optimization": "q8_0 is the target mode; on large-v3 the llmc patch shows a reproducible -5.1% e2e inversion localized to the beam-5 batchd path (stock 5.85 -> llmc 6.25 ms/run) while turbo q8_0 gains +3.8%; kernel-level diagnosis running"
+  }
+}

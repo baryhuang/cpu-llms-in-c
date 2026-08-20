@@ -72,7 +72,7 @@
         "word_errors": "2 / 665, files 1089-134686-0004 and -0016",
         "wall_incl_32_model_loads_s": 80.0
       },
-      "per_file_record": "benchmarks/baseline-e2e-large-v3-turbo.json"
+      "per_file_record": "../../../whisper-large-v3-turbo/targets/jetson-orin/benchmarks/baseline-e2e-large-v3-turbo.json"
     },
     {
       "id": "baseline-e2e-large-v3",
