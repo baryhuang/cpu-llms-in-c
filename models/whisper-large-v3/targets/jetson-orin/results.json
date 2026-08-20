@@ -42,7 +42,7 @@
         "encode_per_run": 678.53,
         "decode_per_token": 10.64,
         "batchd_per_token": 1.12,
-        "prompt_per_token": 0.10
+        "prompt_per_token": 0.1
       }
     },
     {
@@ -135,12 +135,66 @@
       "machine_state": "MAXN_SUPER, jetson_clocks, all six arms back-to-back in one session, swap 0 before and after every arm",
       "note": "Owner decision: memory capacity is not the constraint (fp16 peak RSS 4.4 GB of 7 GB), so quantization is recorded as a reference arm and NOT adopted as mainline; mainline is native C/CUDA optimization at fp16 quality.",
       "arms": [
-        {"model": "ggml-large-v3.bin", "bytes": 3095033483, "rtfx_processing": 2.777, "wer": 0.00301, "peak_rss_mb": 4438.5, "decode_ms_per_tok_bench": 55.78, "encode_ms_bench": 756.22, "processing_s": 90.4},
-        {"model": "ggml-large-v3-q8_0.bin", "bytes": 1656538283, "rtfx_processing": 3.939, "wer": 0.0015, "peak_rss_mb": 3034.2, "decode_ms_per_tok_bench": 28.62, "encode_ms_bench": 705.40, "processing_s": 63.7},
-        {"model": "ggml-large-v3-q5_0.bin", "bytes": 1081140203, "rtfx_processing": 3.825, "wer": 0.0015, "peak_rss_mb": 2485.2, "decode_ms_per_tok_bench": 20.55, "encode_ms_bench": 739.22, "processing_s": 65.6},
-        {"model": "ggml-large-v3-turbo.bin", "bytes": 1624555275, "rtfx_processing": 7.183, "wer": 0.00301, "peak_rss_mb": 2321.7, "decode_ms_per_tok_bench": 10.63, "encode_ms_bench": 675.94, "processing_s": 35.0},
-        {"model": "ggml-large-v3-turbo-q8_0.bin", "bytes": 874188075, "rtfx_processing": 7.581, "wer": 0.00301, "peak_rss_mb": 1579.1, "decode_ms_per_tok_bench": 5.33, "encode_ms_bench": 631.39, "processing_s": 33.1},
-        {"model": "ggml-large-v3-turbo-q5_0.bin", "bytes": 574041195, "rtfx_processing": 7.417, "wer": 0.00301, "peak_rss_mb": 1293.0, "decode_ms_per_tok_bench": 3.31, "encode_ms_bench": 660.04, "processing_s": 33.9}
+        {
+          "model": "ggml-large-v3.bin",
+          "bytes": 3095033483,
+          "rtfx_processing": 2.777,
+          "wer": 0.00301,
+          "peak_rss_mb": 4438.5,
+          "decode_ms_per_tok_bench": 55.78,
+          "encode_ms_bench": 756.22,
+          "processing_s": 90.4
+        },
+        {
+          "model": "ggml-large-v3-q8_0.bin",
+          "bytes": 1656538283,
+          "rtfx_processing": 3.939,
+          "wer": 0.0015,
+          "peak_rss_mb": 3034.2,
+          "decode_ms_per_tok_bench": 28.62,
+          "encode_ms_bench": 705.4,
+          "processing_s": 63.7
+        },
+        {
+          "model": "ggml-large-v3-q5_0.bin",
+          "bytes": 1081140203,
+          "rtfx_processing": 3.825,
+          "wer": 0.0015,
+          "peak_rss_mb": 2485.2,
+          "decode_ms_per_tok_bench": 20.55,
+          "encode_ms_bench": 739.22,
+          "processing_s": 65.6
+        },
+        {
+          "model": "ggml-large-v3-turbo.bin",
+          "bytes": 1624555275,
+          "rtfx_processing": 7.183,
+          "wer": 0.00301,
+          "peak_rss_mb": 2321.7,
+          "decode_ms_per_tok_bench": 10.63,
+          "encode_ms_bench": 675.94,
+          "processing_s": 35.0
+        },
+        {
+          "model": "ggml-large-v3-turbo-q8_0.bin",
+          "bytes": 874188075,
+          "rtfx_processing": 7.581,
+          "wer": 0.00301,
+          "peak_rss_mb": 1579.1,
+          "decode_ms_per_tok_bench": 5.33,
+          "encode_ms_bench": 631.39,
+          "processing_s": 33.1
+        },
+        {
+          "model": "ggml-large-v3-turbo-q5_0.bin",
+          "bytes": 574041195,
+          "rtfx_processing": 7.417,
+          "wer": 0.00301,
+          "peak_rss_mb": 1293.0,
+          "decode_ms_per_tok_bench": 3.31,
+          "encode_ms_bench": 660.04,
+          "processing_s": 33.9
+        }
       ],
       "quality_gate": {
         "corpus_wer": "no regression in any arm; large-v3 q8/q5 improved 0.00301 -> 0.0015 (fixed one of two baseline errors)",
@@ -156,10 +210,30 @@
       "machine_state": "MAXN_SUPER, jetson_clocks",
       "e2e_status": "REJECTED - measured no effect",
       "arms": [
-        {"arm": "large-v3 ctl (graphs off)", "rtfx_processing": 2.865, "wer": 0.00301, "peak_rss_mb": 4437.0},
-        {"arm": "large-v3 graphs on", "rtfx_processing": 2.864, "wer": 0.00301, "peak_rss_mb": 4439.4},
-        {"arm": "turbo ctl (graphs off)", "rtfx_processing": 7.168, "wer": 0.00301, "peak_rss_mb": 2337.8},
-        {"arm": "turbo graphs on", "rtfx_processing": 7.209, "wer": 0.00301, "peak_rss_mb": 2339.0}
+        {
+          "arm": "large-v3 ctl (graphs off)",
+          "rtfx_processing": 2.865,
+          "wer": 0.00301,
+          "peak_rss_mb": 4437.0
+        },
+        {
+          "arm": "large-v3 graphs on",
+          "rtfx_processing": 2.864,
+          "wer": 0.00301,
+          "peak_rss_mb": 4439.4
+        },
+        {
+          "arm": "turbo ctl (graphs off)",
+          "rtfx_processing": 7.168,
+          "wer": 0.00301,
+          "peak_rss_mb": 2337.8
+        },
+        {
+          "arm": "turbo graphs on",
+          "rtfx_processing": 7.209,
+          "wer": 0.00301,
+          "peak_rss_mb": 2339.0
+        }
       ],
       "bench_deltas": "decode ms/tok flat (55.80 vs 56.04 large, 10.64 vs 10.67 turbo); batchd -6% both (6.53->6.12, 1.12->1.04) within session noise",
       "root_cause": "ggml CUDA graphs require a 2-call warmup with unchanged node properties (ggml_backend_cuda_graph_compute); whisper's decode graph changes tensor properties every step (growing KV positions), so warmup never completes and no graph is captured. The option is marked llama.cpp-only upstream for this reason.",
@@ -173,10 +247,38 @@
       "e2e_status": "ACCEPTED",
       "change": "Two whisper-shaped patterns added to ggml-cuda's fusion framework: NORM->MUL->ADD fused into norm_mul_add_f32 (LayerNorm with weight+bias in one kernel, contiguous row-vector gamma/beta), ADD->UNARY(GELU) fused into add_bias_gelu_f32 (row-vector bias). __fmul_rn/__fadd_rn preserve unfused rounding exactly.",
       "arms": [
-        {"arm": "large-v3 ctl", "rtfx_processing": 2.822, "wer": 0.00301, "peak_rss_mb": 4441.0, "processing_s": 89.0, "encode_ms_bench": 757.82},
-        {"arm": "large-v3 fused", "rtfx_processing": 2.925, "wer": 0.00301, "peak_rss_mb": 4437.9, "processing_s": 85.8, "encode_ms_bench": 708.29},
-        {"arm": "turbo ctl", "rtfx_processing": 7.198, "wer": 0.00301, "peak_rss_mb": 2328.3, "processing_s": 34.9, "encode_ms_bench": 676.24},
-        {"arm": "turbo fused", "rtfx_processing": 7.631, "wer": 0.00301, "peak_rss_mb": 2328.0, "processing_s": 32.9, "encode_ms_bench": 623.09}
+        {
+          "arm": "large-v3 ctl",
+          "rtfx_processing": 2.822,
+          "wer": 0.00301,
+          "peak_rss_mb": 4441.0,
+          "processing_s": 89.0,
+          "encode_ms_bench": 757.82
+        },
+        {
+          "arm": "large-v3 fused",
+          "rtfx_processing": 2.925,
+          "wer": 0.00301,
+          "peak_rss_mb": 4437.9,
+          "processing_s": 85.8,
+          "encode_ms_bench": 708.29
+        },
+        {
+          "arm": "turbo ctl",
+          "rtfx_processing": 7.198,
+          "wer": 0.00301,
+          "peak_rss_mb": 2328.3,
+          "processing_s": 34.9,
+          "encode_ms_bench": 676.24
+        },
+        {
+          "arm": "turbo fused",
+          "rtfx_processing": 7.631,
+          "wer": 0.00301,
+          "peak_rss_mb": 2328.0,
+          "processing_s": 32.9,
+          "encode_ms_bench": 623.09
+        }
       ],
       "gains": "large-v3 e2e +3.7%, turbo e2e +6.0%; encoder pass -6.5% / -7.9%; per turbo file norm_mul_add_f32 fires 611x replacing 1,833 kernels, add_bias_gelu_f32 fires 196x, ~1,400 fewer launches of ~7,200",
       "quality_gate": "GOLD: all 64 transcripts (32 files x 2 models) byte-identical to stock; corpus WER unchanged 0.00301 both models; RSS unchanged; swap 0",
@@ -190,10 +292,34 @@
       "machine_state": "MAXN_SUPER, jetson_clocks",
       "e2e_status": "ACCEPTED (default-on in target patch)",
       "arms": [
-        {"arm": "large-v3 ctl (f16 out + convert)", "rtfx_processing": 2.977, "wer": 0.00301, "peak_rss_mb": 4440.0, "encode_ms_bench": 702.09},
-        {"arm": "large-v3 f32out", "rtfx_processing": 2.974, "wer": 0.00301, "peak_rss_mb": 4458.0, "encode_ms_bench": 676.27},
-        {"arm": "turbo ctl", "rtfx_processing": 7.426, "wer": 0.00301, "peak_rss_mb": 2332.6, "processing_s": 33.8},
-        {"arm": "turbo f32out", "rtfx_processing": 7.77, "wer": 0.00301, "peak_rss_mb": 2360.1, "processing_s": 32.3}
+        {
+          "arm": "large-v3 ctl (f16 out + convert)",
+          "rtfx_processing": 2.977,
+          "wer": 0.00301,
+          "peak_rss_mb": 4440.0,
+          "encode_ms_bench": 702.09
+        },
+        {
+          "arm": "large-v3 f32out",
+          "rtfx_processing": 2.974,
+          "wer": 0.00301,
+          "peak_rss_mb": 4458.0,
+          "encode_ms_bench": 676.27
+        },
+        {
+          "arm": "turbo ctl",
+          "rtfx_processing": 7.426,
+          "wer": 0.00301,
+          "peak_rss_mb": 2332.6,
+          "processing_s": 33.8
+        },
+        {
+          "arm": "turbo f32out",
+          "rtfx_processing": 7.77,
+          "wer": 0.00301,
+          "peak_rss_mb": 2360.1,
+          "processing_s": 32.3
+        }
       ],
       "gains": "turbo e2e +4.6%; encoder bench -3.7% (large-v3, 702->676ms) and -5.8% (turbo quick bench 627->590ms); large-v3 e2e neutral (decode-dominated, encoder only ~28% of processing)",
       "quality_gate": "GOLD: all 64 transcripts byte-identical to stock despite fp32-accumulate rounding change; WER 0.00301 both models; RSS +18-28 MB (f32 dst buffers) - acceptable at 2.4/4.5 GB of 7 GB",
@@ -207,10 +333,30 @@
       "machine_state": "MAXN_SUPER, jetson_clocks",
       "e2e_status": "ACCEPTED",
       "arms": [
-        {"arm": "large-v3 ctl (all fusions off)", "rtfx_processing": 2.827, "wer": 0.00301, "peak_rss_mb": 4465.8},
-        {"arm": "large-v3 fused (inc3+inc5)", "rtfx_processing": 3.036, "wer": 0.00301, "peak_rss_mb": 4458.3},
-        {"arm": "turbo ctl", "rtfx_processing": 7.374, "wer": 0.00301, "peak_rss_mb": 2362.0},
-        {"arm": "turbo fused", "rtfx_processing": 7.803, "wer": 0.00301, "peak_rss_mb": 2362.0}
+        {
+          "arm": "large-v3 ctl (all fusions off)",
+          "rtfx_processing": 2.827,
+          "wer": 0.00301,
+          "peak_rss_mb": 4465.8
+        },
+        {
+          "arm": "large-v3 fused (inc3+inc5)",
+          "rtfx_processing": 3.036,
+          "wer": 0.00301,
+          "peak_rss_mb": 4458.3
+        },
+        {
+          "arm": "turbo ctl",
+          "rtfx_processing": 7.374,
+          "wer": 0.00301,
+          "peak_rss_mb": 2362.0
+        },
+        {
+          "arm": "turbo fused",
+          "rtfx_processing": 7.803,
+          "wer": 0.00301,
+          "peak_rss_mb": 2362.0
+        }
       ],
       "gains": "cumulative fusion pair: large-v3 +7.4% (inc3 pair alone was +3.7%), turbo +5.8% (inc3 alone +6.0%); k_bin_bcast add launches per large-v3 file 17,656 (baseline) -> 4,301; mmf GEMM time unchanged with epilogue folded in (486ms/8,960 calls)",
       "quality_gate": "GOLD: all 64 transcripts byte-identical to no-fusion control; WER 0.00301 both models; RSS unchanged",
@@ -224,10 +370,26 @@
       "machine_state": "MAXN_SUPER, jetson_clocks",
       "e2e_status": "ACCEPTED",
       "arms": [
-        {"arm": "large-v3 inc5 snapshot", "rtfx_processing": 3.008, "wer": 0.00301},
-        {"arm": "large-v3 op-gated", "rtfx_processing": 3.048, "wer": 0.00301},
-        {"arm": "turbo inc5 snapshot", "rtfx_processing": 7.661, "wer": 0.00301},
-        {"arm": "turbo op-gated", "rtfx_processing": 7.773, "wer": 0.00301}
+        {
+          "arm": "large-v3 inc5 snapshot",
+          "rtfx_processing": 3.008,
+          "wer": 0.00301
+        },
+        {
+          "arm": "large-v3 op-gated",
+          "rtfx_processing": 3.048,
+          "wer": 0.00301
+        },
+        {
+          "arm": "turbo inc5 snapshot",
+          "rtfx_processing": 7.661,
+          "wer": 0.00301
+        },
+        {
+          "arm": "turbo op-gated",
+          "rtfx_processing": 7.773,
+          "wer": 0.00301
+        }
       ],
       "gains": "+1.3% large-v3, +1.5% turbo - small but consistent across both models; fusion decisions provably unchanged (gates only skip checks that would fail), transcripts identical by construction and by measurement (0/64 differ)",
       "open_question": "whisper-bench single-stream decode is ~8% faster with GGML_CUDA_DISABLE_FUSION=1 (50.6 vs 54.8 ms/tok, reproduced 3 sessions, present in stock whisper.cpp too); op-gating did NOT recover it, so the cost is elsewhere in the fusion machinery (bench-level decode only - e2e beam decode favors fusion). Not yet located.",
@@ -239,10 +401,36 @@
       "tool": "one session: pristine upstream whisper.cpp 4834a23 (build-graphs tree; its only delta, GGML_CUDA_GRAPHS=ON, separately measured e2e-neutral) vs full target patch (increments 3-6); whisper-bench + e2e per model, adjacent pairs",
       "machine_state": "MAXN_SUPER, jetson_clocks",
       "arms": [
-        {"arm": "large-v3 upstream", "rtfx_processing": 2.867, "wer": 0.00301, "peak_rss_mb": 4432.7, "encode_ms_bench": 764.28},
-        {"arm": "large-v3 patched", "rtfx_processing": 3.048, "wer": 0.00301, "peak_rss_mb": 4457.3, "encode_ms_bench": 676.81},
-        {"arm": "turbo upstream", "rtfx_processing": 7.092, "wer": 0.00301, "peak_rss_mb": 2331.1, "processing_s": 35.4, "encode_ms_bench": 673.38},
-        {"arm": "turbo patched", "rtfx_processing": 7.789, "wer": 0.00301, "peak_rss_mb": 2355.5, "processing_s": 32.2, "encode_ms_bench": 589.82}
+        {
+          "arm": "large-v3 upstream",
+          "rtfx_processing": 2.867,
+          "wer": 0.00301,
+          "peak_rss_mb": 4432.7,
+          "encode_ms_bench": 764.28
+        },
+        {
+          "arm": "large-v3 patched",
+          "rtfx_processing": 3.048,
+          "wer": 0.00301,
+          "peak_rss_mb": 4457.3,
+          "encode_ms_bench": 676.81
+        },
+        {
+          "arm": "turbo upstream",
+          "rtfx_processing": 7.092,
+          "wer": 0.00301,
+          "peak_rss_mb": 2331.1,
+          "processing_s": 35.4,
+          "encode_ms_bench": 673.38
+        },
+        {
+          "arm": "turbo patched",
+          "rtfx_processing": 7.789,
+          "wer": 0.00301,
+          "peak_rss_mb": 2355.5,
+          "processing_s": 32.2,
+          "encode_ms_bench": 589.82
+        }
       ],
       "certified": "large-v3 +6.3% (2.867 -> 3.048), turbo +9.8% (7.092 -> 7.789); encoder bench -11.4% / -12.4%; all 64 transcripts byte-identical to upstream; RSS +25 MB (f32 GEMM output buffers); swap 0",
       "per_file_records": "benchmarks/certification-e2e-*.json"
@@ -254,16 +442,96 @@
       "machine_state": "MAXN_SUPER, jetson_clocks, swap 0 all arms",
       "note": "requested to match a cross-device comparison (A311Y3 w4a16 / RK3588 i8/fp/q5): whisper.cpp quantization is weights-only (activations stay fp16), so q4_0/q4_K = w4a16 class, q8_0 = i8-weights class; the NPU-style int8-activation decoder collapse cannot occur on this path",
       "arms": [
-        {"model": "large-v3", "mode": "fp16", "bytes": 3095033483, "rtfx": 3.013, "decode_ms_per_tok": 54.76, "wer": 0.00301, "peak_rss_mb": 4457.1},
-        {"model": "large-v3", "mode": "q8_0", "bytes": 1656538283, "rtfx": 3.712, "decode_ms_per_tok": 27.73, "wer": 0.0015, "peak_rss_mb": 3068.7},
-        {"model": "large-v3", "mode": "q5_0", "bytes": 1081140203, "rtfx": 3.919, "decode_ms_per_tok": 19.54, "wer": 0.0015, "peak_rss_mb": 2522.4},
-        {"model": "large-v3", "mode": "q4_k", "bytes": 889340843, "rtfx": 3.486, "decode_ms_per_tok": 20.11, "wer": 0.00301, "peak_rss_mb": 2339.1},
-        {"model": "large-v3", "mode": "q4_0", "bytes": 889340843, "rtfx": 4.202, "decode_ms_per_tok": 17.70, "wer": 0.0015, "peak_rss_mb": 2322.2},
-        {"model": "turbo", "mode": "fp16", "bytes": 1624555275, "rtfx": 7.683, "decode_ms_per_tok": 10.51, "wer": 0.00301, "peak_rss_mb": 2350.7},
-        {"model": "turbo", "mode": "q8_0", "bytes": 874188075, "rtfx": 7.814, "decode_ms_per_tok": 5.20, "wer": 0.00301, "peak_rss_mb": 1609.0},
-        {"model": "turbo", "mode": "q5_0", "bytes": 574041195, "rtfx": 7.594, "decode_ms_per_tok": 3.17, "wer": 0.00301, "peak_rss_mb": 1323.1},
-        {"model": "turbo", "mode": "q4_k", "bytes": 473992235, "rtfx": 7.24, "decode_ms_per_tok": 3.25, "wer": 0.0015, "peak_rss_mb": 1227.9},
-        {"model": "turbo", "mode": "q4_0", "bytes": 473992235, "rtfx": 7.974, "decode_ms_per_tok": 2.69, "wer": 0.00301, "peak_rss_mb": 1226.9}
+        {
+          "model": "large-v3",
+          "mode": "fp16",
+          "bytes": 3095033483,
+          "rtfx": 3.013,
+          "decode_ms_per_tok": 54.76,
+          "wer": 0.00301,
+          "peak_rss_mb": 4457.1
+        },
+        {
+          "model": "large-v3",
+          "mode": "q8_0",
+          "bytes": 1656538283,
+          "rtfx": 3.712,
+          "decode_ms_per_tok": 27.73,
+          "wer": 0.0015,
+          "peak_rss_mb": 3068.7
+        },
+        {
+          "model": "large-v3",
+          "mode": "q5_0",
+          "bytes": 1081140203,
+          "rtfx": 3.919,
+          "decode_ms_per_tok": 19.54,
+          "wer": 0.0015,
+          "peak_rss_mb": 2522.4
+        },
+        {
+          "model": "large-v3",
+          "mode": "q4_k",
+          "bytes": 889340843,
+          "rtfx": 3.486,
+          "decode_ms_per_tok": 20.11,
+          "wer": 0.00301,
+          "peak_rss_mb": 2339.1
+        },
+        {
+          "model": "large-v3",
+          "mode": "q4_0",
+          "bytes": 889340843,
+          "rtfx": 4.202,
+          "decode_ms_per_tok": 17.7,
+          "wer": 0.0015,
+          "peak_rss_mb": 2322.2
+        },
+        {
+          "model": "turbo",
+          "mode": "fp16",
+          "bytes": 1624555275,
+          "rtfx": 7.683,
+          "decode_ms_per_tok": 10.51,
+          "wer": 0.00301,
+          "peak_rss_mb": 2350.7
+        },
+        {
+          "model": "turbo",
+          "mode": "q8_0",
+          "bytes": 874188075,
+          "rtfx": 7.814,
+          "decode_ms_per_tok": 5.2,
+          "wer": 0.00301,
+          "peak_rss_mb": 1609.0
+        },
+        {
+          "model": "turbo",
+          "mode": "q5_0",
+          "bytes": 574041195,
+          "rtfx": 7.594,
+          "decode_ms_per_tok": 3.17,
+          "wer": 0.00301,
+          "peak_rss_mb": 1323.1
+        },
+        {
+          "model": "turbo",
+          "mode": "q4_k",
+          "bytes": 473992235,
+          "rtfx": 7.24,
+          "decode_ms_per_tok": 3.25,
+          "wer": 0.0015,
+          "peak_rss_mb": 1227.9
+        },
+        {
+          "model": "turbo",
+          "mode": "q4_0",
+          "bytes": 473992235,
+          "rtfx": 7.974,
+          "decode_ms_per_tok": 2.69,
+          "wer": 0.00301,
+          "peak_rss_mb": 1226.9
+        }
       ],
       "quality_gate": "no per-file regression in any of the 10 arms; only differences are quant arms fixing a baseline error (large-v3 q8_0/q5_0/q4_0 fix 1089-134686-0008; turbo q4_k fixes 1089-134686-0004)",
       "observations": [
@@ -280,8 +548,46 @@
       "tool": "20 arms one session: 5 modes x 2 models x {upstream 4834a23 (build-graphs), llmc patch (build)}; whisper-bench + e2e per arm, adjacent pairs per mode",
       "machine_state": "MAXN_SUPER, jetson_clocks, swap 0 all arms",
       "pairs_rtfx_stock_vs_llmc": {
-        "large-v3 fp16": [2.693, 3.057], "large-v3 q8_0": [3.925, 3.724], "large-v3 q5_0": [3.809, 3.936], "large-v3 q4_k": [3.361, 3.49], "large-v3 q4_0": [4.049, 4.217],
-        "turbo fp16": [7.123, 7.744], "turbo q8_0": [7.599, 7.886], "turbo q5_0": [7.385, 7.541], "turbo q4_k": [6.972, 7.12], "turbo q4_0": [7.647, 7.819]
+        "large-v3 fp16": [
+          2.693,
+          3.057
+        ],
+        "large-v3 q8_0": [
+          3.925,
+          3.724
+        ],
+        "large-v3 q5_0": [
+          3.809,
+          3.936
+        ],
+        "large-v3 q4_k": [
+          3.361,
+          3.49
+        ],
+        "large-v3 q4_0": [
+          4.049,
+          4.217
+        ],
+        "turbo fp16": [
+          7.123,
+          7.744
+        ],
+        "turbo q8_0": [
+          7.599,
+          7.886
+        ],
+        "turbo q5_0": [
+          7.385,
+          7.541
+        ],
+        "turbo q4_k": [
+          6.972,
+          7.12
+        ],
+        "turbo q4_0": [
+          7.647,
+          7.819
+        ]
       },
       "summary": "9 of 10 same-mode pairs favor the llmc patch (fp16 largest: large-v3 +13.5%, turbo +8.7%; quant modes +2.1..4.2%). Best arms: large-v3 q4_0-llmc 4.217 RTFx (decode 17.7 ms/tok), turbo e2e q8_0-llmc 7.886, turbo decode q4_0-llmc 2.70 ms/tok. Encoder/30s window (cross-device unit): turbo fp16-llmc 589 ms vs A311Y3 NPU w4a16 1921 ms (3.3x).",
       "anomalies_kept": [
@@ -298,10 +604,38 @@
       "tool": "bisect (2x2: fusion x f32out, one session) -> fix in whisper.cpp model loader: quantized models setenv GGML_CUDA_CUBLAS_F32_OUT=0 before first CUDA matmul (explicit env wins); verified on clean boot vs same-boot stock anchors",
       "machine_state": "clean reboot, MAXN_SUPER, jetson_clocks re-pinned, swap 0",
       "e2e_status": "ACCEPTED",
-      "bisect_q8_large": {"stock": 3.932, "llmc_full": 3.731, "llmc_fusion_off": 3.572, "llmc_f32out_off": 4.127, "verdict": "fusions +4.5%, f32out -10% on q8; two selective in-GEMM gates (weight-type-only, weight-type+batch-width) both failed to recover - only model-wide disable works (records: increment7-bisect-q8-*.json)"},
+      "bisect_q8_large": {
+        "stock": 3.932,
+        "llmc_full": 3.731,
+        "llmc_fusion_off": 3.572,
+        "llmc_f32out_off": 4.127,
+        "verdict": "fusions +4.5%, f32out -10% on q8; two selective in-GEMM gates (weight-type-only, weight-type+batch-width) both failed to recover - only model-wide disable works (records: increment7-bisect-q8-*.json)"
+      },
       "final_arms_vs_same_boot_stock": {
-        "large-v3 q8_0": [3.903, 4.127], "large-v3 q4_0": [4.056, 4.245], "large-v3 fp16": [2.826, 2.912],
-        "turbo q8_0": [7.59, 7.834], "turbo q4_0": [7.746, 8.117], "turbo fp16": [7.128, 7.645]
+        "large-v3 q8_0": [
+          3.903,
+          4.127
+        ],
+        "large-v3 q4_0": [
+          4.056,
+          4.245
+        ],
+        "large-v3 fp16": [
+          2.826,
+          2.912
+        ],
+        "turbo q8_0": [
+          7.59,
+          7.834
+        ],
+        "turbo q4_0": [
+          7.746,
+          8.117
+        ],
+        "turbo fp16": [
+          7.128,
+          7.645
+        ]
       },
       "quality_gate": "zero per-file WER regression in all six modes; error counts identical to stock per mode",
       "lessons": [
@@ -319,12 +653,46 @@
       "e2e_status": "REJECTED - reverted",
       "form1_upstream_fused_variant": {
         "changes": "lifted ncols=1 fusion limits (entry assert + instantiation guard) + fixed latent bias indexing (loads assumed dst-shaped bias; row-vector broadcast is correct and identical at ncols=1)",
-        "arms_vs_i7": {"large q4_0": [4.245, 3.816], "large q8_0": [4.127, 3.59], "turbo q4_0": [8.117, 7.78], "turbo q8_0": [7.834, 7.641]},
+        "arms_vs_i7": {
+          "large q4_0": [
+            4.245,
+            3.816
+          ],
+          "large q8_0": [
+            4.127,
+            3.59
+          ],
+          "turbo q4_0": [
+            8.117,
+            7.78
+          ],
+          "turbo q8_0": [
+            7.834,
+            7.641
+          ]
+        },
         "cause": "has_fusion=true pays gate accumulator registers + a second shared-memory reduction array even when only bias is used - occupancy collapse"
       },
       "form2_bias_only_variant": {
         "changes": "has_gate template split: bias-only variant with no gate registers/shared memory; gate/GLU fusion kept at upstream ncols=1",
-        "arms_vs_i7": {"large q4_0": [4.245, 4.246], "large q8_0": [4.127, 4.066], "turbo q4_0": [8.117, 8.032], "turbo q8_0": [7.834, 7.889]},
+        "arms_vs_i7": {
+          "large q4_0": [
+            4.245,
+            4.246
+          ],
+          "large q8_0": [
+            4.127,
+            4.066
+          ],
+          "turbo q4_0": [
+            8.117,
+            8.032
+          ],
+          "turbo q8_0": [
+            7.834,
+            7.889
+          ]
+        },
         "cause": "residual fused-variant per-call cost offsets the ~9k saved 4us bias-add launches - net flat to -1.5%"
       },
       "quality": "transcripts byte-identical to control in both forms (real files, byte-counted - an earlier empty-file diff false-positive was caught and the check hardened)",
@@ -364,10 +732,32 @@
       "e2e_status": "ACCEPTED (new serving-view metric: wall-RTFx over 32 files INCLUDING model load - not comparable to per-file processing RTFx)",
       "motivation": "owner direction: use the CPU's features - six Cortex-A78AE OoO cores (NEON, FP16, dotprod compiled in) sit idle whenever the GPU runs; overlap one file's CPU stages (WAV decode, mel FFT, beam bookkeeping/sampling) with another file's GPU stages",
       "arms": [
-        {"arm": "large-v3 q4_0 resident sequential (1 worker, 6 threads)", "wall_s": 60.79, "rtfx_wall": 4.13, "wer": 0.0015},
-        {"arm": "large-v3 q4_0 pipelined (2 workers, 3 threads each)", "wall_s": 44.97, "rtfx_wall": 5.583, "wer": 0.0015, "peak_rss_mb": 4207},
-        {"arm": "turbo q4_0 resident sequential", "wall_s": 32.82, "rtfx_wall": 7.651, "wer": 0.0015},
-        {"arm": "turbo q4_0 pipelined (2 workers)", "wall_s": 23.98, "rtfx_wall": 10.469, "wer": 0.0015, "peak_rss_mb": 2017}
+        {
+          "arm": "large-v3 q4_0 resident sequential (1 worker, 6 threads)",
+          "wall_s": 60.79,
+          "rtfx_wall": 4.13,
+          "wer": 0.0015
+        },
+        {
+          "arm": "large-v3 q4_0 pipelined (2 workers, 3 threads each)",
+          "wall_s": 44.97,
+          "rtfx_wall": 5.583,
+          "wer": 0.0015,
+          "peak_rss_mb": 4207
+        },
+        {
+          "arm": "turbo q4_0 resident sequential",
+          "wall_s": 32.82,
+          "rtfx_wall": 7.651,
+          "wer": 0.0015
+        },
+        {
+          "arm": "turbo q4_0 pipelined (2 workers)",
+          "wall_s": 23.98,
+          "rtfx_wall": 10.469,
+          "wer": 0.0015,
+          "peak_rss_mb": 2017
+        }
       ],
       "gains": "+35% large-v3, +37% turbo over resident-sequential; vs the per-file CLI pattern the win is larger still (that pattern pays a model load per file). First 10+ RTFx on this device (turbo q4_0 10.47 wall-RTFx incl load).",
       "boundaries": "3 workers aborts (CUDA context contention) - 2 is the configuration; dual contexts by design (quant models resident twice), fp16 large-v3 would not fit two contexts",
@@ -379,13 +769,61 @@
       "date": "2026-08-19",
       "tool": "whisper_batch_pipeline: adjacent seq(1x6) -> pipe(2x3) pairs for all remaining modes; turbo q4_0 outlier re-verified same-window",
       "pairs_wall_rtfx_incl_load": {
-        "turbo fp16": [5.389, 5.523], "turbo q8_0": [6.819, 7.218], "turbo q5_0": [7.293, 7.839], "turbo q4_k": [7.134, 7.737], "turbo q4_0 (recheck)": [7.819, 10.26],
-        "large-v3 q8_0": [3.508, 3.688], "large-v3 q5_0": [4.289, 4.092], "large-v3 q4_k": [3.918, 3.752], "large-v3 q4_0": [4.13, 5.583],
+        "turbo fp16": [
+          5.389,
+          5.523
+        ],
+        "turbo q8_0": [
+          6.819,
+          7.218
+        ],
+        "turbo q5_0": [
+          7.293,
+          7.839
+        ],
+        "turbo q4_k": [
+          7.134,
+          7.737
+        ],
+        "turbo q4_0 (recheck)": [
+          7.819,
+          10.26
+        ],
+        "large-v3 q8_0": [
+          3.508,
+          3.688
+        ],
+        "large-v3 q5_0": [
+          4.289,
+          4.092
+        ],
+        "large-v3 q4_k": [
+          3.918,
+          3.752
+        ],
+        "large-v3 q4_0": [
+          4.13,
+          5.583
+        ],
         "large-v3 fp16": "not runnable - dual 3.1GB contexts exceed 7GB"
       },
       "finding": "pipeline gain is strongly format-dependent: q4_0 +31..35% on BOTH models (reproduced in a same-window recheck), other modes +2..9%, large-v3 q5_0/q4_K slightly negative (dual large-context contention). Mechanism not fully explained; hypothesis: faster q4_0 GPU decode leaves a larger CPU-stage fraction to overlap. Recorded as measured.",
       "quality_gate": "16/16 arms zero WER regression vs each mode's single-file level",
-      "per_file_records": "benchmarks/increment9b-* (both model dirs)"
+      "per_file_records": "benchmarks/increment9b-* (both model dirs)",
+      "upstream_stack_total_comparison": {
+        "method": "same resident driver, upstream library via LD_LIBRARY_PATH, sequential (upstream best realistic serving pattern) vs llmc full stack (kernels + dual pipeline)",
+        "turbo q4_0": {
+          "upstream_resident_seq": 7.386,
+          "llmc_pipeline": 10.26,
+          "total_gain": "+39%"
+        },
+        "large-v3 q4_0": {
+          "upstream_resident_seq": 3.946,
+          "llmc_pipeline": 5.583,
+          "total_gain": "+41%"
+        },
+        "records": "benchmarks/increment9b-upstreamlib-seq-* (both model dirs)"
+      }
     }
   ],
   "observations": [
