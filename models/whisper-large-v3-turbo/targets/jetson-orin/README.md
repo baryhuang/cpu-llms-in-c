@@ -38,9 +38,27 @@ collapse seen on NPU int8 paths structurally cannot occur here; all five
 modes transcribe with zero per-file regression except the flagged q4_0
 word.
 
-Cross-device anchor (encoder per fixed 30 s window, content-independent):
-turbo fp16-llmc **589 ms** vs A311Y3 NPU w4a16 1,921 ms (3.3×), RK3588 NPU
-i8 7,623 ms (collapsed), RK3588 CPU q5 48,671 ms.
+## Cross-device, same audio file (2026-08-20)
+
+Measured on the reviewer's exact `std30.wav` (27.27 s) — identical file on
+every device, full transcription time excluding model load, aligned by
+quantization class:
+
+| Mode | Jetson stock | Jetson llmc | A311Y3 NPU | RK3588 NPU | RK3588 CPU |
+|---|---:|---:|---:|---:|---:|
+| w4a16 (q4_0) | 1.56 s | **1.50 s** | 4.50 s | — | — |
+| i8 (q8_0) | 1.63 s | **1.53 s** | — | 7.62 s (collapsed) | — |
+| q5 (q5_0) | 1.56 s | **1.51 s** | — | — | 54 s |
+| fp16 | 1.97 s | 2.08 s | — | 12.0 s | — |
+
+Best-vs-best: **3.0× faster than A311Y3** (1.50 vs 4.50 s); robust to
+build — even stock whisper.cpp measures 1.56 s (2.9×). jfk.wav (11 s):
+1.15 s vs their 3.1 s (2.7×). Encoder anchor (fixed 30 s window,
+audio-length-invariant, verified on both devices): llmc 587–594 ms /
+stock 628–673 ms vs A311Y3 1,921 ms, RK3588 NPU 7,623–12,008 ms, RK3588
+CPU 48,671 ms. Single runs carry ±0.2–0.4 s one-time-init jitter; Jetson
+per-mode deltas defer to the 32-file adjacent batteries above. Raw logs:
+`benchmarks/std30-battery-timings.log`.
 
 Raw per-file records for every arm: [`benchmarks/`](benchmarks/)
 (baseline, increments 3–6 A/B pairs, certification, quant batteries).

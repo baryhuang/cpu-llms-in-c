@@ -15,22 +15,59 @@
   },
   "certified_fp16": {
     "date": "2026-08-19",
-    "upstream": {"rtfx": 7.092, "encoder_ms_30s": 673.38, "wer": 0.00301, "peak_rss_mb": 2331.1},
-    "llmc": {"rtfx": 7.789, "encoder_ms_30s": 589.82, "wer": 0.00301, "peak_rss_mb": 2355.5},
+    "upstream": {
+      "rtfx": 7.092,
+      "encoder_ms_30s": 673.38,
+      "wer": 0.00301,
+      "peak_rss_mb": 2331.1
+    },
+    "llmc": {
+      "rtfx": 7.789,
+      "encoder_ms_30s": 589.82,
+      "wer": 0.00301,
+      "peak_rss_mb": 2355.5
+    },
     "gain": "+9.8% e2e, -12.4% encoder, 32/32 transcripts byte-identical",
     "record": "benchmarks/certification-e2e-large-v3-turbo.bin-*.json"
   },
   "quant_modes_battery3": {
     "date": "2026-08-19",
     "pairs_rtfx_upstream_vs_llmc": {
-      "fp16": [7.123, 7.744],
-      "q8_0": [7.599, 7.886],
-      "q5_0": [7.385, 7.541],
-      "q4_k": [6.972, 7.12],
-      "q4_0": [7.647, 7.819]
+      "fp16": [
+        7.123,
+        7.744
+      ],
+      "q8_0": [
+        7.599,
+        7.886
+      ],
+      "q5_0": [
+        7.385,
+        7.541
+      ],
+      "q4_k": [
+        6.972,
+        7.12
+      ],
+      "q4_0": [
+        7.647,
+        7.819
+      ]
     },
-    "decode_ms_per_tok_llmc": {"fp16": 10.50, "q8_0": 5.20, "q5_0": 3.18, "q4_k": 3.25, "q4_0": 2.70},
-    "peak_rss_mb_llmc": {"fp16": 2352.3, "q8_0": 1610.0, "q5_0": 1323.3, "q4_k": 1226.8, "q4_0": 1228.6},
+    "decode_ms_per_tok_llmc": {
+      "fp16": 10.5,
+      "q8_0": 5.2,
+      "q5_0": 3.18,
+      "q4_k": 3.25,
+      "q4_0": 2.7
+    },
+    "peak_rss_mb_llmc": {
+      "fp16": 2352.3,
+      "q8_0": 1610.0,
+      "q5_0": 1323.3,
+      "q4_k": 1226.8,
+      "q4_0": 1228.6
+    },
     "quality": "no per-file regression except q4_0-llmc 2/665 vs upstream q4_0 1/665 (word-level flutter, flagged); q4_k improves WER to 0.0015 both builds",
     "records": "benchmarks/battery3-e2e-large-v3-turbo-*.json"
   },
@@ -48,11 +85,60 @@
     "date": "2026-08-19",
     "change": "whisper.cpp loader auto-sets GGML_CUDA_CUBLAS_F32_OUT=0 for quantized models (f32-output helps fp16-weight models, hurts quantized ones - bisected on large-v3 q8_0)",
     "final_vs_same_boot_stock": {
-      "fp16": [7.128, 7.645],
-      "q8_0": [7.59, 7.834],
-      "q4_0": [7.746, 8.117]
+      "fp16": [
+        7.128,
+        7.645
+      ],
+      "q8_0": [
+        7.59,
+        7.834
+      ],
+      "q4_0": [
+        7.746,
+        8.117
+      ]
     },
     "notes": "turbo q4_0 (w4a16 class) reaches 8.117 RTFx, first 8+; WER 0.150% with zero per-file regression (the earlier one-word flutter did not reproduce)",
     "records": "benchmarks/increment7-e2e-*.json"
+  },
+  "cross_device_std30_same_file": {
+    "date": "2026-08-20",
+    "audio": "reviewer's std30.wav (27.27s 16kHz mono) - identical file on all devices",
+    "e2e_s_total_minus_load_by_mode": {
+      "w4a16 (q4_0)": {
+        "jetson_stock": 1.56,
+        "jetson_llmc": 1.5,
+        "a311y3_npu": 4.5
+      },
+      "i8 (q8_0)": {
+        "jetson_stock": 1.63,
+        "jetson_llmc": 1.53,
+        "rk3588_npu": "7.62 (recognition collapsed)"
+      },
+      "q5 (q5_0)": {
+        "jetson_stock": 1.56,
+        "jetson_llmc": 1.51,
+        "rk3588_cpu_8core": 54.0
+      },
+      "fp16": {
+        "jetson_stock": 1.97,
+        "jetson_llmc": 2.08,
+        "rk3588_npu": 12.0
+      }
+    },
+    "jfk_11s": {
+      "jetson_llmc_q4_0": 1.15,
+      "a311y3_w4a16": 3.1
+    },
+    "headline": "best-vs-best same file: jetson w4a16-llmc 1.50s vs A311Y3 w4a16 4.50s = 3.0x; robust to build (stock 1.56s = 2.9x)",
+    "encoder_anchor_ms_30s_window": {
+      "jetson_llmc": "587-594",
+      "jetson_stock": "628-673",
+      "a311y3": 1921,
+      "rk3588_npu": "7623 (i8) / 12008 (fp16)",
+      "rk3588_cpu": 48671,
+      "note": "encoder pads to a fixed 30s window - time is audio-length-invariant (verified on both devices)"
+    },
+    "records": "benchmarks/std30-battery-timings.log (this dir and large-v3 target), stock log + transcripts in large-v3 target benchmarks/"
   }
 }
