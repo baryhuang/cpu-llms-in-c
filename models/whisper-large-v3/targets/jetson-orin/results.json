@@ -273,6 +273,24 @@
         "turbo e2e barely moves with quantization (encoder-bound), but decode ms/tok is the streaming-latency metric and drops 10.5 -> 2.7"
       ],
       "per_file_records": "benchmarks/battery2-e2e-*.json"
+    },
+    {
+      "id": "battery3-stock-vs-llmc-all-quant-modes",
+      "date": "2026-08-19",
+      "tool": "20 arms one session: 5 modes x 2 models x {upstream 4834a23 (build-graphs), llmc patch (build)}; whisper-bench + e2e per arm, adjacent pairs per mode",
+      "machine_state": "MAXN_SUPER, jetson_clocks, swap 0 all arms",
+      "pairs_rtfx_stock_vs_llmc": {
+        "large-v3 fp16": [2.693, 3.057], "large-v3 q8_0": [3.925, 3.724], "large-v3 q5_0": [3.809, 3.936], "large-v3 q4_k": [3.361, 3.49], "large-v3 q4_0": [4.049, 4.217],
+        "turbo fp16": [7.123, 7.744], "turbo q8_0": [7.599, 7.886], "turbo q5_0": [7.385, 7.541], "turbo q4_k": [6.972, 7.12], "turbo q4_0": [7.647, 7.819]
+      },
+      "summary": "9 of 10 same-mode pairs favor the llmc patch (fp16 largest: large-v3 +13.5%, turbo +8.7%; quant modes +2.1..4.2%). Best arms: large-v3 q4_0-llmc 4.217 RTFx (decode 17.7 ms/tok), turbo e2e q8_0-llmc 7.886, turbo decode q4_0-llmc 2.70 ms/tok. Encoder/30s window (cross-device unit): turbo fp16-llmc 589 ms vs A311Y3 NPU w4a16 1921 ms (3.3x).",
+      "anomalies_kept": [
+        "large-v3 q8_0 is the single inversion: llmc -5.1% e2e (3.925 -> 3.724) despite faster bench encoder AND decoder; reproduced in two sessions (battery1 stock 3.939 vs battery2 patched 3.712); cause not located - open item",
+        "turbo q4_0-llmc has 2/665 word errors vs stock q4_0's 1/665 (word-level flutter, not a collapse); all other pairs have equal-or-better WER and no per-file regression",
+        "quant-mode pairs show 1-4 differing transcripts between builds (f32-output changes fp16-path numerics); fp16 pairs remain byte-identical"
+      ],
+      "artifact": "https://claude.ai/code/artifact/41b7bf0e-8de8-427e-a16d-a0520c7f9042",
+      "per_file_records": "benchmarks/battery3-e2e-*.json"
     }
   ],
   "observations": [

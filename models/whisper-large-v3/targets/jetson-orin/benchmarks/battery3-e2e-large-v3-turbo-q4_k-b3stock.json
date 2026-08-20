@@ -1,0 +1,272 @@
+{
+ "summary": {
+  "model": "ggml-large-v3-turbo-q4_k.bin",
+  "threads": "6",
+  "files": 32,
+  "audio_s": 251.1,
+  "processing_s": 36.0,
+  "rtfx_processing": 6.972,
+  "wer": 0.0015,
+  "peak_rss_mb": 1201.7,
+  "swap_used_mb_after": 0.0,
+  "wall_incl_32_loads_s": 54.4
+ },
+ "per_file": [
+  {
+   "file": "1089-134686-0000",
+   "audio_s": 10.44,
+   "proc_s": 1.266,
+   "load_s": 0.298,
+   "rss_mb": 1198.8,
+   "hyp": "He hoped there would be stew for dinner, turnips and carrots and bruised potatoes, and fat mutton pieces to be ladled out in thick, peppered, flour-fattened sauce."
+  },
+  {
+   "file": "1089-134686-0001",
+   "audio_s": 3.27,
+   "proc_s": 0.977,
+   "load_s": 0.3,
+   "rss_mb": 1196.6,
+   "hyp": "\"'Stuff it into you,' his belly counselled him."
+  },
+  {
+   "file": "1089-134686-0002",
+   "audio_s": 6.62,
+   "proc_s": 1.096,
+   "load_s": 0.359,
+   "rss_mb": 1201.7,
+   "hyp": "After early nightfall the yellow lamps would light up here and there the squalid quarter of the brothels."
+  },
+  {
+   "file": "1089-134686-0003",
+   "audio_s": 2.68,
+   "proc_s": 0.96,
+   "load_s": 0.297,
+   "rss_mb": 1198.3,
+   "hyp": "\"'Hello, Bertie. Any good in your mind?'"
+  },
+  {
+   "file": "1089-134686-0004",
+   "audio_s": 5.22,
+   "proc_s": 1.014,
+   "load_s": 0.349,
+   "rss_mb": 1196.9,
+   "hyp": "Number 10. Fresh Nelly is waiting on you. Good night, husband."
+  },
+  {
+   "file": "1089-134686-0005",
+   "audio_s": 9.63,
+   "proc_s": 1.129,
+   "load_s": 0.304,
+   "rss_mb": 1197.3,
+   "hyp": "the music came nearer and he recalled the words the words of shelley's fragment upon the moon wandering companionless pale for weariness"
+  },
+  {
+   "file": "1089-134686-0006",
+   "audio_s": 10.55,
+   "proc_s": 1.159,
+   "load_s": 0.299,
+   "rss_mb": 1198.8,
+   "hyp": "the dull light fell more faintly upon the page whereon another equation began to unfold itself slowly and to spread abroad its widening tail"
+  },
+  {
+   "file": "1089-134686-0007",
+   "audio_s": 4.28,
+   "proc_s": 0.989,
+   "load_s": 0.357,
+   "rss_mb": 1196.7,
+   "hyp": "A cold, lucid indifference reigned in his soul."
+  },
+  {
+   "file": "1089-134686-0008",
+   "audio_s": 6.73,
+   "proc_s": 1.044,
+   "load_s": 0.301,
+   "rss_mb": 1197.0,
+   "hyp": "The chaos in which his ardor extinguished itself was a cold, indifferent knowledge of himself,"
+  },
+  {
+   "file": "1089-134686-0009",
+   "audio_s": 10.57,
+   "proc_s": 1.218,
+   "load_s": 0.344,
+   "rss_mb": 1198.9,
+   "hyp": "At most, by an alms given to a beggar whose blessing he fled from, he might hope wearily to win for himself some measure of actual grace."
+  },
+  {
+   "file": "1089-134686-0010",
+   "audio_s": 4.41,
+   "proc_s": 1.065,
+   "load_s": 0.364,
+   "rss_mb": 1198.2,
+   "hyp": "\"Well now, Ennis, I declare you have a head, and so has my stick.\""
+  },
+  {
+   "file": "1089-134686-0011",
+   "audio_s": 12.45,
+   "proc_s": 1.34,
+   "load_s": 0.304,
+   "rss_mb": 1199.2,
+   "hyp": "on saturday mornings when the sodality met in the chapel to recite the little office his place was a cushioned kneeling desk at the right of the altar from which he led his wing of boys through the responses"
+  },
+  {
+   "file": "1089-134686-0012",
+   "audio_s": 11.64,
+   "proc_s": 1.189,
+   "load_s": 0.309,
+   "rss_mb": 1199.1,
+   "hyp": "her eyes seemed to regard him with mild pity her holiness a strange light glowing faintly upon her frail flesh did not humiliate the sinner who approached her"
+  },
+  {
+   "file": "1089-134686-0013",
+   "audio_s": 7.92,
+   "proc_s": 1.143,
+   "load_s": 0.352,
+   "rss_mb": 1197.2,
+   "hyp": "If ever he was impelled to cast sin from him and to repent, the impulse that moved him was the wish to be her knight."
+  },
+  {
+   "file": "1089-134686-0014",
+   "audio_s": 2.23,
+   "proc_s": 0.939,
+   "load_s": 0.364,
+   "rss_mb": 1196.5,
+   "hyp": "He tried to think how it could be"
+  },
+  {
+   "file": "1089-134686-0015",
+   "audio_s": 5.82,
+   "proc_s": 1.061,
+   "load_s": 0.305,
+   "rss_mb": 1197.0,
+   "hyp": "but the dusk, deepening in the schoolroom, covered over his thoughts. The bell rang."
+  },
+  {
+   "file": "1089-134686-0016",
+   "audio_s": 3.54,
+   "proc_s": 1.035,
+   "load_s": 0.367,
+   "rss_mb": 1196.6,
+   "hyp": "Then you can ask him questions on the catechism, Daedalus."
+  },
+  {
+   "file": "1089-134686-0017",
+   "audio_s": 8.87,
+   "proc_s": 1.17,
+   "load_s": 0.352,
+   "rss_mb": 1198.8,
+   "hyp": "stephen leaning back and drawing idly on his scribbler listened to the talk about him which heron checked from time to time by saying"
+  },
+  {
+   "file": "1089-134686-0018",
+   "audio_s": 15.72,
+   "proc_s": 1.409,
+   "load_s": 0.295,
+   "rss_mb": 1201.1,
+   "hyp": "It was strange, too, that he found an arid pleasure in following up to the end the rigid lines of the doctrines of the church and penetrating into obscure silences only to hear and feel the more deeply his own condemnation."
+  },
+  {
+   "file": "1089-134686-0019",
+   "audio_s": 13.89,
+   "proc_s": 1.37,
+   "load_s": 0.346,
+   "rss_mb": 1200.9,
+   "hyp": "The sentence of St. James, which says that he who offends against one commandment becomes guilty of all, had seemed to him first a swollen phrase until he had begun to grope in the darkness of his own state."
+  },
+  {
+   "file": "1089-134686-0020",
+   "audio_s": 16.79,
+   "proc_s": 1.439,
+   "load_s": 0.356,
+   "rss_mb": 1201.3,
+   "hyp": "if a man had stolen a pound in his youth and had used that pound to amass a huge fortune how much was he obliged to give back the pound he had stolen only or the pound together with the compound interest accruing upon it or all his huge fortune"
+  },
+  {
+   "file": "1089-134686-0021",
+   "audio_s": 6.55,
+   "proc_s": 1.072,
+   "load_s": 0.355,
+   "rss_mb": 1198.7,
+   "hyp": "If a layman, in giving baptism, pour the water before saying the words, is the child baptized?"
+  },
+  {
+   "file": "1089-134686-0022",
+   "audio_s": 11.18,
+   "proc_s": 1.253,
+   "load_s": 0.359,
+   "rss_mb": 1200.7,
+   "hyp": "How comes it that while the first beatitude promises the kingdom of heaven to the poor of heart, the second beatitude promises also to the meek that they shall possess the land?"
+  },
+  {
+   "file": "1089-134686-0023",
+   "audio_s": 13.28,
+   "proc_s": 1.35,
+   "load_s": 0.346,
+   "rss_mb": 1199.6,
+   "hyp": "Why was the sacrament of the Eucharist instituted under the two species of bread and wine, if Jesus Christ be present body and blood, soul and divinity, in the bread alone and in the wine alone?"
+  },
+  {
+   "file": "1089-134686-0024",
+   "audio_s": 11.65,
+   "proc_s": 1.231,
+   "load_s": 0.36,
+   "rss_mb": 1200.7,
+   "hyp": "If the wine change into vinegar and the host crumble into corruption after they have been consecrated, is Jesus Christ still present under their species as God and as man?"
+  },
+  {
+   "file": "1089-134686-0025",
+   "audio_s": 6.61,
+   "proc_s": 1.057,
+   "load_s": 0.357,
+   "rss_mb": 1198.7,
+   "hyp": "A gentle kick from the tall boy in the bench behind urged Stephen to ask a difficult question."
+  },
+  {
+   "file": "1089-134686-0026",
+   "audio_s": 4.01,
+   "proc_s": 1.036,
+   "load_s": 0.296,
+   "rss_mb": 1198.4,
+   "hyp": "The rector did not ask for a catechism to hear the lesson from."
+  },
+  {
+   "file": "1089-134686-0027",
+   "audio_s": 2.71,
+   "proc_s": 0.976,
+   "load_s": 0.347,
+   "rss_mb": 1198.2,
+   "hyp": "He clasped his hands on the desk and said,"
+  },
+  {
+   "file": "1089-134686-0028",
+   "audio_s": 7.83,
+   "proc_s": 1.072,
+   "load_s": 0.298,
+   "rss_mb": 1198.9,
+   "hyp": "The retreat will begin on Wednesday afternoon in honor of St. Francis Xavier, whose feast day is Saturday."
+  },
+  {
+   "file": "1089-134686-0029",
+   "audio_s": 4.67,
+   "proc_s": 0.992,
+   "load_s": 0.301,
+   "rss_mb": 1198.5,
+   "hyp": "On Friday, confession will be heard all the afternoon after beads."
+  },
+  {
+   "file": "1089-134686-0030",
+   "audio_s": 2.71,
+   "proc_s": 0.923,
+   "load_s": 0.348,
+   "rss_mb": 1198.3,
+   "hyp": "Beware of making that mistake."
+  },
+  {
+   "file": "1089-134686-0031",
+   "audio_s": 6.62,
+   "proc_s": 1.042,
+   "load_s": 0.299,
+   "rss_mb": 1200.1,
+   "hyp": "Stephen's heart began slowly to fold and fade with fear like a withering flower."
+  }
+ ]
+}
