@@ -56,6 +56,37 @@ def quantize_q8_grouped(weights: np.ndarray) -> bytes:
     return records.tobytes(order="C")
 
 
+def q5_byte_count(shape: tuple[int, ...]) -> int:
+    if len(shape) != 2 or shape[1] % GROUP_SIZE:
+        raise ValueError(f"Q5 matrix shape must be [rows, multiple of {GROUP_SIZE}]: {shape}")
+    return shape[0] * (shape[1] // GROUP_SIZE) * (2 + GROUP_SIZE // 2 + GROUP_SIZE // 8)
+
+
+def quantize_q5_grouped(weights: np.ndarray) -> bytes:
+    """Signed 5-bit groups: Q4-style low nibbles plus a 128-bit high-bit plane."""
+    rows, columns = weights.shape
+    if columns % GROUP_SIZE:
+        raise ValueError(f"matrix width {columns} is not divisible by {GROUP_SIZE}")
+    groups = columns // GROUP_SIZE
+    blocks = np.asarray(weights, dtype=np.float32).reshape(rows, groups, GROUP_SIZE)
+    minimum = np.min(blocks, axis=-1)
+    maximum = np.max(blocks, axis=-1)
+    scale = np.maximum(-minimum / np.float32(16.0), maximum / np.float32(15.0))
+    scale[scale == 0] = np.float32(1.0)
+    quantized = np.rint(blocks / scale[..., None]).clip(-16, 15).astype(np.int8)
+    five_bit = (quantized.astype(np.int16) & 0x1F).astype(np.uint8)
+    nibbles = five_bit & 0x0F
+    packed = nibbles[..., 0::2] | (nibbles[..., 1::2] << np.uint8(4))
+    plane = np.packbits((five_bit >> np.uint8(4)) & np.uint8(1),
+                        axis=-1, bitorder="little")
+    records = np.empty((rows, groups, 2 + GROUP_SIZE // 2 + GROUP_SIZE // 8),
+                       dtype=np.uint8)
+    records[..., :2] = float32_to_bf16(scale).view(np.uint8).reshape(rows, groups, 2)
+    records[..., 2:2 + GROUP_SIZE // 2] = packed
+    records[..., 2 + GROUP_SIZE // 2:] = plane
+    return records.tobytes(order="C")
+
+
 def quantize_q4_grouped(weights: np.ndarray) -> bytes:
     rows, columns = weights.shape
     if columns % GROUP_SIZE:
