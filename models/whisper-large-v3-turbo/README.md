@@ -37,3 +37,4 @@ Quality gate: corpus WER non-regression plus per-file WER review.
 | Target | Status |
 |---|---|
 | [`targets/jetson-orin/`](targets/jetson-orin/README.md) | Certified 7.79 RTFx fp16 (+9.8% over upstream, transcripts byte-identical); 5 quant modes measured; i8 optimization in progress |
+| [`targets/a113x/`](targets/a113x/README.md) | C11/NEON CPU fallback: Q4 compact JFK in 236.934 s at 448.2 MiB RSS; double-NEON stem 1.57x faster with identical generated IDs/logits |

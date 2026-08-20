@@ -1,0 +1,9 @@
+19:23:05 chain2 start governor=performance freq=1416000
+19:45:09 q4 jfk exit 0 total_seconds=1323.840443
+20:06:49 q4 std30 exit 0 total_seconds=1300.079433
+20:28:10 q5 jfk exit 0 total_seconds=1280.763373
+20:50:00 q5 std30 exit 0 total_seconds=1309.349748
+20:52:27 q8 transferred
+21:15:43 q8 jfk exit 0 total_seconds=1396.277622
+21:36:55 q8 std30 exit 0 total_seconds=1271.225039
+21:36:55 CHAIN-DONE
