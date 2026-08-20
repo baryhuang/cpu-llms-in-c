@@ -373,6 +373,19 @@
       "boundaries": "3 workers aborts (CUDA context contention) - 2 is the configuration; dual contexts by design (quant models resident twice), fp16 large-v3 would not fit two contexts",
       "quality_gate": "WER 0.150% in all four arms, identical to the single-file q4_0 baseline",
       "per_file_records": "benchmarks/increment9-batch-* (both model dirs)"
+    },
+    {
+      "id": "increment9b-batch-all-modes-adjacent-pairs",
+      "date": "2026-08-19",
+      "tool": "whisper_batch_pipeline: adjacent seq(1x6) -> pipe(2x3) pairs for all remaining modes; turbo q4_0 outlier re-verified same-window",
+      "pairs_wall_rtfx_incl_load": {
+        "turbo fp16": [5.389, 5.523], "turbo q8_0": [6.819, 7.218], "turbo q5_0": [7.293, 7.839], "turbo q4_k": [7.134, 7.737], "turbo q4_0 (recheck)": [7.819, 10.26],
+        "large-v3 q8_0": [3.508, 3.688], "large-v3 q5_0": [4.289, 4.092], "large-v3 q4_k": [3.918, 3.752], "large-v3 q4_0": [4.13, 5.583],
+        "large-v3 fp16": "not runnable - dual 3.1GB contexts exceed 7GB"
+      },
+      "finding": "pipeline gain is strongly format-dependent: q4_0 +31..35% on BOTH models (reproduced in a same-window recheck), other modes +2..9%, large-v3 q5_0/q4_K slightly negative (dual large-context contention). Mechanism not fully explained; hypothesis: faster q4_0 GPU decode leaves a larger CPU-stage fraction to overlap. Recorded as measured.",
+      "quality_gate": "16/16 arms zero WER regression vs each mode's single-file level",
+      "per_file_records": "benchmarks/increment9b-* (both model dirs)"
     }
   ],
   "observations": [
