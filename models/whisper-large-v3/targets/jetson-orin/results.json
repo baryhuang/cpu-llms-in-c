@@ -734,6 +734,20 @@
       "conclusion_after_three_probes": "occupancy fix (mechanically successful, kernel -3%), tile shrink (crashes), coalescing fix (2.1x slower) - mmq on GA10B is not limited by any single local factor; the profile (47% issue, 54% memory, no dominant stall, latency-balanced at 8 warps) says the int8 2x needs a ground-up pipelined kernel: weight layout repacked at model load (34-byte blocks -> split aligned quants+scales arrays, enabling 16-byte cp.async double-buffering) + restructured K-loop. Multi-day project; measured prize ceiling ~+8-12% turbo e2e, ~+3-5% large-v3."
     },
     {
+      "id": "technique2c-llmc-mmq8-ground-up-kernel-PLATEAU",
+      "date": "2026-08-20",
+      "tool": "llmc-mmq8.cu (committed in the target patch, env-gated LLMC_MMQ8=1, default OFF): lazy per-tensor weight repack (34B blocks -> aligned int8 quant matrix + half scale matrix, cached) + 2-stage cp.async pipeline (weights/activations/scales) + mma.m16n8k32.s8 + per-32-block fp32 rescale identical to mmq's formula; activations reuse ggml quantize_mmq_q8_1 (block_q8_1_mmq D4)",
+      "versions_encoder_ms_q8_large_v3_vs_mmq_662": {
+        "v1 128x64 tiles, occupancy 1": 747,
+        "v2 +conflict-free B stride, compact scale arrays, hoisted dy, occupancy 2 (128 regs, 33% occ, mem 67-70%)": 697,
+        "v3 128x128 tiles (-32% traffic/output), occupancy 1": 688,
+        "v4 3-stage pipeline": 693
+      },
+      "verdict": "PLATEAU at -4% vs mmq; all versions byte-identical transcripts. Two completely different kernels (gathered mmq vs repacked+cp.async llmc) converge to the same ~5-6 effective TOPS on this GEMM (mem ~67%, compute ~58%) - convergent evidence of a GA10B ceiling for the mixed workload int8-IMMA + per-32-block fp32 rescale. Pipe math: at full IMMA rate the rescale needs ~192 fp32 ops/SM/cycle vs 128 available - the fp32 pipe caps this workload well below the marketing int8 peak; in practice both kernels sit near fp16-parity.",
+      "disposition": "kernel + repack infrastructure kept in the target patch (correct, documented, env-gated OFF) as groundwork - the repack/pipeline machinery amortizes better for formats with coarser scale granularity; default path remains mmq. The 'int8 dividend' on this device is judged not extractable for q8_0's scale structure.",
+      "quality": "all four versions byte-identical transcripts on the probe file; no e2e battery run since no version beat the incumbent"
+    },
+    {
       "id": "increment9-cpu-gpu-pipelined-batch-ACCEPTED",
       "date": "2026-08-19",
       "tool": "whisper_batch_pipeline.c (committed in this dir): N resident worker pipelines over one file queue against the whisper.cpp C API; A/B nworkers=1 (resident sequential) vs nworkers=2 (pipelined), same session",

@@ -1,8 +1,16 @@
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index f2e381e..b2abc6a 100644
+index f2e381e..b1c0e46 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -1505,8 +1505,15 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
+@@ -30,6 +30,7 @@
+ #include "ggml-cuda/im2col.cuh"
+ #include "ggml-cuda/mmf.cuh"
+ #include "ggml-cuda/mmq.cuh"
++#include "ggml-cuda/llmc-mmq8.cuh"
+ #include "ggml-cuda/mmvf.cuh"
+ #include "ggml-cuda/mmvq.cuh"
+ #include "ggml-cuda/norm.cuh"
+@@ -1505,8 +1506,15 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
  
      const int cc = ggml_cuda_info().devices[ctx.device].cc;
      bool prefer_f32_output = false;
@@ -19,7 +27,19 @@ index f2e381e..b2abc6a 100644
      } else if (compute_type == GGML_TYPE_BF16) {
          prefer_f32_output = !GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_CDNA(cc);
      }
-@@ -3102,6 +3109,123 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
+@@ -1858,6 +1866,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
+         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
+         return;
+     }
++    // jetson-orin target: repacked-layout int8 GEMM for encoder-scale Q8_0 matmuls
++    if (llmc_mmq8_supported(src0, src1, dst)) {
++        llmc_mmq8(ctx, src0, src1, dst);
++        return;
++    }
+     if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
+         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
+         return;
+@@ -3102,6 +3115,123 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
          return false;
      }
  
@@ -143,7 +163,7 @@ index f2e381e..b2abc6a 100644
      if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
          const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
          const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
-@@ -3361,7 +3485,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3361,7 +3491,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
      }
  
      //RoPE + view + set-rows
@@ -152,7 +172,7 @@ index f2e381e..b2abc6a 100644
          ggml_tensor * rope     = cgraph->nodes[i];
          ggml_tensor * set_rows = cgraph->nodes[i + 2];
  
-@@ -3509,6 +3633,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3509,6 +3639,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
  
      // gate + glu + up, with optional scale/bias on both lanes.
      for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
@@ -162,7 +182,7 @@ index f2e381e..b2abc6a 100644
          const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
  
          if (op == GGML_OP_MUL_MAT) {
-@@ -3799,6 +3926,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3799,6 +3932,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
  
      // mul_mat + scale + optional bias
      for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
@@ -172,7 +192,7 @@ index f2e381e..b2abc6a 100644
          const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
  
          for (const bool with_bias : { false, true }) {
-@@ -3887,6 +4017,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3887,6 +4023,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
  
      // mul_mat + add
      for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
@@ -182,7 +202,7 @@ index f2e381e..b2abc6a 100644
          const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
  
          if (!ggml_can_fuse(cgraph, i, { op, bias_op })) {
-@@ -3946,49 +4079,76 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
+@@ -3946,49 +4085,76 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph
          return fused_node_count - 1;
      }
  
@@ -270,6 +290,355 @@ index f2e381e..b2abc6a 100644
          ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i + 2], node);
          return 2;
      }
+diff --git a/ggml/src/ggml-cuda/llmc-mmq8.cu b/ggml/src/ggml-cuda/llmc-mmq8.cu
+new file mode 100644
+index 0000000..9fa68e4
+--- /dev/null
++++ b/ggml/src/ggml-cuda/llmc-mmq8.cu
+@@ -0,0 +1,328 @@
++// llmc-mmq8.cu — jetson-orin target: ground-up int8 GEMM for Q8_0 weights at
++// encoder-scale batch sizes.
++//
++// Why it exists (all measured on this device):
++//  - stock mmq runs at fp16-parity: latency-balanced, no single local fix works
++//    (occupancy fix -3%, coalesced-loader retrofit 2.1x slower).
++//  - the root obstacle is q8_0's 34-byte interleaved block: no aligned vector
++//    loads, no cp.async, ~50% of global sectors wasted.
++//
++// Design:
++//  1. Weights are repacked ONCE (lazily, first use, cached by tensor address):
++//     34-byte blocks split into a K-contiguous int8 quant matrix (16B-aligned
++//     rows) and a half scale matrix. This is the repo's "offline compiler fixes
++//     tensor formats" philosophy applied at load time.
++//  2. Activations reuse ggml's proven quantize_mmq_q8_1 path and its
++//     block_q8_1_mmq D4 layout (144B chunk = 4 fp32 scales + 128 int8,
++//     chunk-major over K, columns contiguous, 16B-aligned).
++//  3. Kernel: 128x64 tiles over K-chunks of 128, two-stage cp.async double
++//     buffering for weights, activations and scales; mma.m16n8k32.s8 tensor
++//     cores; per-32-block fp32 scale drain (bit-exact same formula as mmq).
++//
++// Enabled with LLMC_MMQ8=1 (A/B) — flipped to default after gates pass.
++
++#include "common.cuh"
++#include "quantize.cuh"
++
++#include <mutex>
++#include <unordered_map>
++
++#define LLMC_MMQ8_BM 128
++#define LLMC_MMQ8_BN 128
++#define LLMC_MMQ8_BK 128           // one block_q8_1_mmq chunk
++#define LLMC_MMQ8_NWARPS 8
++
++// block_q8_1_mmq (D4 layout) facts we rely on; see mmq.cuh
++#define LLMC_YBLK_BYTES 144        // 16B scales (4 x fp32) + 128 int8 quants
++#define LLMC_YBLK_QS_OFF 16
++#define LLMC_A_SMEM_STRIDE 144     // 128B quants + 16B pad (bank shift)
++#define LLMC_Y_SMEM_STRIDE 176        // 144B chunk + 32B pad (conflict-free ldmatrix rows)
++
++// ---------------------------------------------------------------- repacking
++
++struct llmc_q8_repacked {
++    int8_t * qs = nullptr;  // [nrows][K] row-major, rows 16B-aligned (K % 16 == 0)
++    half   * d  = nullptr;  // [nrows][K/32]
++};
++
++static std::mutex llmc_repack_mutex;
++static std::unordered_map<const void *, llmc_q8_repacked> llmc_repack_map;
++
++static __global__ void llmc_repack_q8_kernel(const char * __restrict__ src, int8_t * __restrict__ qs,
++                                             half * __restrict__ d, const int64_t nblocks_row, const int64_t nrows) {
++    const int64_t row = blockIdx.y;
++    const int64_t kb  = blockIdx.x*blockDim.x + threadIdx.x;
++    if (row >= nrows || kb >= nblocks_row) {
++        return;
++    }
++    const char * blk = src + (row*nblocks_row + kb)*34;  // block_q8_0: half d; int8 qs[32]
++    unsigned short hs;
++    memcpy(&hs, blk, 2);
++    half hd;
++    memcpy(&hd, &hs, 2);
++    d[row*nblocks_row + kb] = hd;
++    int8_t * dst = qs + row*(nblocks_row*32) + kb*32;
++#pragma unroll
++    for (int i = 0; i < 32; i++) {
++        dst[i] = (int8_t) blk[2 + i];
++    }
++}
++
++static const llmc_q8_repacked * llmc_get_repacked(const ggml_tensor * src0, cudaStream_t stream) {
++    std::lock_guard<std::mutex> lock(llmc_repack_mutex);
++    auto it = llmc_repack_map.find(src0->data);
++    if (it != llmc_repack_map.end()) {
++        return &it->second;
++    }
++    const int64_t nrows       = src0->ne[1];
++    const int64_t nblocks_row = src0->ne[0] / 32;
++
++    llmc_q8_repacked rp;
++    if (cudaMalloc(&rp.qs, nrows*nblocks_row*32) != cudaSuccess) {
++        return nullptr;
++    }
++    if (cudaMalloc(&rp.d, nrows*nblocks_row*sizeof(half)) != cudaSuccess) {
++        cudaFree(rp.qs);
++        return nullptr;
++    }
++    const dim3 grid((nblocks_row + 255)/256, nrows);
++    llmc_repack_q8_kernel<<<grid, 256, 0, stream>>>((const char *) src0->data, rp.qs, rp.d, nblocks_row, nrows);
++    CUDA_CHECK(cudaGetLastError());
++    auto res = llmc_repack_map.emplace(src0->data, rp);
++    return &res.first->second;
++}
++
++// ---------------------------------------------------------------- kernel
++
++static __device__ __forceinline__ void llmc_cp16(void * smem, const void * gmem) {
++    const unsigned sa = __cvta_generic_to_shared(smem);
++    asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(sa), "l"(gmem));
++}
++static __device__ __forceinline__ void llmc_cp8(void * smem, const void * gmem) {
++    const unsigned sa = __cvta_generic_to_shared(smem);
++    asm volatile("cp.async.ca.shared.global [%0], [%1], 8;\n" :: "r"(sa), "l"(gmem));
++}
++static __device__ __forceinline__ void llmc_cp_commit() {
++    asm volatile("cp.async.commit_group;\n");
++}
++template <int N> static __device__ __forceinline__ void llmc_cp_wait() {
++    asm volatile("cp.async.wait_group %0;\n" :: "n"(N));
++}
++
++__launch_bounds__(LLMC_MMQ8_NWARPS*32, 1)
++static __global__ void llmc_mmq8_kernel(
++        const int8_t * __restrict__ aqs, const half * __restrict__ ad,
++        const char * __restrict__ y, float * __restrict__ dst,
++        const int K, const int M, const int N, const int nchunks, const int ncols_y) {
++
++#if __CUDA_ARCH__ >= 800
++    constexpr int BM = LLMC_MMQ8_BM, BN = LLMC_MMQ8_BN, BK = LLMC_MMQ8_BK;
++
++    extern __shared__ char smem[];
++    char * sA  = smem;                                        // [2][BM][LLMC_A_SMEM_STRIDE]
++    char * sY  = sA + 2*BM*LLMC_A_SMEM_STRIDE;                // [2][BN][LLMC_Y_SMEM_STRIDE]
++    char * sDx = sY + 2*BN*LLMC_Y_SMEM_STRIDE;                // [2][BM][4] half
++    char * sDy = sDx + 2*BM*8;                                // [2][BN][4] float
++
++    const int m0 = blockIdx.x * BM;
++    const int n0 = blockIdx.y * BN;
++
++    const int tid    = threadIdx.y*32 + threadIdx.x;
++    const int warp   = threadIdx.y;                            // 0..7
++    const int lane   = threadIdx.x;
++
++    // warp tile: 4 warps over M (32 rows each), 2 over N (32 cols each)
++    const int wm = (warp % 4) * 32;                            // warp row offset in tile
++    const int wn = (warp / 4) * 64;                            // warp col offset in tile
++
++    float acc[2][8][4];                                        // [mi][ni][elem] fp32
++#pragma unroll
++    for (int a = 0; a < 2; a++)
++#pragma unroll
++        for (int b = 0; b < 8; b++)
++#pragma unroll
++            for (int e = 0; e < 4; e++) acc[a][b][e] = 0.0f;
++
++    auto load_stage = [&](int c, int stage) {
++        char * dA  = sA  + stage*BM*LLMC_A_SMEM_STRIDE;
++        char * dY  = sY  + stage*BN*LLMC_Y_SMEM_STRIDE;
++        char * dDx = sDx + stage*BM*8;
++        // A: BM rows x 128B, 8 x 16B chunks per row -> 1024 cp16 / 256 threads = 4 each
++#pragma unroll
++        for (int t = tid; t < BM*8; t += 256) {
++            const int r  = t >> 3;
++            const int cc = t & 7;
++            llmc_cp16(dA + r*LLMC_A_SMEM_STRIDE + cc*16,
++                      aqs + (size_t)(m0 + r)*K + (size_t)c*BK + cc*16);
++        }
++        // Y: BN cols x 144B = 9 x 16B chunks -> 576 cp16
++        for (int t = tid; t < BN*9; t += 256) {
++            const int j  = t / 9;
++            const int cc = t % 9;
++            llmc_cp16(dY + j*LLMC_Y_SMEM_STRIDE + cc*16,
++                      y + ((size_t)c*ncols_y + (n0 + j))*LLMC_YBLK_BYTES + cc*16);
++        }
++        // Dx: BM rows x 4 half = 8B per row
++        for (int t = tid; t < BM; t += 256) {
++            llmc_cp8(dDx + t*8, ad + (size_t)(m0 + t)*(K/32) + (size_t)c*4);
++        }
++        // Dy: BN cols x 4 fp32 = 16B per col (the chunk's d4 header)
++        char * dDy = sDy + stage*BN*16;
++        for (int t = tid; t < BN; t += 256) {
++            llmc_cp16(dDy + t*16, y + ((size_t)c*ncols_y + (n0 + t))*LLMC_YBLK_BYTES);
++        }
++        llmc_cp_commit();
++    };
++
++    load_stage(0, 0);
++
++    for (int c = 0; c < nchunks; c++) {
++        const int stage = c & 1;
++        if (c + 1 < nchunks) {
++            load_stage(c + 1, stage ^ 1);
++            llmc_cp_wait<1>();
++        } else {
++            llmc_cp_wait<0>();
++        }
++        __syncthreads();
++
++        const char * cA  = sA  + stage*BM*LLMC_A_SMEM_STRIDE + (size_t)wm*LLMC_A_SMEM_STRIDE;
++        const char * cY  = sY  + stage*BN*LLMC_Y_SMEM_STRIDE + (size_t)wn*LLMC_Y_SMEM_STRIDE;
++        const half  * cDx = (const half  *)(sDx + stage*BM*8)  + wm*4;
++        const float * cDy = (const float *)(sDy + stage*BN*16) + wn*4;
++
++#pragma unroll
++        for (int kb = 0; kb < 4; kb++) {                        // four 32-value blocks per chunk
++            // A fragments: 2 sub-tiles of 16x32 int8
++            int afrag[2][4];
++#pragma unroll
++            for (int mi = 0; mi < 2; mi++) {
++                const char * base = cA + (size_t)(mi*16 + (lane & 15))*LLMC_A_SMEM_STRIDE + kb*32 + (lane >> 4)*16;
++                const unsigned sa = __cvta_generic_to_shared((void *) base);
++                asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
++                             : "=r"(afrag[mi][0]), "=r"(afrag[mi][1]), "=r"(afrag[mi][2]), "=r"(afrag[mi][3])
++                             : "r"(sa));
++            }
++            // B fragments: 4 sub-tiles of 8 cols x 32 int8 (k-contiguous per col = col-major kxn)
++            int bfrag[8][2];
++#pragma unroll
++            for (int ni = 0; ni < 8; ni++) {
++                const char * base = cY + (size_t)(ni*8 + (lane & 7))*LLMC_Y_SMEM_STRIDE + LLMC_YBLK_QS_OFF + kb*32 + ((lane >> 3) & 1)*16;
++                const unsigned sa = __cvta_generic_to_shared((void *) base);
++                asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n"
++                             : "=r"(bfrag[ni][0]), "=r"(bfrag[ni][1])
++                             : "r"(sa));
++            }
++
++            const int   r0  = (lane >> 2);
++            const float dx0 = (float) cDx[(r0     )*4 + kb];
++            const float dx1 = (float) cDx[(r0 +  8)*4 + kb];
++            const float dx2 = (float) cDx[(r0 + 16)*4 + kb];
++            const float dx3 = (float) cDx[(r0 + 24)*4 + kb];
++            float dy0v[8], dy1v[8];
++#pragma unroll
++            for (int ni = 0; ni < 8; ni++) {
++                dy0v[ni] = cDy[(ni*8 + 2*(lane & 3)    )*4 + kb];
++                dy1v[ni] = cDy[(ni*8 + 2*(lane & 3) + 1)*4 + kb];
++            }
++
++#pragma unroll
++            for (int mi = 0; mi < 2; mi++) {
++#pragma unroll
++                for (int ni = 0; ni < 8; ni++) {
++                    int c0 = 0, c1 = 0, c2 = 0, c3 = 0;
++                    asm volatile(
++                        "mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
++                        "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
++                        : "+r"(c0), "+r"(c1), "+r"(c2), "+r"(c3)
++                        : "r"(afrag[mi][0]), "r"(afrag[mi][1]), "r"(afrag[mi][2]), "r"(afrag[mi][3]),
++                          "r"(bfrag[ni][0]), "r"(bfrag[ni][1]));
++
++                    const float dxa = mi == 0 ? dx0 : dx2;
++                    const float dxb = mi == 0 ? dx1 : dx3;
++                    acc[mi][ni][0] += (float) c0 * dxa * dy0v[ni];
++                    acc[mi][ni][1] += (float) c1 * dxa * dy1v[ni];
++                    acc[mi][ni][2] += (float) c2 * dxb * dy0v[ni];
++                    acc[mi][ni][3] += (float) c3 * dxb * dy1v[ni];
++                }
++            }
++        }
++        __syncthreads();
++    }
++
++    // epilogue: write fp32
++#pragma unroll
++    for (int mi = 0; mi < 2; mi++) {
++#pragma unroll
++        for (int ni = 0; ni < 8; ni++) {
++            const int r  = m0 + wm + mi*16 + (lane >> 2);
++            const int jc = n0 + wn + ni*8 + 2*(lane & 3);
++            if (jc < N) {
++                dst[(size_t)jc*M + r] = acc[mi][ni][0];
++                if (jc + 1 < N) dst[(size_t)(jc+1)*M + r] = acc[mi][ni][1];
++                dst[(size_t)jc*M + r + 8] = acc[mi][ni][2];
++                if (jc + 1 < N) dst[(size_t)(jc+1)*M + r + 8] = acc[mi][ni][3];
++            }
++        }
++    }
++#else
++    GGML_UNUSED_VARS(aqs, ad, y, dst, K, M, N, nchunks, ncols_y);
++    NO_DEVICE_CODE;
++#endif // __CUDA_ARCH__ >= 800
++}
++
++// ---------------------------------------------------------------- host entry
++
++bool llmc_mmq8_supported(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst) {
++    static const bool enabled = getenv("LLMC_MMQ8") != nullptr && atoi(getenv("LLMC_MMQ8")) != 0;
++    if (!enabled) return false;
++    if (src0->type != GGML_TYPE_Q8_0 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) return false;
++    if (src0->ne[0] % LLMC_MMQ8_BK != 0 || src0->ne[1] % LLMC_MMQ8_BM != 0) return false;
++    if (src1->ne[1] < 48) return false;                       // encoder-scale batches only
++    if (src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1) return false;
++    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) return false;
++    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
++    if (!GGML_CUDA_CC_IS_NVIDIA(cc) || cc < GGML_CUDA_CC_AMPERE) return false;
++    return true;
++}
++
++void llmc_mmq8(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
++    cudaStream_t stream = ctx.stream();
++
++    const int64_t K = src0->ne[0];
++    const int64_t M = src0->ne[1];
++    const int64_t N = src1->ne[1];
++
++    const llmc_q8_repacked * rp = llmc_get_repacked(src0, stream);
++    GGML_ASSERT(rp != nullptr);
++
++    // quantize activations with ggml's proven path (block_q8_1_mmq, D4 layout)
++    const int64_t K_padded = GGML_PAD(K, MATRIX_ROW_PADDING);
++    const int64_t nbytes_y = N*K_padded*sizeof(block_q8_1)/QK8_1 + (LLMC_MMQ8_BN + 1)*LLMC_YBLK_BYTES;
++    ggml_cuda_pool_alloc<char> y_q8(ctx.pool(), nbytes_y);
++    {
++        const size_t ts   = ggml_type_size(src1->type);
++        const int64_t s11 = src1->nb[1] / ts;
++        const int64_t s12 = src1->nb[2] / ts;
++        const int64_t s13 = src1->nb[3] / ts;
++        quantize_mmq_q8_1_cuda((const float *) src1->data, nullptr, y_q8.get(), GGML_TYPE_Q8_0,
++                               K, s11, s12, s13, K_padded, N, 1, 1, stream);
++        CUDA_CHECK(cudaGetLastError());
++    }
++
++    const int nchunks = (int)(K / LLMC_MMQ8_BK);
++    const dim3 grid(M/LLMC_MMQ8_BM, (N + LLMC_MMQ8_BN - 1)/LLMC_MMQ8_BN);
++    const dim3 block(32, LLMC_MMQ8_NWARPS);
++    const int smem = 2*LLMC_MMQ8_BM*LLMC_A_SMEM_STRIDE + 2*LLMC_MMQ8_BN*LLMC_Y_SMEM_STRIDE + 2*LLMC_MMQ8_BM*8 + 2*LLMC_MMQ8_BN*16;
++
++    static bool smem_set = false;
++    if (!smem_set) {
++        CUDA_CHECK(cudaFuncSetAttribute(llmc_mmq8_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
++        smem_set = true;
++    }
++
++    llmc_mmq8_kernel<<<grid, block, smem, stream>>>(
++        rp->qs, rp->d, y_q8.get(), (float *) dst->data,
++        (int) K, (int) M, (int) N, nchunks, (int) N);
++    CUDA_CHECK(cudaGetLastError());
++}
+diff --git a/ggml/src/ggml-cuda/llmc-mmq8.cuh b/ggml/src/ggml-cuda/llmc-mmq8.cuh
+new file mode 100644
+index 0000000..71dd01d
+--- /dev/null
++++ b/ggml/src/ggml-cuda/llmc-mmq8.cuh
+@@ -0,0 +1,9 @@
++#include "common.cuh"
++
++// jetson-orin target: ground-up int8 GEMM for Q8_0 weights at encoder-scale
++// batches (repacked weight layout + cp.async pipeline + mma.s8).
++// Enabled with LLMC_MMQ8=1. See llmc-mmq8.cu.
++
++bool llmc_mmq8_supported(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst);
++
++void llmc_mmq8(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 diff --git a/ggml/src/ggml-cuda/mmf.cu b/ggml/src/ggml-cuda/mmf.cu
 index 646a589..589a1be 100644
 --- a/ggml/src/ggml-cuda/mmf.cu
