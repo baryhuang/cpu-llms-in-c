@@ -1,0 +1,188 @@
+{
+  "target": "rk3588-rknpu2",
+  "model": "whisper-large-v3-turbo",
+  "date": "2026-08-20",
+  "scope": "owner-directed std30.wav only; no 32-file mode and no corpus WER claim",
+  "machine": {
+    "board": "Orange Pi 5 Plus",
+    "hostname": "caremojo-hub-84f8f312",
+    "soc": "Rockchip RK3588",
+    "cpu": "4x Cortex-A76 up to 2.256 GHz + 4x Cortex-A55 up to 1.8 GHz",
+    "memory": "7.7 GiB RAM; 3.9 GiB zram",
+    "npu": "3-core RK3588 NPU through the proprietary RKNPU2 stack",
+    "os": "Armbian Debian trixie, Linux 6.1.115-vendor-rk35xx",
+    "driver": "RKNPU driver v0.9.8",
+    "runtime": "librknnrt 2.3.2 (429f97ae6b@2025-04-09T09:09:27)",
+    "runtime_sha256": "d31fc19c85b85f6091b2bd0f6af9d962d5264a4e410bfb536402ec92bac738e8"
+  },
+  "pins": {
+    "rknn_model": {
+      "repository": "happyme531/whisper-large-v3-turbo-RKNN2",
+      "revision": "791cf8c7152a3882fc3fb7d3fb8d6718dfbea889",
+      "license": "AGPL-3.0"
+    },
+    "rknn_toolkit2": {
+      "version": "2.3.2",
+      "revision": "42aa1d426c0a9e0869b6374edba009f7208a1926"
+    },
+    "rknn_model_zoo": {
+      "revision": "bad6c7334531becaf90a561988519b7bec34d0ab"
+    }
+  },
+  "audio": {
+    "name": "std30.wav",
+    "reported_duration_seconds": 27.27,
+    "format": "16 kHz mono WAV, 436320 samples",
+    "sha256": "659b371dc691312d8c5b4b2901e0d0a925d9ad0567aa51c48e1734f5d2429a2d",
+    "encoder_window_seconds": 30
+  },
+  "models": {
+    "encoder": {
+      "file": "encoder_with_kv.rknn",
+      "bytes": 1380111287,
+      "sha256": "987ebf7db28d6bef11d57fe0b8e316e2c6997d6a07f0ef3bab8dc12978625db2",
+      "input": "float16 [1,128,3000]",
+      "kv_outputs": "2 x float16 [1,4,20,1500,64]"
+    },
+    "decoder": {
+      "file": "decoder_static_kv.rknn",
+      "bytes": 456033863,
+      "sha256": "663b2200922115a4a94a3f582a14b6b920af229d20075fa006e6c67dd76082e6",
+      "self_kv": "2 x float16 [1,4,20,448,64]",
+      "logits": "float16 [1,1,51866]"
+    }
+  },
+  "quantization_matrix": {
+    "source_labels": ["FP16", "q8_0", "q5_0", "q4_K", "q4_0"],
+    "fp16": {
+      "rknpu2_status": "supported and measured",
+      "note": "precompiled RKNPU2 graph uses float16 tensor I/O"
+    },
+    "q8_0": {
+      "rknpu2_status": "unsupported exact format",
+      "note": "GGML q8_0 is rejected as an invalid Toolkit2 2.3.2 quantized_dtype; native w8a8 also quantizes activations and requires calibration, so it is not relabeled"
+    },
+    "q5_0": {
+      "rknpu2_status": "unsupported exact format",
+      "note": "Toolkit2 2.3.2 has no native RK3588 5-bit graph-conversion mode"
+    },
+    "q4_K": {
+      "rknpu2_status": "unsupported exact format",
+      "note": "Toolkit2 2.3.2 has no native RK3588 groupwise GGML q4_K graph-conversion mode"
+    },
+    "q4_0": {
+      "rknpu2_status": "unsupported exact format",
+      "note": "Toolkit2 2.3.2 rejects q4_0; its distinct w4a16 mode is also unsupported on RK3588"
+    },
+    "native_toolkit_checks": {
+      "w8a8": "configuration accepted; not benchmarked because no calibrated large-v3-turbo graph was produced",
+      "w8a16": "rejected as unsupported on rk3588",
+      "w4a16": "rejected as unsupported on rk3588",
+      "w16a16i": "configuration accepted; not a PDF weight variant",
+      "w16a16i_dfp": "configuration accepted; not a PDF weight variant"
+    },
+    "record": "benchmarks/rknpu2/toolkit-2.3.2-quantization-support.log"
+  },
+  "methodology": {
+    "baseline": "community Python runner using RKNPU2 for all model operators; host-copy encoder and decoder KV path (--no-zero-copy-decoder); ondemand CPU, rknpu_ondemand NPU and dmc_ondemand memory governors",
+    "llmc": "Python-free C++17 target runtime using the RKNPU2 C API; DMA-BUF encoder KV handoff; in-place self-KV; selective cache synchronization; all-core NPU mask; taskset 4-7; CPU/NPU/DMC performance governors during the run",
+    "encoder": "time from synchronized fixed-30-second feature input through encoder rknn_run completion",
+    "decoder": "mean over 80 RKNPU2 decoder steps (4 prompt plus 76 generated-token follow-up steps)",
+    "end_to_end": "inference path from WAV read and feature extraction through final EOT; model loading excluded",
+    "quality": "exact transcript comparison on std30.wav; no reference corpus was run",
+    "repeat_policy": "one baseline; three adjacent best-profile LLMC runs of the same std30.wav; report the LLMC median"
+  },
+  "runs": {
+    "rknpu2_fp16": {
+      "baseline": {
+        "runner": "Python community runner",
+        "zero_copy_decoder": false,
+        "generated_tokens": 77,
+        "encoder_ms": 12839.54,
+        "avg_decoder_step_ms": 408.33,
+        "e2e_ms": 45774.08,
+        "peak_rss_kib": 4323460
+      },
+      "llmc_median": {
+        "runner": "native C++17 LLMC runner",
+        "zero_copy_decoder": true,
+        "npu_core_mask": "all",
+        "cpu_affinity": "4-7",
+        "governors": "CPU/NPU/DMC performance during measurement; restored after each battery",
+        "generated_tokens": 77,
+        "decoder_steps": 80,
+        "preprocess_ms": 80.89,
+        "encoder_ms": 8725.34,
+        "avg_decoder_step_ms": 111.56,
+        "e2e_ms": 17933.30,
+        "peak_rss_kib": 2114376
+      },
+      "llmc_trials": [
+        {"encoder_ms": 8725.34, "avg_decoder_step_ms": 111.56, "e2e_ms": 17933.30},
+        {"encoder_ms": 8745.94, "avg_decoder_step_ms": 111.59, "e2e_ms": 17956.62},
+        {"encoder_ms": 8709.83, "avg_decoder_step_ms": 111.34, "e2e_ms": 17900.97}
+      ],
+      "gains": {
+        "encoder_percent": 32.043,
+        "decoder_step_percent": 72.679,
+        "e2e_percent": 60.822,
+        "peak_rss_percent": 51.095,
+        "encoder_speedup": 1.472,
+        "decoder_step_speedup": 3.660,
+        "e2e_speedup": 2.552
+      }
+    }
+  },
+  "tuning": {
+    "native_auto_core_ondemand": {
+      "encoder_ms": 12393.52,
+      "avg_decoder_step_ms": 143.21,
+      "e2e_ms": 24736.33,
+      "decision": "keep native zero-copy, continue NPU-core tuning"
+    },
+    "native_all_core_ondemand": {
+      "encoder_ms": 8802.52,
+      "avg_decoder_step_ms": 128.86,
+      "e2e_ms": 19933.47,
+      "decision": "keep all-core mask"
+    },
+    "native_all_core_performance": {
+      "encoder_ms_median": 8725.34,
+      "avg_decoder_step_ms_median": 111.56,
+      "e2e_ms_median": 17933.30,
+      "decision": "final profile"
+    }
+  },
+  "optimization": {
+    "kept": [
+      "pure C++17 inference runtime with no Python dependency",
+      "DMA-BUF import of both 15.36 MB encoder KV outputs into the decoder context",
+      "in-place 4.59 MB key and value self-cache bindings across decoder steps",
+      "disabled global input/output cache flushes with explicit sync only for features, token, position and logits",
+      "RKNN_NPU_CORE_ALL for encoder and decoder",
+      "Cortex-A76 affinity plus CPU, NPU and DMC performance governors during measurement"
+    ],
+    "restoration": "all three governors returned to ondemand/rknpu_ondemand/dmc_ondemand after each tuned battery"
+  },
+  "quality": {
+    "exact_transcript_match": true,
+    "transcript_line_sha256_with_lf": "0b1933a3fe1ea20c0222a24c3a0434d2e33aec4fe3816bcdf7283446d4907442",
+    "result": "baseline and all five native tuning/final runs produced the same 77-token English transcript"
+  },
+  "exploratory_open_stack_appendix": {
+    "status": "not used for the proprietary RKNPU2 headline or cross-device row",
+    "runtime": "mainline Rocket plus whisper.cpp/GGML",
+    "reason_retained": "records the earlier feasibility work and exact PDF GGML formats",
+    "best_fp16": {"encoder_ms": 12412.71, "e2e_ms": 16484.59},
+    "records": "benchmarks/baseline/, benchmarks/llmc/ and benchmarks/tuning/"
+  },
+  "records": {
+    "baseline": "benchmarks/rknpu2/baseline-python-copy-std30.log",
+    "llmc_trials": "benchmarks/rknpu2/llmc-native-all-performance-std30*.log",
+    "native_tuning": "benchmarks/rknpu2/llmc-native-auto-std30.log and llmc-native-all-std30.log",
+    "tensor_layout": "benchmarks/rknpu2/model-tensors.log",
+    "quantization_support": "benchmarks/rknpu2/toolkit-2.3.2-quantization-support.log",
+    "native_source": "native/whisper_rknpu2_llmc.cc",
+    "native_tuned_runner": "native/run_std30_tuned.sh"
+  }
+}

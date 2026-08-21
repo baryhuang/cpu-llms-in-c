@@ -1,0 +1,60 @@
+From: llmc RK3588 target
+Subject: [PATCH] rocket: serialize completion and reset IRQ paths on Linux 6.18
+
+Backport the two IRQ race fixes from the Rocket tuning series to the
+Linux 6.18 driver shape shipped by Armbian.  The upstream tuning patches
+were authored after the optional batched-submit change, so their original
+context does not apply to the earlier per-task IRQ handler even though the
+locking fix is identical.
+---
+ drivers/accel/rocket/rocket_job.c | 18 ++++++++++++------
+ 1 file changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/accel/rocket/rocket_job.c b/drivers/accel/rocket/rocket_job.c
+--- a/drivers/accel/rocket/rocket_job.c
++++ b/drivers/accel/rocket/rocket_job.c
+@@ -386,19 +386,22 @@ static void rocket_job_handle_irq(struct rocket_core *core)
+ static void rocket_job_handle_irq(struct rocket_core *core)
+ {
+ 	pm_runtime_mark_last_busy(core->dev);
+ 
+-	rocket_pc_writel(core, OPERATION_ENABLE, 0x0);
+-	rocket_pc_writel(core, INTERRUPT_CLEAR, 0x1ffff);
++	scoped_guard(mutex, &core->job_lock) {
++		/* Serialize this stop with rocket_job_hw_submit() enabling the next
++		 * task; otherwise the completion zero can stop a newly started task. */
++		rocket_pc_writel(core, OPERATION_ENABLE, 0x0);
++		rocket_pc_writel(core, INTERRUPT_CLEAR, 0x1ffff);
+ 
+-	scoped_guard(mutex, &core->job_lock)
+ 		if (core->in_flight_job) {
+ 			if (core->in_flight_job->next_task_idx < core->in_flight_job->task_count) {
+ 				rocket_job_hw_submit(core, core->in_flight_job);
+ 				return;
+ 			}
+ 
+ 			dma_fence_signal(core->in_flight_job->done_fence);
+ 			pm_runtime_put_autosuspend(core->dev);
+ 			core->in_flight_job = NULL;
+ 		}
++	}
+ }
+@@ -412,10 +415,13 @@ rocket_reset(struct rocket_core *core, struct drm_sched_job *bad)
+ 	drm_sched_stop(&core->sched, bad);
+ 
+ 	/*
+-	 * Remaining interrupts have been handled, but we might still have
+-	 * stuck jobs. Let's make sure the PM counters stay balanced by
+-	 * manually calling pm_runtime_put_noidle().
++	 * drm_sched_stop() does not wait for an already-running threaded IRQ.
++	 * Wait outside job_lock because the handler takes that lock itself.
+ 	 */
++	synchronize_irq(core->irq);
++
++	/* No handler is running now, but there may still be stuck jobs. Keep the
++	 * PM counters balanced by manually calling pm_runtime_put_noidle(). */
+ 	scoped_guard(mutex, &core->job_lock) {
+ 		if (core->in_flight_job)
+ 			pm_runtime_put_noidle(core->dev);
+-- 
+2.47.3

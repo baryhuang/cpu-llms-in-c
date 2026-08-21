@@ -26,6 +26,12 @@ class ReviewReportTest(unittest.TestCase):
                 / "models/whisper-large-v3-turbo/targets/a113x/results.json"
             ).read_text()
         )
+        cls.rk3588_results = json.loads(
+            (
+                REPOSITORY
+                / "models/whisper-large-v3-turbo/targets/rk3588/results.json"
+            ).read_text()
+        )
 
     def test_review_is_repository_level(self):
         self.assertIn("model × target engineering review", self.html)
@@ -40,6 +46,7 @@ class ReviewReportTest(unittest.TestCase):
             ("Qwen3.5-0.8B", "Amlogic A113X"),
             ("Whisper large-v3", "Jetson Orin Nano"),
             ("Whisper large-v3-turbo", "Jetson Orin Nano"),
+            ("Whisper large-v3-turbo", "Rockchip RK3588"),
             ("Whisper large-v3-turbo", "Amlogic A113X"),
             ("Whisper small.en", "Amlogic A113X"),
             ("Gemma 4 E2B", "generic two-vCPU x86-64"),
@@ -73,7 +80,7 @@ class ReviewReportTest(unittest.TestCase):
 
     def test_a113x_is_added_to_fixed_window_cross_device_table(self):
         expected = (
-            "Cross-device comparison — A113X added",
+            "Cross-device comparison — fresh RK3588 RKNPU2 rows appended",
             "1,272,397 ms",
             "1,300.079433 s",
             "47.674× real time",
@@ -85,6 +92,36 @@ class ReviewReportTest(unittest.TestCase):
         self.assertIn("before the new stem increment", self.html)
         self.assertIn("always pad the encoder to 30 seconds", self.html)
 
+    def test_fresh_rknpu2_rows_are_appended_without_removing_old_data(self):
+        run = self.rk3588_results["runs"]["rknpu2_fp16"]
+        baseline = run["baseline"]
+        llmc = run["llmc_median"]
+        expected_fresh = (
+            f'{baseline["encoder_ms"]:,.0f} ms',
+            f'{baseline["e2e_ms"] / 1000:.3f} s',
+            f'{llmc["encoder_ms"]:,.0f} ms',
+            f'{llmc["e2e_ms"] / 1000:.3f} s',
+            f'{llmc["avg_decoder_step_ms"]:.2f} ms',
+            "NPU · proprietary RKNPU2 LLMC · native C++ zero-copy",
+        )
+        for value in expected_fresh:
+            self.assertIn(value, self.html)
+
+        retained_values = (
+            "1,922 ms",
+            "7,623 ms",
+            "12,008 ms",
+            "48,671 ms",
+            "54 s",
+            "17,929 ms",
+            "12,413 ms",
+            "18,627 ms",
+            "13,318 ms",
+        )
+        for value in retained_values:
+            self.assertIn(value, self.html)
+        self.assertIn("no original row or value was removed or changed", self.html)
+
     def test_primary_a113x_records_are_linked(self):
         required_links = (
             "models/whisper-large-v3-turbo/targets/a113x/results.json",
@@ -94,6 +131,11 @@ class ReviewReportTest(unittest.TestCase):
             "models/whisper-large-v3-turbo/targets/a113x/benchmarks/device/std30-q4.log",
             "models/whisper-large-v3-turbo/targets/jetson-orin/results.json",
             "models/whisper-large-v3-turbo/targets/a113x/whisper_turbo_frontend.c",
+            "models/whisper-large-v3-turbo/targets/rk3588/results.json",
+            "models/whisper-large-v3-turbo/targets/rk3588/README.md",
+            "models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/baseline-python-copy-std30.log",
+            "models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/llmc-native-all-performance-std30.log",
+            "models/whisper-large-v3-turbo/targets/rk3588/native/whisper_rknpu2_llmc.cc",
         )
         for link in required_links:
             self.assertIn(f'href="{link}"', self.html)

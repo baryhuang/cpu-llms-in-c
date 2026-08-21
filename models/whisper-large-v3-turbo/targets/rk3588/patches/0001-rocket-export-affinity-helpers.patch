@@ -1,0 +1,54 @@
+From: llmc RK3588 target
+Subject: [PATCH] rocket: export affinity helpers used by ggml backend
+
+The current ggml-rocket dequant worker pool asks librocketnpu for the
+detected big-core count and pins each persistent worker through the
+library's existing affinity policy.  rocket-userspace implements the
+pinning helper, but neither exports its declaration nor implements the
+count accessor.  This makes the documented sibling-source and installed
+package builds fail.
+
+Keep detection in one place and expose the two scheduling-only helpers.
+They do not change numerical behavior.
+---
+ include/rocket_npu.h  | 9 +++++++++
+ src/rocket_affinity.c | 6 ++++++
+ 2 files changed, 15 insertions(+)
+
+diff --git a/include/rocket_npu.h b/include/rocket_npu.h
+--- a/include/rocket_npu.h
++++ b/include/rocket_npu.h
+@@ -83,6 +83,15 @@ int  rocket_open(void);
+  * with the default 0 (or never calling it) preserves the historical behaviour. */
+ void rocket_affinity_set_base(int base);
+ int  rocket_affinity_get_base(void);
++
++/* Return the number of performance-cluster CPUs selected by the same affinity
++ * policy used by the matmul workers. Zero means affinity pinning is disabled or
++ * the machine has no distinct performance cluster. */
++int  rocket_num_big_cores(void);
++
++/* Pin one worker through the library's detected/overridden big-core rotation.
++ * This is a scheduling hint only and does not alter any tensor values. */
++void rocket_pin_worker(int worker_idx);
+ 
+ /* ============================================================================
+  * SECTION — Buffer allocation, cache management & fence polling
+diff --git a/src/rocket_affinity.c b/src/rocket_affinity.c
+--- a/src/rocket_affinity.c
++++ b/src/rocket_affinity.c
+@@ -133,6 +133,12 @@ static void detect_once(void)
+     }
+ }
+ 
++int rocket_num_big_cores(void)
++{
++    pthread_once(&g_once, detect_once);
++    return g_n_big > 0 ? g_n_big : 0;
++}
++
+ /* ============================================================================
+  * SECTION — Worker pinning
+  * ==========================================================================*/
+-- 
+2.47.3

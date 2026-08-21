@@ -1,0 +1,39 @@
+/root/whisper-rknpu2/turbo-rknn2/deploy_onnx_no_transformers-rknn2.py:476: UserWarning: RKNN API version 2.3.2 (429f97ae6b@2025-04-09T09:09:27) is likely outdated; behavior may be unstable. Recommended minimum version is 2.4.1.
+  pipeline = StaticOnnxWhisper(
+wav: std30.wav
+audio_seconds: 27.27
+chunk_count: 1
+chunk_seconds: 30.00
+chunk_overlap_seconds: 0.00
+generated_tokens: 77
+encoder_ms: 12839.54
+avg_decoder_step_ms: 408.33
+inference_ms: 45774.08
+zero_copy_decoder: False
+encoder_tp_mode: None
+decoder_tp_mode: None
+text:
+concord returned to its place amidst the tents the english forwarded to the french baskets of flowers of which they had made a plentiful provision to greet the arrival of the young princess the french in return invited the english to a supper which was to be given the next day congratulations were poured in upon the princess everywhere during her journey you will be frank with me i always am
+	Command being timed: "venv/bin/python -u deploy_onnx_no_transformers-rknn2.py --model-dir . --wav std30.wav --encoder encoder_with_kv.rknn --decoder decoder_static_kv.rknn --language en --task transcribe --max-new-tokens 128 --no-stream --no-zero-copy-decoder"
+	User time (seconds): 22.16
+	System time (seconds): 9.97
+	Percent of CPU this job got: 45%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:10.22
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 4323460
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 221
+	Minor (reclaiming a frame) page faults: 1918136
+	Voluntary context switches: 3382
+	Involuntary context switches: 73141
+	Swaps: 0
+	File system inputs: 687688
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

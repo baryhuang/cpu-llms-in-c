@@ -1,0 +1,103 @@
+From: llmc RK3588 target
+Subject: [PATCH] expose RKNPU2 TP core controls and inference-only timing
+
+Applies to deploy_onnx_no_transformers-rknn2.py from
+happyme531/whisper-large-v3-turbo-RKNN2 commit
+791cf8c7152a3882fc3fb7d3fb8d6718dfbea889 (AGPL-3.0).
+
+--- a/deploy_onnx_no_transformers-rknn2.py
++++ b/deploy_onnx_no_transformers-rknn2.py
+@@ -136,11 +136,25 @@
+ 
+ 
+ class StaticOnnxWhisper:
+-    def __init__(self, model_dir: Path, encoder_path: Path, decoder_path: Path, zero_copy_decoder: bool = False):
++    def __init__(
++        self,
++        model_dir: Path,
++        encoder_path: Path,
++        decoder_path: Path,
++        zero_copy_decoder: bool = False,
++        encoder_provider_options=None,
++        decoder_provider_options=None,
++    ):
+         self.assets = WhisperAssets(model_dir)
+         self.extractor = WhisperFeatureExtractorLite(self.assets)
+-        self.encoder = ort.InferenceSession(str(encoder_path))#, providers=['CPUExecutionProvider'], provider_options={'tp_mode': 'all'})
+-        self.decoder = ort.InferenceSession(str(decoder_path)) #, providers=['CPUExecutionProvider'], provider_options={'tp_mode': 'all'})
++        encoder_kwargs = {}
++        decoder_kwargs = {}
++        if encoder_provider_options is not None:
++            encoder_kwargs['provider_options'] = encoder_provider_options
++        if decoder_provider_options is not None:
++            decoder_kwargs['provider_options'] = decoder_provider_options
++        self.encoder = ort.InferenceSession(str(encoder_path), **encoder_kwargs)
++        self.decoder = ort.InferenceSession(str(decoder_path), **decoder_kwargs)
+         self.zero_copy_decoder = bool(zero_copy_decoder)
+ 
+         decoder_inputs = {item.name: tuple(item.shape) for item in self.decoder.get_inputs()}
+@@ -416,6 +430,7 @@
+             'chunk_overlap_seconds': float(overlap_samples / self.assets.sample_rate),
+             'chunks': chunk_results,
+             'chunk_count': len(chunk_results),
++            'generated_tokens': sum(item['generated_tokens'] for item in chunk_results),
+             'encoder_ms': total_encoder_ms,
+             'avg_decoder_step_ms': (total_decoder_ms / total_decoder_steps) if total_decoder_steps else 0.0,
+             'text': merged_text.strip(),
+@@ -436,6 +451,10 @@
+     parser.add_argument('--chunk-seconds', type=float, default=30.0)
+     parser.add_argument('--chunk-overlap-seconds', type=float, default=0.0)
+     parser.add_argument('--no-stream', action='store_true')
++    parser.add_argument('--encoder-tp-mode', choices=['auto', 'all', '0', '1', '2', '0,1', '0,1,2'])
++    parser.add_argument('--decoder-tp-mode', choices=['auto', 'all', '0', '1', '2', '0,1', '0,1,2'])
++    parser.add_argument('--threads-per-core', type=int, default=1)
++    parser.add_argument('--disable-dup-context', action='store_true')
+     parser.add_argument(
+         '--zero-copy-decoder',
+         action=argparse.BooleanOptionalAction,
+@@ -445,12 +464,24 @@
+     )
+     args = parser.parse_args()
+ 
++    def provider_options(tp_mode):
++        if tp_mode is None:
++            return None
++        return ort.make_provider_options(
++            tp_mode=tp_mode,
++            threads_per_core=args.threads_per_core,
++            disable_dup_context=args.disable_dup_context,
++        )
++
+     pipeline = StaticOnnxWhisper(
+         model_dir=Path(args.model_dir),
+         encoder_path=Path(args.encoder),
+         decoder_path=Path(args.decoder),
+         zero_copy_decoder=args.zero_copy_decoder,
++        encoder_provider_options=provider_options(args.encoder_tp_mode),
++        decoder_provider_options=provider_options(args.decoder_tp_mode),
+     )
++    inference_start = time.perf_counter()
+     result = pipeline.transcribe(
+         wav_path=Path(args.wav),
+         language=args.language,
+@@ -462,15 +493,20 @@
+         chunk_overlap_seconds=args.chunk_overlap_seconds,
+         stream=not args.no_stream,
+     )
++    inference_ms = (time.perf_counter() - inference_start) * 1000.0
+ 
+     print(f"wav: {result['wav']}")
+     print(f"audio_seconds: {result['audio_seconds']:.2f}")
+     print(f"chunk_count: {result['chunk_count']}")
+     print(f"chunk_seconds: {result['chunk_seconds']:.2f}")
+     print(f"chunk_overlap_seconds: {result['chunk_overlap_seconds']:.2f}")
++    print(f"generated_tokens: {result['generated_tokens']}")
+     print(f"encoder_ms: {result['encoder_ms']:.2f}")
+     print(f"avg_decoder_step_ms: {result['avg_decoder_step_ms']:.2f}")
++    print(f"inference_ms: {inference_ms:.2f}")
+     print(f"zero_copy_decoder: {args.zero_copy_decoder}")
++    print(f"encoder_tp_mode: {args.encoder_tp_mode}")
++    print(f"decoder_tp_mode: {args.decoder_tp_mode}")
+     if args.no_stream:
+         print('text:')
+         print(result['text'])

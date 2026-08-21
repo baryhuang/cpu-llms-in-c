@@ -1,0 +1,17 @@
+model=encoder_with_kv.rknn api=2.3.2 (429f97ae6b@2025-04-09T09:09:27) driver=0.9.8
+inputs=1 outputs=3
+input[0] name=input_features type=float16 fmt=3 qnt=2 dims=[1,128,3000] elems=384000 size=768000 size_stride=768000 w_stride=0 h_stride=0
+output[0] name=encoder_hidden_states type=float16 fmt=3 qnt=2 dims=[1,1500,1280] elems=1920000 size=3840000 size_stride=3840000 w_stride=0 h_stride=0
+output[1] name=encoder_k_cache type=float16 fmt=3 qnt=2 dims=[1,4,20,1500,64] elems=7680000 size=15360000 size_stride=15360000 w_stride=0 h_stride=0
+output[2] name=encoder_v_cache type=float16 fmt=3 qnt=2 dims=[1,4,20,1500,64] elems=7680000 size=15360000 size_stride=15360000 w_stride=0 h_stride=0
+model=decoder_static_kv.rknn api=2.3.2 (429f97ae6b@2025-04-09T09:09:27) driver=0.9.8
+inputs=6 outputs=3
+input[0] name=input_ids type=int64 fmt=3 qnt=2 dims=[1,1] elems=1 size=8 size_stride=8 w_stride=0 h_stride=0
+input[1] name=encoder_k_cache type=float16 fmt=3 qnt=2 dims=[1,4,20,1500,64] elems=7680000 size=15360000 size_stride=15360000 w_stride=0 h_stride=0
+input[2] name=encoder_v_cache type=float16 fmt=3 qnt=2 dims=[1,4,20,1500,64] elems=7680000 size=15360000 size_stride=15360000 w_stride=0 h_stride=0
+input[3] name=self_k_cache type=float16 fmt=3 qnt=2 dims=[1,4,20,448,64] elems=2293760 size=4587520 size_stride=4587520 w_stride=0 h_stride=0
+input[4] name=self_v_cache type=float16 fmt=3 qnt=2 dims=[1,4,20,448,64] elems=2293760 size=4587520 size_stride=4587520 w_stride=0 h_stride=0
+input[5] name=cache_position type=int64 fmt=3 qnt=2 dims=[1] elems=1 size=8 size_stride=8 w_stride=0 h_stride=0
+output[0] name=logits type=float16 fmt=3 qnt=2 dims=[1,1,51866] elems=51866 size=103732 size_stride=103732 w_stride=0 h_stride=0
+output[1] name=present_key_cache type=float16 fmt=3 qnt=2 dims=[1,4,20,448,64] elems=2293760 size=4587520 size_stride=4587520 w_stride=0 h_stride=0
+output[2] name=present_value_cache type=float16 fmt=3 qnt=2 dims=[1,4,20,448,64] elems=2293760 size=4587520 size_stride=4587520 w_stride=0 h_stride=0

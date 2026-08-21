@@ -37,4 +37,5 @@ Quality gate: corpus WER non-regression plus per-file WER review.
 | Target | Status |
 |---|---|
 | [`targets/jetson-orin/`](targets/jetson-orin/README.md) | Certified 7.79 RTFx fp16 (+9.8% over upstream, transcripts byte-identical); 5 quant modes measured; i8 optimization in progress |
+| [`targets/rk3588/`](targets/rk3588/README.md) | Proprietary RKNPU2: Python-free C++17 LLMC completes std30 FP16 in 17.933 s excluding load (2.552× over host-copy baseline), encoder 8.725 s and decoder 111.56 ms/token; exact transcript match, std30-only scope. Earlier Rocket/GGML five-format evidence is retained separately. |
 | [`targets/a113x/`](targets/a113x/README.md) | C11/NEON CPU fallback: Q4 compact JFK in 236.934 s at 448.2 MiB RSS; double-NEON stem 1.57x faster with identical generated IDs/logits |

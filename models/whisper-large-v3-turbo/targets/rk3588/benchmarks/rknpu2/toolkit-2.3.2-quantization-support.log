@@ -1,0 +1,30 @@
+RKNN-Toolkit2 version: 2.3.2
+Target platform: rk3588
+Date: 2026-08-20
+
+The PDF labels are GGML formats.  The following calls were made against the
+official aarch64 CPython 3.12 wheel inside an isolated Linux container:
+
+  RKNN.config(target_platform="rk3588", quantized_dtype=LABEL)
+
+LABEL                       RESULT
+q8_0                        rejected: invalid quantized_dtype
+q5_0                        rejected: invalid quantized_dtype
+q4_K                        rejected: invalid quantized_dtype
+q4_0                        rejected: invalid quantized_dtype
+w8a8                        accepted (return code 0)
+asymmetric_quantized-8      accepted (return code 0; alias for the native INT8 path)
+w8a16                       rejected: not supported on rk3588
+w4a16                       rejected: not supported on rk3588
+w16a16i                     accepted (return code 0; integer FP16-equivalent path)
+w16a16i_dfp                 accepted (return code 0; integer FP16-equivalent path)
+
+Toolkit2 reported its accepted quantized_dtype vocabulary as:
+  w8a8, w8a16, w16a16i, w16a16i_dfp, w4a16
+
+The important distinction is that native w8a8 is not GGML q8_0: it quantizes
+activations as well as weights and requires a representative calibration
+dataset.  No numeric row may therefore be relabeled from q8_0 to w8a8.  The
+three PDF 4/5-bit modes have no native RK3588 graph-conversion counterpart in
+Toolkit2 2.3.2.  The toolkit's distinct w8a16 and w4a16 modes are both rejected
+for RK3588; neither can be used as a weight-only substitute.

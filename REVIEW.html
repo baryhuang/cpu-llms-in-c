@@ -66,7 +66,7 @@
     .panel { padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
     .verdict { border-left: 7px solid var(--accent); background: var(--accent-bg); }
     .verdict strong { display: block; margin-bottom: 6px; font-size: 19px; }
-    .metrics { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
     .metric { min-height: 118px; padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
     .metric span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .055em; text-transform: uppercase; }
     .metric b { display: block; margin-top: 9px; font-size: 24px; line-height: 1.08; }
@@ -140,9 +140,10 @@
   <header>
     <p class="eyebrow">Current repository review · 2026-08-20</p>
     <h1>Model-specialized inference, measured on the hardware it ships on.</h1>
-    <p class="lede">The current llm-in-c portfolio spans Apple M3 Pro, NVIDIA Jetson Orin and Amlogic A113X. Every headline below is tied to one checkpoint, target and execution path; unlike the previous report, this page is not a review of only the legacy Gemma artifact.</p>
+    <p class="lede">The current llm-in-c portfolio spans Apple M3 Pro, NVIDIA Jetson Orin, Rockchip RK3588 and Amlogic A113X. Every headline below is tied to one checkpoint, target and execution path; unlike the previous report, this page is not a review of only the legacy Gemma artifact.</p>
     <nav class="bar" aria-label="Review sections">
       <a href="#portfolio">Model × target matrix</a>
+      <a href="#rk3588">Whisper Turbo / RK3588</a>
       <a href="#a113x">Whisper Turbo / A113X</a>
       <a href="#cross-device">Cross-device comparison</a>
       <a href="#decisions">Optimization decisions</a>
@@ -153,7 +154,7 @@
 
   <section class="panel verdict">
     <strong>Current result: full native inference paths, with target-specific evidence.</strong>
-    The repository owns checkpoint import, packed images, tokenization, model execution and specialized kernels. Python is used for offline compilation and verification, not for target inference. Performance numbers across speech, text and video are intentionally reported in their native units rather than collapsed into one misleading score.
+    The repository owns checkpoint import, packed images, tokenization, model execution and specialized kernels. Shipping LLMC target runtimes are native; Python may be used by an explicitly labeled comparison baseline or by offline compilation and verification. Performance numbers across speech, text and video are intentionally reported in their native units rather than collapsed into one misleading score.
   </section>
 
   <section aria-labelledby="headline-title">
@@ -162,6 +163,7 @@
       <div class="metric"><span>Qwen3.8 / M3 Pro</span><b>11.95 tok/s</b><small>five-workload adaptive-MTP aggregate; 7.96 tok/s plain</small></div>
       <div class="metric"><span>MiniMax-H3 / M3 Pro</span><b>4.236×</b><small>480p N-to-N pipeline gain; final duration 2,194.437 s</small></div>
       <div class="metric"><span>Whisper Turbo / Orin</span><b>7.79 RTF×</b><small>FP16 single-file path; 9.8% over upstream</small></div>
+      <div class="metric"><span>Whisper Turbo / RK3588</span><b>17.933 s</b><small>proprietary RKNPU2, native C++ LLMC; 2.552× over host-copy baseline</small></div>
       <div class="metric"><span>Whisper Turbo / A113X</span><b>236.934 s</b><small>11 s JFK, Q4 compact, 448.2 MiB RSS, zero swap</small></div>
     </div>
   </section>
@@ -172,6 +174,7 @@
       <button type="button" data-filter="all" aria-pressed="true">All targets</button>
       <button type="button" data-filter="m3" aria-pressed="false">Apple M3 Pro</button>
       <button type="button" data-filter="orin" aria-pressed="false">Jetson Orin</button>
+      <button type="button" data-filter="rk3588" aria-pressed="false">RK3588</button>
       <button type="button" data-filter="a113x" aria-pressed="false">A113X</button>
       <button type="button" data-filter="legacy" aria-pressed="false">Legacy</button>
     </div>
@@ -211,6 +214,12 @@
             <td><a href="models/whisper-large-v3-turbo/targets/jetson-orin/results.json">results</a> · <a href="models/whisper-large-v3-turbo/targets/jetson-orin/README.md">target</a></td>
             <td><span class="status">certified</span></td>
           </tr>
+          <tr data-target="rk3588">
+            <td>Whisper large-v3-turbo</td><td>Rockchip RK3588</td><td>proprietary RKNPU2 + Python-free C++ LLMC zero-copy runtime</td>
+            <td>std30 FP16 17.933 s; encoder 8.725 s; decoder 111.56 ms/token</td>
+            <td><a href="models/whisper-large-v3-turbo/targets/rk3588/results.json">results</a> · <a href="models/whisper-large-v3-turbo/targets/rk3588/README.md">target</a></td>
+            <td><span class="status">measured</span></td>
+          </tr>
           <tr data-target="a113x">
             <td>Whisper large-v3-turbo</td><td>Amlogic A113X</td><td>C11 + grouped Q4 NEON + compact window + double-NEON stem</td>
             <td>236.934 s for 11 s audio; 448.2 MiB RSS; zero swap</td>
@@ -233,6 +242,63 @@
       </table>
     </div>
     <p class="note">“Measured” means the target path completed its recorded workload and resource checks. “Certified” additionally denotes the pinned multi-file Whisper quality suite. The Gemma artifact remains useful as history but is not a free-input runtime.</p>
+  </section>
+
+  <section id="rk3588" aria-labelledby="rk3588-title">
+    <h2 id="rk3588-title">Whisper large-v3-turbo on RK3588 NPU</h2>
+    <div class="panel verdict">
+      <strong>Fresh proprietary result: native RKNPU2 C++ zero-copy plus three-core/A76 scheduling.</strong>
+      The same pinned FP16 RKNPU2 graphs and <code>std30.wav</code> were used in both arms. Encoder time falls from 12.840 to 8.725 seconds, decoder step latency from 408.33 to 111.56 ms, and end-to-end time excluding model load from 45.774 to 17.933 seconds. Both arms emit the same 77-token transcript; no 32-file mode was run. The earlier Rocket measurements remain below as a separate, retained open-stack record.
+    </div>
+
+    <div class="metrics" style="margin-top:10px">
+      <div class="metric"><span>RKNPU2 end to end</span><b>17.933 s</b><small>median of 17.933 / 17.957 / 17.901 s</small></div>
+      <div class="metric"><span>RKNPU2 encoder</span><b>8.725 s</b><small>fixed 30-second window, FP16</small></div>
+      <div class="metric"><span>Decoder step</span><b>111.56 ms</b><small>408.33 ms baseline; 3.660× faster</small></div>
+      <div class="metric"><span>Native peak RSS</span><b>2,064.8 MiB</b><small>51.1% below the Python baseline</small></div>
+    </div>
+
+    <h3 style="margin-top:20px">Proprietary RKNPU2 result · std30 only</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Arm</th><th>Runtime</th><th class="num">Encoder / 30 s</th><th class="num">Decoder step</th><th class="num">End to end</th><th class="num">Peak RSS</th><th>Output gate</th></tr></thead>
+        <tbody>
+          <tr><td>Baseline</td><td>Python orchestration + proprietary RKNPU2, host-copy KV</td><td class="num">12.840 s</td><td class="num">408.33 ms</td><td class="num">45.774 s</td><td class="num">4,222.1 MiB</td><td>correct, 77 tokens</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>LLMC</strong></td><td><strong>native C++17 + proprietary RKNPU2, zero-copy KV</strong></td><td class="num"><strong>8.725 s</strong></td><td class="num"><strong>111.56 ms</strong></td><td class="num"><strong>17.933 s</strong></td><td class="num"><strong>2,064.8 MiB</strong></td><td>exact transcript match</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">LLMC imports the encoder's two 15.36 MB KV buffers into the decoder by DMA-BUF fd, binds both 4.59 MB self-KV buffers in place, synchronizes only CPU-visible tensors, selects all RK3588 NPU cores and pins the process to Cortex-A76 cores 4–7. Target inference has no Python dependency. The best profile is the median of three adjacent runs.</p>
+
+    <h3 style="margin-top:20px">Requested PDF quantization variants on RKNPU2</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Requested weights</th><th>Toolkit2 2.3.2 result</th><th>RKNPU2 measurement</th></tr></thead>
+        <tbody>
+          <tr><td>FP16</td><td>supported by the pinned precompiled graphs</td><td><strong>measured above</strong></td></tr>
+          <tr><td>q8_0</td><td>invalid <code>quantized_dtype</code>; native w8a8 is activation-quantized and not equivalent</td><td>unsupported exact format</td></tr>
+          <tr><td>q5_0</td><td>no native RK3588 5-bit conversion mode</td><td>unsupported exact format</td></tr>
+          <tr><td>q4_K</td><td>no native groupwise GGML q4_K conversion mode</td><td>unsupported exact format</td></tr>
+          <tr><td>q4_0</td><td>invalid <code>quantized_dtype</code>; distinct w4a16 is also unsupported on RK3588</td><td>unsupported exact format</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Unsupported formats are reported explicitly rather than relabeled. Native w8a8 requires a representative calibration set; no calibrated large-v3-turbo graph was fabricated for this one-file task.</p>
+
+    <h3 style="margin-top:20px">Retained open-stack Rocket measurements · PDF variants · std30 only</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Weights</th><th class="num">Baseline encoder</th><th class="num">LLMC encoder</th><th class="num">Encoder gain</th><th class="num">Baseline end to end</th><th class="num">LLMC end to end</th><th>Output gate</th></tr></thead>
+        <tbody>
+          <tr><td>FP16</td><td class="num">17.929 s</td><td class="num"><strong>12.413 s</strong></td><td class="num">30.8%</td><td class="num">26.047 s</td><td class="num"><strong>16.485 s</strong></td><td>normalized words identical</td></tr>
+          <tr><td>q8_0</td><td class="num">18.627 s</td><td class="num"><strong>13.318 s</strong></td><td class="num">28.5%</td><td class="num">24.899 s</td><td class="num"><strong>17.222 s</strong></td><td>normalized words identical</td></tr>
+          <tr><td>q5_0</td><td class="num">18.127 s</td><td class="num"><strong>13.521 s</strong></td><td class="num">25.4%</td><td class="num">23.264 s</td><td class="num"><strong>18.454 s</strong></td><td>normalized words identical</td></tr>
+          <tr><td>q4_K</td><td class="num">17.389 s</td><td class="num"><strong>13.699 s</strong></td><td class="num">21.2%</td><td class="num">21.521 s</td><td class="num"><strong>17.345 s</strong></td><td>same words; quotation punctuation differs</td></tr>
+          <tr><td>q4_0</td><td class="num">19.113 s</td><td class="num"><strong>13.886 s</strong></td><td class="num">27.4%</td><td class="num">24.895 s</td><td class="num"><strong>18.457 s</strong></td><td>normalized words identical</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">These original Rocket rows are retained unchanged. Baseline is the stock Linux 6.18.43 Rocket module at the device-tree 200 MHz clock and ondemand CPU governor. LLMC is the 600 MHz clock/PM/driver-fix path, five Rocket workers, A76 cores 4–7, performance governor and an armv8.2 dotprod/fp16 build. End-to-end is whisper.cpp total minus model load. These are one-run same-file measurements, not variance estimates or corpus WER, and are not substituted for the proprietary RKNPU2 result.</p>
   </section>
 
   <section id="a113x" aria-labelledby="a113x-title">
@@ -272,22 +338,34 @@
       </table>
     </div>
 
-    <h3 id="cross-device" style="margin-top:20px">Cross-device comparison — A113X added</h3>
-    <p class="note">Same Whisper large-v3-turbo model family. Encoder numbers use the fixed 30-second window; end-to-end numbers use the same 27.27-second <code>std30.wav</code> and exclude model loading. Quantization classes are aligned, but the packed formats and runtimes are target-specific.</p>
+    <h3 id="cross-device" style="margin-top:20px">Cross-device comparison — fresh RK3588 RKNPU2 rows appended</h3>
+    <p class="note">Same Whisper large-v3-turbo model family. Encoder numbers use the fixed 30-second window; end-to-end numbers use the same 27.27-second <code>std30.wav</code> and exclude model loading. The two fresh proprietary RKNPU2 rows are appended to the existing owner, Rocket and CPU records; no original row or value was removed or changed. Packed formats and runtimes remain target-specific.</p>
     <div class="table-wrap" style="margin-top:10px">
       <table>
         <thead><tr><th>Platform</th><th>Execution</th><th>Quantization</th><th class="num">Encoder / fixed 30 s</th><th class="num">std30 end to end</th><th>Recognition</th></tr></thead>
         <tbody>
           <tr><td>Jetson Orin Nano</td><td>GPU · llmc</td><td>q4_0 / w4a16-class</td><td class="num">594 ms</td><td class="num"><strong>1.50 s</strong></td><td>correct</td></tr>
           <tr><td>A311Y3</td><td>NPU · ADLA3</td><td>w4a16</td><td class="num">1,922 ms</td><td class="num">4.50 s</td><td>successful; owner table reports 5.03% WER</td></tr>
-          <tr><td>RK3588</td><td>NPU · RKNNPU2</td><td>i8</td><td class="num">7,623 ms</td><td class="num">—</td><td>failed: EOT at decoder step 2</td></tr>
-          <tr><td>RK3588</td><td>NPU · RKNNPU2</td><td>fp</td><td class="num">12,008 ms</td><td class="num">not recorded</td><td>correct, 60 decoder steps</td></tr>
+          <tr><td>RK3588</td><td>NPU · proprietary RKNPU2 baseline · Python host orchestration</td><td>FP16</td><td class="num">12,840 ms</td><td class="num">45.774 s</td><td>correct; 77 generated tokens</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · proprietary RKNPU2 LLMC · native C++ zero-copy</strong></td><td>FP16</td><td class="num"><strong>8,725 ms</strong></td><td class="num"><strong>17.933 s</strong></td><td>exact match to fresh baseline</td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>FP16</td><td class="num">17,929 ms</td><td class="num">26.047 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>FP16</td><td class="num"><strong>12,413 ms</strong></td><td class="num"><strong>16.485 s</strong></td><td>complete; normalized words identical</td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>q8_0</td><td class="num">18,627 ms</td><td class="num">24.899 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>q8_0</td><td class="num"><strong>13,318 ms</strong></td><td class="num"><strong>17.222 s</strong></td><td>complete; normalized words identical</td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>q5_0</td><td class="num">18,127 ms</td><td class="num">23.264 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>q5_0</td><td class="num"><strong>13,521 ms</strong></td><td class="num"><strong>18.454 s</strong></td><td>complete; normalized words identical</td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>q4_K</td><td class="num">17,389 ms</td><td class="num">21.521 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>q4_K</td><td class="num"><strong>13,699 ms</strong></td><td class="num"><strong>17.345 s</strong></td><td>complete; quotation punctuation differs</td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>q4_0</td><td class="num">19,113 ms</td><td class="num">24.895 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>q4_0</td><td class="num"><strong>13,886 ms</strong></td><td class="num"><strong>18.457 s</strong></td><td>complete; normalized words identical</td></tr>
+          <tr><td>RK3588</td><td>Legacy RKNNPU2 · owner table</td><td>i8</td><td class="num">7,623 ms</td><td class="num">—</td><td>failed: EOT at decoder step 2</td></tr>
+          <tr><td>RK3588</td><td>Legacy RKNNPU2 · owner table</td><td>fp</td><td class="num">12,008 ms</td><td class="num">not recorded</td><td>correct, 60 decoder steps</td></tr>
           <tr><td>RK3588</td><td>CPU · 8 cores</td><td>q5</td><td class="num">48,671 ms</td><td class="num">54 s</td><td>correct</td></tr>
           <tr style="background:var(--accent-bg)"><td><strong>Amlogic A113X</strong></td><td>CPU · 4× Cortex-A53 · C11/NEON</td><td>grouped Q4</td><td class="num"><strong>1,272,397 ms</strong></td><td class="num"><strong>1,300.079433 s</strong></td><td>word-identical to the F32 reference after normalization</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="note">The comparable A113X row is the measured fixed-30 quantization baseline, before the new stem increment. It is 662× slower than A311Y3 on the encoder and its std30 wall ratio is 47.674× real time. The current recommended A113X path is compact-window Q4: on 11-second JFK it measures 229.763245 s encoder and 236.933801 s end to end. That compact result is shown separately because the other runtimes above always pad the encoder to 30 seconds.</p>
+    <p class="note">The legacy RKNN values are retained as historical owner-supplied rows and are not merged with either the fresh proprietary RKNPU2 A/B or the existing five-mode Rocket battery. The comparable A113X row is the measured fixed-30 quantization baseline: 1,300.079433 s is 47.674× real time, before the new stem increment. The current recommended A113X path is compact-window Q4: on 11-second JFK it measures 229.763245 s encoder and 236.933801 s end to end. That compact result is shown separately because the other runtimes above always pad the encoder to 30 seconds.</p>
 
     <p><strong>Exact compact output:</strong></p>
     <blockquote>And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.</blockquote>
@@ -347,6 +425,11 @@ No model weights or generated images in git</pre>
       <li><a href="models/whisper-large-v3-turbo/targets/a113x/benchmarks/device/std30-q4.log">A113X fixed-30 std30 comparison record</a></li>
       <li><a href="models/whisper-large-v3-turbo/targets/jetson-orin/results.json">Jetson and reviewer-supplied cross-device record</a></li>
       <li><a href="models/whisper-large-v3-turbo/targets/a113x/whisper_turbo_frontend.c">A113X double-precision NEON stem implementation</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/results.json">RK3588 proprietary RKNPU2 machine-readable results</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/README.md">RK3588 proprietary RKNPU2 methodology and retained Rocket appendix</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/baseline-python-copy-std30.log">RK3588 proprietary RKNPU2 baseline record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/llmc-native-all-performance-std30.log">RK3588 native C++ LLMC median record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/native/whisper_rknpu2_llmc.cc">RK3588 Python-free native RKNPU2 implementation</a></li>
     </ul>
   </section>
 
