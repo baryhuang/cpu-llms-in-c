@@ -3,7 +3,7 @@
 set -eu
 
 REPOSITORY="baryhuang/llm-in-c"
-SERVER_RELEASE="moss-tts-nano-q8-a113x-kvcache-r1"
+SERVER_RELEASE="moss-tts-nano-q8-a113x-kvcache-r2"
 MODEL_RELEASE="moss-tts-nano-q8-a113x-audiocpp-v0.6.1"
 SERVER_ASSET="audiocpp-server-v0.6.1-linux-aarch64-a113x-kvcache-r1"
 MODEL_ASSET="moss-tts-nano-100m-q8_0.gguf"
