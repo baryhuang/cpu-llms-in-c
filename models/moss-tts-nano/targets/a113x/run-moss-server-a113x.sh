@@ -40,12 +40,12 @@ sha256_file() {
 }
 
 download() {
-    url=$1
-    destination=$2
+    download_url=$1
+    download_destination=$2
     if command -v curl >/dev/null 2>&1; then
-        curl -fL --retry 3 --retry-delay 2 --output "$destination" "$url"
+        curl -fL --retry 3 --retry-delay 2 --output "$download_destination" "$download_url"
     elif command -v wget >/dev/null 2>&1; then
-        wget -O "$destination" "$url"
+        wget -O "$download_destination" "$download_url"
     else
         printf 'error: curl or wget is required\n' >&2
         exit 1
@@ -53,33 +53,34 @@ download() {
 }
 
 ensure_asset() {
-    release=$1
-    asset=$2
-    destination=$3
-    expected_sha256=$4
-    stamp="${destination}.sha256-ok"
+    asset_release=$1
+    asset_name=$2
+    asset_destination=$3
+    asset_expected_sha256=$4
+    asset_stamp="${asset_destination}.sha256-ok"
 
-    if [ -f "$destination" ] && [ -f "$stamp" ] &&
-       [ "$(sed -n '1p' "$stamp")" = "$expected_sha256" ]; then
+    if [ -f "$asset_destination" ] && [ -f "$asset_stamp" ] &&
+       [ "$(sed -n '1p' "$asset_stamp")" = "$asset_expected_sha256" ]; then
         return
     fi
-    if [ -f "$destination" ] && [ "$(sha256_file "$destination")" = "$expected_sha256" ]; then
-        printf '%s\n' "$expected_sha256" > "$stamp"
+    if [ -f "$asset_destination" ] &&
+       [ "$(sha256_file "$asset_destination")" = "$asset_expected_sha256" ]; then
+        printf '%s\n' "$asset_expected_sha256" > "$asset_stamp"
         return
     fi
 
-    temporary="${destination}.part.$$"
-    rm -f -- "$temporary"
+    asset_temporary="${asset_destination}.part.$$"
+    rm -f -- "$asset_temporary"
     download \
-        "https://github.com/${REPOSITORY}/releases/download/${release}/${asset}" \
-        "$temporary"
-    if [ "$(sha256_file "$temporary")" != "$expected_sha256" ]; then
-        rm -f -- "$temporary"
-        printf 'error: SHA-256 mismatch for %s\n' "$asset" >&2
+        "https://github.com/${REPOSITORY}/releases/download/${asset_release}/${asset_name}" \
+        "$asset_temporary"
+    if [ "$(sha256_file "$asset_temporary")" != "$asset_expected_sha256" ]; then
+        rm -f -- "$asset_temporary"
+        printf 'error: SHA-256 mismatch for %s\n' "$asset_name" >&2
         exit 1
     fi
-    mv "$temporary" "$destination"
-    printf '%s\n' "$expected_sha256" > "$stamp"
+    mv "$asset_temporary" "$asset_destination"
+    printf '%s\n' "$asset_expected_sha256" > "$asset_stamp"
 }
 
 server_is_healthy() {
@@ -142,7 +143,7 @@ write_server_config() {
 }
 
 request_json() {
-    text=$1
+    request_text=$1
     max_tokens=${MOSS_MAX_TOKENS:-40}
     do_sample=${MOSS_DO_SAMPLE:-true}
     case "$max_tokens" in
@@ -159,7 +160,7 @@ request_json() {
             ;;
     esac
     jq -cn \
-        --arg input "$text" \
+        --arg input "$request_text" \
         --argjson max_tokens "$max_tokens" \
         --argjson do_sample "$do_sample" \
         '{model:"moss-nano", input:$input, max_tokens:$max_tokens, seed:1234, options:{do_sample:$do_sample}}'
