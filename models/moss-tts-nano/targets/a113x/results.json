@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-08-21",
+  "target": {
+    "board": "ThirdReality TRHub-V3",
+    "soc": "Amlogic A113X",
+    "cpu": "4x Arm Cortex-A53",
+    "memory_bytes": 2073034752,
+    "kernel": "6.6.120-current-meson64",
+    "cpu_features": ["fp", "asimd", "aes", "pmull", "sha1", "sha2", "crc32", "cpuid"]
+  },
+  "runtime": {
+    "project": "0xShug0/audio.cpp",
+    "commit": "26dcb5c4cf5aa016ae6285096a7b45f2671e5d17",
+    "model": "MOSS-TTS-Nano-100M",
+    "model_quantization": "Q8_0",
+    "model_sha256": "3b9c138ce4093514b6493b77abaf3e62f4d2ac58412616d2f7ee89cca28be388",
+    "backend": "ggml-cpu",
+    "threads": 4
+  },
+  "fixture": {
+    "text": "Ready.",
+    "sampling": "greedy",
+    "max_tokens": 20,
+    "reference": "private 10 second mono PCM16 48 kHz voice reference",
+    "output_duration_seconds": 0.64,
+    "output_sample_rate_hz": 48000,
+    "output_channels": 2,
+    "output_bytes": 122924,
+    "output_sha256": "5d09fd812e60f4be7eb6e64b50c5422f25006d317f5167ec184aec2d9c5b35fa"
+  },
+  "measurements": {
+    "baseline_full_prompt_each_frame": {
+      "process_wall_seconds": 125.73,
+      "session_wall_ms": 121611.0,
+      "realtime_factor": 190.017,
+      "max_rss_kib": 858236
+    },
+    "incremental_kv_cache_a113x_build": {
+      "process_wall_seconds": 72.75,
+      "session_wall_ms": 69519.7,
+      "realtime_factor": 108.625,
+      "max_rss_kib": 859460,
+      "binary_sha256": "e219d5e3efbacbb38cf6fc116be683ad44231f31dd810c4b2f5617feed2ecaee"
+    },
+    "persistent_server_warm": {
+      "request_wall_seconds": [9.82, 9.84],
+      "median_request_wall_seconds": 9.83,
+      "realtime_factor": 15.359,
+      "process_peak_rss_kib": 861584,
+      "process_idle_rss_kib_after_requests": 506712,
+      "process_swap_kib_after_requests": 0,
+      "server_binary_sha256": "17037774d2b9fdab5fac3093c50c7fd4d43d085394744c426946e53bcd0c80f0",
+      "identical_requests_produced_identical_wav": true
+    },
+    "speedup": {
+      "process_wall": 1.728,
+      "session_wall": 1.749,
+      "persistent_warm_vs_baseline_process_wall": 12.79,
+      "persistent_warm_vs_optimized_cold_process_wall": 7.401,
+      "rss_delta_kib": 1224
+    }
+  },
+  "correctness": {
+    "baseline_and_optimized_wav_byte_identical": true,
+    "linux_arm64_local_baseline_wav_sha256": "5d09fd812e60f4be7eb6e64b50c5422f25006d317f5167ec184aec2d9c5b35fa",
+    "linux_arm64_local_optimized_wav_sha256": "5d09fd812e60f4be7eb6e64b50c5422f25006d317f5167ec184aec2d9c5b35fa"
+  },
+  "build": {
+    "compiler": "GCC 12.2.0",
+    "isa": "armv8-a+crypto+crc",
+    "tune": "cortex-a53",
+    "lto": true,
+    "native_host_detection": false,
+    "unsupported_features_disabled": ["dotprod", "fp16-vector-arithmetic", "i8mm", "sve"]
+  },
+  "production": {
+    "mode": "persistent localhost HTTP server",
+    "reference_encoding_reused": true,
+    "decode_graph_reused": true,
+    "global_transformer_kv_cache_reset_per_request": true,
+    "openmp": {
+      "OMP_NUM_THREADS": 4,
+      "OMP_DYNAMIC": false,
+      "OMP_PROC_BIND": "close",
+      "OMP_PLACES": "cores",
+      "GOMP_CPU_AFFINITY": "0-3"
+    }
+  }
+}

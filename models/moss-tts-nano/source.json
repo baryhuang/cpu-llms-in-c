@@ -1,0 +1,20 @@
+{
+  "model": {
+    "name": "OpenMOSS-Team/MOSS-TTS-Nano-100M",
+    "family": "moss_tts_nano",
+    "weights": "moss-tts-nano-100m-q8_0.gguf",
+    "weights_revision": "7e9a59c8aee65253851b91b7b9b8e206544ef1a6",
+    "weights_sha256": "3b9c138ce4093514b6493b77abaf3e62f4d2ac58412616d2f7ee89cca28be388"
+  },
+  "runtime": {
+    "repository": "https://github.com/0xShug0/audio.cpp.git",
+    "release": "release-0.6.1",
+    "commit": "26dcb5c4cf5aa016ae6285096a7b45f2671e5d17"
+  },
+  "target": {
+    "soc": "Amlogic A113X",
+    "cpu": "4x Arm Cortex-A53",
+    "isa": "armv8-a+crypto+crc",
+    "unsupported": ["dotprod", "fp16-vector-arithmetic", "i8mm", "sve"]
+  }
+}

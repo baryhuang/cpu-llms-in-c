@@ -1,0 +1,932 @@
+diff --git a/include/engine/models/moss/moss_tts_nano/global_transformer.h b/include/engine/models/moss/moss_tts_nano/global_transformer.h
+index 8f4e3a7..06d3d73 100644
+--- a/include/engine/models/moss/moss_tts_nano/global_transformer.h
++++ b/include/engine/models/moss/moss_tts_nano/global_transformer.h
+@@ -28,14 +28,18 @@ public:
+ 
+ private:
+     struct Weights;
+-    struct Graph;
++    struct PrefillGraph;
++    struct StepGraph;
+     std::shared_ptr<const MossTTSNanoAssets> assets_;
+     core::ExecutionContext & execution_context_;
+     std::shared_ptr<Weights> weights_;
+     size_t prefill_graph_arena_bytes_ = 0;
++    size_t decode_graph_arena_bytes_ = 0;
+     int64_t decode_capacity_ = 0;
++    int64_t cached_rows_ = 0;
+     int64_t graph_builds_ = 0;
+-    std::unique_ptr<Graph> graph_;
++    std::unique_ptr<PrefillGraph> prefill_graph_;
++    std::unique_ptr<StepGraph> step_graph_;
+ };
+ 
+ }  // namespace engine::models::moss_tts_nano
+diff --git a/src/models/moss/moss_tts_nano/global_transformer.cpp b/src/models/moss/moss_tts_nano/global_transformer.cpp
+index e4ad533..d65d1c6 100644
+--- a/src/models/moss/moss_tts_nano/global_transformer.cpp
++++ b/src/models/moss/moss_tts_nano/global_transformer.cpp
+@@ -6,18 +6,23 @@
+ #include "engine/framework/modules/linear_module.h"
+ #include "engine/framework/modules/lookup_modules.h"
+ #include "engine/framework/modules/norm_modules.h"
++#include "engine/framework/modules/optimizations/fast_kv_modules.h"
+ #include "engine/framework/modules/positional_modules.h"
+ #include "engine/framework/modules/primitive_modules.h"
+ #include "engine/framework/modules/structural_modules.h"
+ #include "engine/framework/modules/weight_binding.h"
++#include "engine/framework/runtime/kv_cache.h"
+ 
+ #include <ggml-backend.h>
+ #include <ggml.h>
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <cstddef>
++#include <cstdint>
+ #include <memory>
+ #include <stdexcept>
++#include <string>
+ #include <utility>
+ #include <vector>
+ 
+@@ -25,6 +30,9 @@ namespace engine::models::moss_tts_nano {
+ namespace {
+ 
+ namespace modules = engine::modules;
++namespace runtime = engine::runtime;
++
++constexpr float kMaskedAttentionBias = -1.0e9F;
+ 
+ struct GgmlContextDeleter {
+     void operator()(ggml_context * ctx) const noexcept {
+@@ -45,13 +53,22 @@ struct TransformerLayerWeights {
+     modules::LinearWeights fc_out;
+ };
+ 
++struct TransformerLayerOutputs {
++    core::TensorValue output;
++    core::TensorValue key;
++    core::TensorValue value;
++};
++
+ core::TensorValue reshape_heads(
+     core::ModuleBuildContext & ctx,
+     const core::TensorValue & input,
+     int64_t heads,
+     int64_t dim) {
+     const auto contiguous = core::ensure_backend_addressable_layout(ctx, input);
+-    return core::reshape_tensor(ctx, contiguous, core::TensorShape::from_dims({input.shape.dims[0], input.shape.dims[1], heads, dim}));
++    return core::reshape_tensor(
++        ctx,
++        contiguous,
++        core::TensorShape::from_dims({input.shape.dims[0], input.shape.dims[1], heads, dim}));
+ }
+ 
+ core::TensorValue attention_from_heads(
+@@ -59,20 +76,44 @@ core::TensorValue attention_from_heads(
+     const core::TensorValue & q_heads,
+     const core::TensorValue & k_heads,
+     const core::TensorValue & v_heads,
+-    int64_t head_dim) {
++    int64_t head_dim,
++    const core::TensorValue * attention_mask) {
+     const modules::MatMulModule matmul;
+-    auto scores = matmul.build(ctx, q_heads, modules::TransposeModule({{0, 1, 3, 2}, k_heads.shape.rank}).build(ctx, k_heads));
+-    scores = core::wrap_tensor(
+-        ggml_scale(ctx.ggml, scores.tensor, 1.0F / std::sqrt(static_cast<float>(head_dim))),
+-        scores.shape,
+-        GGML_TYPE_F32);
+-    scores = core::wrap_tensor(ggml_diag_mask_inf(ctx.ggml, scores.tensor, 0), scores.shape, GGML_TYPE_F32);
+-    scores = core::ensure_backend_addressable_layout(ctx, scores);
+-    auto attn = core::wrap_tensor(ggml_soft_max(ctx.ggml, scores.tensor), scores.shape, GGML_TYPE_F32);
++    auto scores = matmul.build(
++        ctx,
++        q_heads,
++        modules::TransposeModule({{0, 1, 3, 2}, k_heads.shape.rank}).build(ctx, k_heads));
++    core::TensorValue attn;
++    if (attention_mask != nullptr) {
++        scores = core::ensure_backend_addressable_layout(ctx, scores);
++        attn = core::wrap_tensor(
++            ggml_soft_max_ext(
++                ctx.ggml,
++                scores.tensor,
++                attention_mask->tensor,
++                1.0F / std::sqrt(static_cast<float>(head_dim)),
++                0.0F),
++            scores.shape,
++            GGML_TYPE_F32);
++    } else {
++        scores = core::wrap_tensor(
++            ggml_scale(ctx.ggml, scores.tensor, 1.0F / std::sqrt(static_cast<float>(head_dim))),
++            scores.shape,
++            GGML_TYPE_F32);
++        scores = core::wrap_tensor(
++            ggml_diag_mask_inf(ctx.ggml, scores.tensor, 0),
++            scores.shape,
++            GGML_TYPE_F32);
++        scores = core::ensure_backend_addressable_layout(ctx, scores);
++        attn = core::wrap_tensor(
++            ggml_soft_max(ctx.ggml, scores.tensor),
++            scores.shape,
++            GGML_TYPE_F32);
++    }
+     return matmul.build(ctx, attn, v_heads);
+ }
+ 
+-core::TensorValue transformer_layer(
++TransformerLayerOutputs transformer_layer_prefill(
+     core::ModuleBuildContext & ctx,
+     const core::TensorValue & input,
+     const core::TensorValue & positions,
+@@ -96,10 +137,70 @@ core::TensorValue transformer_layer(
+     auto q_heads = modules::TransposeModule({{0, 2, 1, 3}, q.shape.rank}).build(ctx, q);
+     auto k_heads = modules::TransposeModule({{0, 2, 1, 3}, k.shape.rank}).build(ctx, k);
+     auto v_heads = modules::TransposeModule({{0, 2, 1, 3}, v.shape.rank}).build(ctx, v);
+-    auto context = attention_from_heads(ctx, q_heads, k_heads, v_heads, head_dim);
++    auto context = attention_from_heads(ctx, q_heads, k_heads, v_heads, head_dim, nullptr);
+     context = modules::TransposeModule({{0, 2, 1, 3}, context.shape.rank}).build(ctx, context);
+     context = core::ensure_backend_addressable_layout(ctx, context);
+-    context = core::reshape_tensor(ctx, context, core::TensorShape::from_dims({input.shape.dims[0], input.shape.dims[1], config.hidden_size}));
++    context = core::reshape_tensor(
++        ctx,
++        context,
++        core::TensorShape::from_dims({input.shape.dims[0], input.shape.dims[1], config.hidden_size}));
++    x = add.build(
++        ctx,
++        input,
++        modules::LinearModule({config.hidden_size, config.hidden_size, true})
++            .build(ctx, context, {weights.c_proj.weight, weights.c_proj.bias}));
++
++    auto ff = norm.build(ctx, x, {weights.ln2_weight, weights.ln2_bias});
++    ff = modules::LinearModule({config.hidden_size, config.intermediate_size, true})
++             .build(ctx, ff, {weights.fc_in.weight, weights.fc_in.bias});
++    ff = modules::GeluModule({modules::GeluApproximation::Tanh}).build(ctx, ff);
++    ff = modules::LinearModule({config.intermediate_size, config.hidden_size, true})
++             .build(ctx, ff, {weights.fc_out.weight, weights.fc_out.bias});
++    return {add.build(ctx, x, ff), k, v};
++}
++
++core::TensorValue transformer_layer_step(
++    core::ModuleBuildContext & ctx,
++    const core::TensorValue & input,
++    const core::TensorValue & positions,
++    const TransformerLayerWeights & weights,
++    const MossTTSNanoGlobalTransformerConfig & config,
++    const core::TensorValue & cache_key,
++    const core::TensorValue & cache_value,
++    const core::TensorValue & cache_slot,
++    const core::TensorValue & attention_mask) {
++    const int64_t head_dim = config.hidden_size / config.num_attention_heads;
++    const modules::AddModule add;
++    const modules::LayerNormModule norm({config.hidden_size, config.layer_norm_epsilon, true, true});
++
++    auto x = norm.build(ctx, input, {weights.ln1_weight, weights.ln1_bias});
++    auto qkv = modules::LinearModule({config.hidden_size, config.hidden_size * 3, true})
++                   .build(ctx, x, {weights.c_attn.weight, weights.c_attn.bias});
++    auto q = modules::SliceModule({2, 0, config.hidden_size}).build(ctx, qkv);
++    auto k = modules::SliceModule({2, config.hidden_size, config.hidden_size}).build(ctx, qkv);
++    auto v = modules::SliceModule({2, config.hidden_size * 2, config.hidden_size}).build(ctx, qkv);
++    q = modules::RoPEModule({head_dim, GGML_ROPE_TYPE_NORMAL, config.rope_base})
++            .build(ctx, reshape_heads(ctx, q, config.num_attention_heads, head_dim), positions);
++    k = modules::RoPEModule({head_dim, GGML_ROPE_TYPE_NORMAL, config.rope_base})
++            .build(ctx, reshape_heads(ctx, k, config.num_attention_heads, head_dim), positions);
++    v = reshape_heads(ctx, v, config.num_attention_heads, head_dim);
++
++    const modules::FastKVSetRowsModule set_rows({modules::FastKVSetRowsMode::BackendViewOptimized});
++    auto updated_key = set_rows.build(ctx, cache_key, k, cache_slot);
++    auto updated_value = set_rows.build(ctx, cache_value, v, cache_slot);
++    auto q_heads = modules::TransposeModule({{0, 2, 1, 3}, q.shape.rank}).build(ctx, q);
++    auto k_heads = modules::TransposeModule({{0, 2, 1, 3}, updated_key.shape.rank}).build(ctx, updated_key);
++    auto v_heads = modules::TransposeModule({{0, 2, 1, 3}, updated_value.shape.rank}).build(ctx, updated_value);
++    auto context = attention_from_heads(
++        ctx,
++        q_heads,
++        k_heads,
++        v_heads,
++        head_dim,
++        &attention_mask);
++    context = modules::TransposeModule({{0, 2, 1, 3}, context.shape.rank}).build(ctx, context);
++    context = core::ensure_backend_addressable_layout(ctx, context);
++    context = core::reshape_tensor(ctx, context, input.shape);
+     x = add.build(
+         ctx,
+         input,
+@@ -126,134 +227,439 @@ struct MossTTSNanoGlobalTransformerRuntime::Weights {
+     core::TensorValue final_norm_bias;
+ };
+ 
+-struct MossTTSNanoGlobalTransformerRuntime::Graph {
++struct MossTTSNanoGlobalTransformerRuntime::StepGraph {
++public:
++    StepGraph(
++        std::shared_ptr<const MossTTSNanoAssets> assets,
++        const MossTTSNanoGlobalTransformerRuntime::Weights & weights,
++        core::ExecutionContext & execution,
++        size_t graph_arena_bytes,
++        int64_t cache_rows)
++        : assets_(std::move(assets)),
++          backend_(execution.backend()),
++          backend_type_(execution.backend_type()),
++          compute_threads_(std::max(1, execution.config().threads)),
++          cache_rows_(cache_rows) {
++        if (assets_ == nullptr || backend_ == nullptr) {
++            throw std::runtime_error("MOSS global decode graph requires assets and backend");
++        }
++        if (cache_rows_ <= 0) {
++            throw std::runtime_error("MOSS global decode graph requires positive cache capacity");
++        }
++        ggml_init_params params{graph_arena_bytes, nullptr, true};
++        ctx_.reset(ggml_init(params));
++        if (ctx_ == nullptr) {
++            throw std::runtime_error("failed to initialize MOSS global decode graph context");
++        }
++
++        const auto & config = assets_->config.global_transformer;
++        const int64_t head_dim = config.hidden_size / config.num_attention_heads;
++        core::ModuleBuildContext ctx{ctx_.get(), "moss_tts_nano.global.decode", backend_type_};
++        auto text_id = core::make_tensor(ctx, GGML_TYPE_I32, core::TensorShape::from_dims({1}));
++        ggml_set_input(text_id.tensor);
++        text_id_ = text_id.tensor;
++        auto positions = core::make_tensor(ctx, GGML_TYPE_I32, core::TensorShape::from_dims({1}));
++        ggml_set_input(positions.tensor);
++        positions_ = positions.tensor;
++        auto cache_slot = core::make_tensor(ctx, GGML_TYPE_I32, core::TensorShape::from_dims({1}));
++        ggml_set_input(cache_slot.tensor);
++        cache_slot_ = cache_slot.tensor;
++        auto attention_mask = core::make_tensor(
++            ctx,
++            GGML_TYPE_F16,
++            core::TensorShape::from_dims({1, 1, 1, cache_rows_}));
++        ggml_set_input(attention_mask.tensor);
++        attention_mask_ = attention_mask.tensor;
++
++        auto hidden = modules::EmbeddingModule({config.vocab_size, config.hidden_size})
++                          .build(ctx, text_id, weights.text_embedding);
++        for (int64_t q = 0; q < assets_->config.n_vq; ++q) {
++            auto ids = core::make_tensor(ctx, GGML_TYPE_I32, core::TensorShape::from_dims({1}));
++            ggml_set_input(ids.tensor);
++            audio_ids_.push_back(ids.tensor);
++            auto embedding = modules::EmbeddingModule({
++                assets_->config.audio_codebook_sizes.at(static_cast<size_t>(q)),
++                config.hidden_size,
++            }).build(ctx, ids, weights.audio_embeddings.at(static_cast<size_t>(q)));
++            hidden = modules::AddModule().build(ctx, hidden, embedding);
++        }
++        hidden = core::reshape_tensor(
++            ctx,
++            hidden,
++            core::TensorShape::from_dims({1, 1, config.hidden_size}));
++
++        std::vector<core::TensorValue> cache_keys;
++        std::vector<core::TensorValue> cache_values;
++        cache_keys.reserve(weights.layers.size());
++        cache_values.reserve(weights.layers.size());
++        for (const auto & layer : weights.layers) {
++            auto key = core::make_tensor(
++                ctx,
++                GGML_TYPE_F32,
++                core::TensorShape::from_dims({1, cache_rows_, config.num_attention_heads, head_dim}));
++            auto value = core::make_tensor(
++                ctx,
++                GGML_TYPE_F32,
++                core::TensorShape::from_dims({1, cache_rows_, config.num_attention_heads, head_dim}));
++            cache_keys.push_back(key);
++            cache_values.push_back(value);
++            hidden = transformer_layer_step(
++                ctx,
++                hidden,
++                positions,
++                layer,
++                config,
++                key,
++                value,
++                cache_slot,
++                attention_mask);
++        }
++        hidden = modules::LayerNormModule({config.hidden_size, config.layer_norm_epsilon, true, true})
++                     .build(ctx, hidden, {weights.final_norm_weight, weights.final_norm_bias});
++        hidden = core::ensure_backend_addressable_layout(ctx, hidden);
++        hidden = core::reshape_tensor(
++            ctx,
++            hidden,
++            core::TensorShape::from_dims({1, config.hidden_size}));
++        hidden_ = hidden.tensor;
++        ggml_set_output(hidden_);
++        graph_ = ggml_new_graph_custom(ctx_.get(), 65536, false);
++        ggml_build_forward_expand(graph_, hidden_);
++
++        buffer_ = ggml_backend_alloc_ctx_tensors(ctx_.get(), backend_);
++        if (buffer_ == nullptr) {
++            throw std::runtime_error("failed to allocate MOSS global decode graph");
++        }
++        cache_ = runtime::TransformerKVCache(
++            cache_rows_,
++            config.num_attention_heads * head_dim,
++            std::move(cache_keys),
++            std::move(cache_values));
++        mask_host_.assign(
++            static_cast<size_t>(cache_rows_),
++            ggml_fp32_to_fp16(kMaskedAttentionBias));
++        reset();
++    }
++
++    ~StepGraph() {
++        if (graph_ != nullptr && backend_ != nullptr) {
++            core::release_backend_graph_resources(backend_, graph_);
++            graph_ = nullptr;
++        }
++        if (buffer_ != nullptr) {
++            ggml_backend_buffer_free(buffer_);
++            buffer_ = nullptr;
++        }
++    }
++
++    StepGraph(const StepGraph &) = delete;
++    StepGraph & operator=(const StepGraph &) = delete;
++
++    bool can_run(int64_t cache_rows, ggml_backend_t backend, int threads) const noexcept {
++        return cache_rows > 0 && cache_rows <= cache_rows_ && backend == backend_ &&
++               std::max(1, threads) == compute_threads_;
++    }
++
++    int64_t capacity() const noexcept {
++        return cache_rows_;
++    }
++
++    runtime::TransformerKVCache & cache() noexcept {
++        return cache_;
++    }
++
++    void reset() {
++        const auto & config = assets_->config.global_transformer;
++        const size_t elements = static_cast<size_t>(cache_rows_ * config.hidden_size);
++        const std::vector<float> zeros(elements, 0.0F);
++        for (int64_t layer = 0; layer < config.num_hidden_layers; ++layer) {
++            const size_t index = static_cast<size_t>(layer);
++            ggml_backend_tensor_set(
++                cache_.key_tensor(index).tensor,
++                zeros.data(),
++                0,
++                elements * sizeof(float));
++            ggml_backend_tensor_set(
++                cache_.value_tensor(index).tensor,
++                zeros.data(),
++                0,
++                elements * sizeof(float));
++        }
++        cache_.retain_prefix(0);
++    }
++
++    std::vector<float> run_row(
++        const std::vector<int32_t> & rows,
++        int64_t row_count,
++        int64_t row_width) {
++        if (row_count <= 0 || row_width != assets_->config.n_vq + 1 ||
++            static_cast<int64_t>(rows.size()) != row_count * row_width) {
++            throw std::runtime_error("MOSS global decode row shape is invalid");
++        }
++        if (cache_.valid_steps() >= cache_.cache_steps()) {
++            throw std::runtime_error("MOSS global decode exceeded KV cache capacity");
++        }
++        const size_t row_offset = static_cast<size_t>((row_count - 1) * row_width);
++        const int32_t text_id = rows[row_offset];
++        ggml_backend_tensor_set(text_id_, &text_id, 0, sizeof(text_id));
++        for (int64_t q = 0; q < assets_->config.n_vq; ++q) {
++            const int32_t audio_id = rows[row_offset + 1 + static_cast<size_t>(q)];
++            if (audio_id == assets_->config.audio_pad_token_id) {
++                throw std::runtime_error("MOSS global cached decode requires a complete generated audio row");
++            }
++            ggml_backend_tensor_set(
++                audio_ids_.at(static_cast<size_t>(q)),
++                &audio_id,
++                0,
++                sizeof(audio_id));
++        }
++        const int32_t position = static_cast<int32_t>(cache_.current_end());
++        const int32_t cache_slot = static_cast<int32_t>(cache_.valid_steps());
++        ggml_backend_tensor_set(positions_, &position, 0, sizeof(position));
++        ggml_backend_tensor_set(cache_slot_, &cache_slot, 0, sizeof(cache_slot));
++        for (int64_t index = 0; index < cache_rows_; ++index) {
++            mask_host_[static_cast<size_t>(index)] = ggml_fp32_to_fp16(
++                index <= cache_slot ? 0.0F : kMaskedAttentionBias);
++        }
++        ggml_backend_tensor_set(
++            attention_mask_,
++            mask_host_.data(),
++            0,
++            mask_host_.size() * sizeof(ggml_fp16_t));
++
++        core::set_backend_threads(backend_, compute_threads_);
++        const ggml_status status = core::compute_backend_graph(backend_, graph_);
++        ggml_backend_synchronize(backend_);
++        if (status != GGML_STATUS_SUCCESS) {
++            throw std::runtime_error("MOSS global decode graph compute failed");
++        }
++        std::vector<float> output(
++            static_cast<size_t>(assets_->config.global_transformer.hidden_size));
++        ggml_backend_tensor_get(
++            hidden_,
++            output.data(),
++            0,
++            output.size() * sizeof(float));
++        cache_.advance_after_direct_append(1);
++        return output;
++    }
++
++private:
++    std::shared_ptr<const MossTTSNanoAssets> assets_;
++    ggml_backend_t backend_ = nullptr;
++    core::BackendType backend_type_ = core::BackendType::Cpu;
++    int compute_threads_ = 1;
++    int64_t cache_rows_ = 0;
++    std::unique_ptr<ggml_context, GgmlContextDeleter> ctx_;
++    ggml_cgraph * graph_ = nullptr;
++    ggml_backend_buffer_t buffer_ = nullptr;
++    ggml_tensor * text_id_ = nullptr;
++    std::vector<ggml_tensor *> audio_ids_;
++    ggml_tensor * positions_ = nullptr;
++    ggml_tensor * cache_slot_ = nullptr;
++    ggml_tensor * attention_mask_ = nullptr;
++    ggml_tensor * hidden_ = nullptr;
++    runtime::TransformerKVCache cache_;
++    std::vector<ggml_fp16_t> mask_host_;
++};
++
++struct MossTTSNanoGlobalTransformerRuntime::PrefillGraph {
+ public:
+-    Graph(
++    PrefillGraph(
+         std::shared_ptr<const MossTTSNanoAssets> assets,
+         const MossTTSNanoGlobalTransformerRuntime::Weights & weights,
+         core::ExecutionContext & execution,
+         size_t graph_arena_bytes,
+         int64_t rows,
+-        int64_t row_width)
++        int64_t row_width,
++        MossTTSNanoGlobalTransformerRuntime::StepGraph & step_graph)
+         : assets_(std::move(assets)),
+           backend_(execution.backend()),
+           backend_type_(execution.backend_type()),
+           compute_threads_(std::max(1, execution.config().threads)),
+           rows_(rows),
+-          row_width_(row_width) {
++          row_width_(row_width),
++          step_graph_(step_graph) {
+         if (assets_ == nullptr || backend_ == nullptr) {
+-            throw std::runtime_error("MOSS global graph requires assets and backend");
++            throw std::runtime_error("MOSS global prefill graph requires assets and backend");
+         }
+-        if (rows_ <= 0 || row_width_ != assets_->config.n_vq + 1) {
+-            throw std::runtime_error("MOSS global graph shape is invalid");
++        if (rows_ <= 0 || row_width_ != assets_->config.n_vq + 1 || rows_ > step_graph_.capacity()) {
++            throw std::runtime_error("MOSS global prefill graph shape is invalid");
+         }
+         ggml_init_params params{graph_arena_bytes, nullptr, true};
+         ctx_.reset(ggml_init(params));
+         if (ctx_ == nullptr) {
+-            throw std::runtime_error("failed to initialize MOSS global graph context");
++            throw std::runtime_error("failed to initialize MOSS global prefill graph context");
+         }
+ 
+         const auto & config = assets_->config.global_transformer;
+-        core::ModuleBuildContext ctx{ctx_.get(), "moss_tts_nano.global", backend_type_};
++        const int64_t head_dim = config.hidden_size / config.num_attention_heads;
++        core::ModuleBuildContext ctx{ctx_.get(), "moss_tts_nano.global.prefill", backend_type_};
+         auto text_ids = core::make_tensor(ctx, GGML_TYPE_I32, core::TensorShape::from_dims({rows_}));
++        ggml_set_input(text_ids.tensor);
+         text_ids_ = text_ids.tensor;
+         auto positions = core::make_tensor(ctx, GGML_TYPE_I32, core::TensorShape::from_dims({rows_}));
++        ggml_set_input(positions.tensor);
+         positions_ = positions.tensor;
+         auto hidden = modules::EmbeddingModule({config.vocab_size, config.hidden_size})
+                           .build(ctx, text_ids, weights.text_embedding);
+         for (int64_t q = 0; q < assets_->config.n_vq; ++q) {
+             auto ids = core::make_tensor(ctx, GGML_TYPE_I32, core::TensorShape::from_dims({rows_}));
+-            auto mask = core::make_tensor(ctx, GGML_TYPE_F32, core::TensorShape::from_dims({rows_, config.hidden_size}));
++            ggml_set_input(ids.tensor);
++            auto mask = core::make_tensor(
++                ctx,
++                GGML_TYPE_F32,
++                core::TensorShape::from_dims({rows_, config.hidden_size}));
++            ggml_set_input(mask.tensor);
+             audio_ids_.push_back(ids.tensor);
+             audio_masks_.push_back(mask.tensor);
+-            auto emb = modules::EmbeddingModule({assets_->config.audio_codebook_sizes.at(static_cast<size_t>(q)), config.hidden_size})
+-                           .build(ctx, ids, weights.audio_embeddings.at(static_cast<size_t>(q)));
+-            hidden = modules::AddModule().build(ctx, hidden, modules::MulModule().build(ctx, emb, mask));
++            auto embedding = modules::EmbeddingModule({
++                assets_->config.audio_codebook_sizes.at(static_cast<size_t>(q)),
++                config.hidden_size,
++            }).build(ctx, ids, weights.audio_embeddings.at(static_cast<size_t>(q)));
++            hidden = modules::AddModule().build(
++                ctx,
++                hidden,
++                modules::MulModule().build(ctx, embedding, mask));
+         }
+-        hidden = core::reshape_tensor(ctx, hidden, core::TensorShape::from_dims({1, rows_, config.hidden_size}));
++        hidden = core::reshape_tensor(
++            ctx,
++            hidden,
++            core::TensorShape::from_dims({1, rows_, config.hidden_size}));
++        std::vector<core::TensorValue> layer_keys;
++        std::vector<core::TensorValue> layer_values;
++        layer_keys.reserve(weights.layers.size());
++        layer_values.reserve(weights.layers.size());
+         for (const auto & layer : weights.layers) {
+-            hidden = transformer_layer(ctx, hidden, positions, layer, config);
++            auto output = transformer_layer_prefill(ctx, hidden, positions, layer, config);
++            hidden = output.output;
++            layer_keys.push_back(output.key);
++            layer_values.push_back(output.value);
+         }
+         hidden = modules::LayerNormModule({config.hidden_size, config.layer_norm_epsilon, true, true})
+                      .build(ctx, hidden, {weights.final_norm_weight, weights.final_norm_bias});
+-        output_ = hidden.tensor;
+-        output_values_.resize(static_cast<size_t>(rows_ * config.hidden_size));
+-        ggml_set_output(output_);
++        hidden = core::ensure_backend_addressable_layout(ctx, hidden);
++        hidden_ = hidden.tensor;
++        ggml_set_output(hidden_);
++
+         graph_ = ggml_new_graph_custom(ctx_.get(), 65536, false);
+-        ggml_build_forward_expand(graph_, output_);
++        ggml_build_forward_expand(graph_, hidden_);
++        for (size_t layer = 0; layer < weights.layers.size(); ++layer) {
++            ggml_tensor * cache_key = step_graph_.cache().key_tensor(layer).tensor;
++            ggml_tensor * cache_value = step_graph_.cache().value_tensor(layer).tensor;
++            ggml_tensor * key_view = ggml_view_4d(
++                ctx_.get(),
++                cache_key,
++                head_dim,
++                config.num_attention_heads,
++                rows_,
++                1,
++                cache_key->nb[1],
++                cache_key->nb[2],
++                cache_key->nb[3],
++                0);
++            ggml_tensor * value_view = ggml_view_4d(
++                ctx_.get(),
++                cache_value,
++                head_dim,
++                config.num_attention_heads,
++                rows_,
++                1,
++                cache_value->nb[1],
++                cache_value->nb[2],
++                cache_value->nb[3],
++                0);
++            ggml_build_forward_expand(
++                graph_,
++                ggml_cpy(ctx_.get(), layer_keys[layer].tensor, key_view));
++            ggml_build_forward_expand(
++                graph_,
++                ggml_cpy(ctx_.get(), layer_values[layer].tensor, value_view));
++        }
+         gallocr_ = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_));
+-        if (gallocr_ == nullptr || !ggml_gallocr_alloc_graph(gallocr_, graph_)) {
+-            throw std::runtime_error("failed to allocate MOSS global graph");
++        if (gallocr_ == nullptr || !ggml_gallocr_reserve(gallocr_, graph_) ||
++            !ggml_gallocr_alloc_graph(gallocr_, graph_)) {
++            throw std::runtime_error("failed to allocate MOSS global prefill graph");
+         }
+     }
+ 
+-    ~Graph() {
+-        engine::core::release_backend_graph_resources(backend_, graph_);
++    ~PrefillGraph() {
++        if (graph_ != nullptr && backend_ != nullptr) {
++            core::release_backend_graph_resources(backend_, graph_);
++            graph_ = nullptr;
++        }
+         if (gallocr_ != nullptr) {
+             ggml_gallocr_free(gallocr_);
++            gallocr_ = nullptr;
+         }
+     }
+ 
+-    bool can_run(int64_t rows, int64_t row_width, ggml_backend_t backend, int threads) const {
+-        return rows > 0 && rows <= rows_ && row_width_ == row_width && backend_ == backend &&
+-               compute_threads_ == std::max(1, threads);
+-    }
++    PrefillGraph(const PrefillGraph &) = delete;
++    PrefillGraph & operator=(const PrefillGraph &) = delete;
+ 
+-    std::vector<float> run(const std::vector<int32_t> & rows, int64_t row_count) {
+-        if (row_count <= 0 || row_count > rows_) {
+-            throw std::runtime_error("MOSS global row count exceeds graph capacity");
+-        }
+-        if (static_cast<int64_t>(rows.size()) != row_count * row_width_) {
+-            throw std::runtime_error("MOSS global input row count mismatch");
++    std::vector<float> run(const std::vector<int32_t> & rows) {
++        if (static_cast<int64_t>(rows.size()) != rows_ * row_width_) {
++            throw std::runtime_error("MOSS global prefill input row count mismatch");
+         }
+-        std::vector<int32_t> text_ids(static_cast<size_t>(rows_), 0);
+-        std::vector<int32_t> positions(static_cast<size_t>(rows_), 0);
+-        std::vector<std::vector<int32_t>> audio_ids(static_cast<size_t>(assets_->config.n_vq), std::vector<int32_t>(static_cast<size_t>(rows_), 0));
++        const auto & config = assets_->config.global_transformer;
++        std::vector<int32_t> text_ids(static_cast<size_t>(rows_));
++        std::vector<int32_t> positions(static_cast<size_t>(rows_));
++        std::vector<std::vector<int32_t>> audio_ids(
++            static_cast<size_t>(assets_->config.n_vq),
++            std::vector<int32_t>(static_cast<size_t>(rows_), 0));
+         std::vector<std::vector<float>> audio_masks(
+             static_cast<size_t>(assets_->config.n_vq),
+-            std::vector<float>(static_cast<size_t>(rows_ * assets_->config.global_transformer.hidden_size), 0.0F));
++            std::vector<float>(static_cast<size_t>(rows_ * config.hidden_size), 0.0F));
+         for (int64_t row = 0; row < rows_; ++row) {
+             positions[static_cast<size_t>(row)] = static_cast<int32_t>(row);
+-            if (row >= row_count) {
+-                text_ids[static_cast<size_t>(row)] = static_cast<int32_t>(assets_->config.pad_token_id);
+-                continue;
+-            }
+             text_ids[static_cast<size_t>(row)] = rows[static_cast<size_t>(row * row_width_)];
+             for (int64_t q = 0; q < assets_->config.n_vq; ++q) {
+                 const int32_t token = rows[static_cast<size_t>(row * row_width_ + 1 + q)];
+                 audio_ids[static_cast<size_t>(q)][static_cast<size_t>(row)] =
+                     token == assets_->config.audio_pad_token_id ? 0 : token;
+                 if (token != assets_->config.audio_pad_token_id) {
+-                    const int64_t offset = row * assets_->config.global_transformer.hidden_size;
++                    const int64_t offset = row * config.hidden_size;
+                     std::fill_n(
+-                        audio_masks[static_cast<size_t>(q)].begin() + static_cast<std::ptrdiff_t>(offset),
+-                        static_cast<size_t>(assets_->config.global_transformer.hidden_size),
++                        audio_masks[static_cast<size_t>(q)].begin() +
++                            static_cast<std::ptrdiff_t>(offset),
++                        static_cast<size_t>(config.hidden_size),
+                         1.0F);
+                 }
+             }
+         }
+-        core::write_tensor_i32({text_ids_, core::TensorShape::from_dims({rows_}), GGML_TYPE_I32}, text_ids);
+-        core::write_tensor_i32({positions_, core::TensorShape::from_dims({rows_}), GGML_TYPE_I32}, positions);
++        core::write_tensor_i32(
++            {text_ids_, core::TensorShape::from_dims({rows_}), GGML_TYPE_I32},
++            text_ids);
++        core::write_tensor_i32(
++            {positions_, core::TensorShape::from_dims({rows_}), GGML_TYPE_I32},
++            positions);
+         for (int64_t q = 0; q < assets_->config.n_vq; ++q) {
+-            core::write_tensor_i32({audio_ids_[static_cast<size_t>(q)], core::TensorShape::from_dims({rows_}), GGML_TYPE_I32}, audio_ids[static_cast<size_t>(q)]);
++            core::write_tensor_i32(
++                {audio_ids_.at(static_cast<size_t>(q)),
++                 core::TensorShape::from_dims({rows_}),
++                 GGML_TYPE_I32},
++                audio_ids.at(static_cast<size_t>(q)));
+             core::write_tensor_f32(
+-                {audio_masks_[static_cast<size_t>(q)],
+-                 core::TensorShape::from_dims({rows_, assets_->config.global_transformer.hidden_size}),
++                {audio_masks_.at(static_cast<size_t>(q)),
++                 core::TensorShape::from_dims({rows_, config.hidden_size}),
+                  GGML_TYPE_F32},
+-                audio_masks[static_cast<size_t>(q)]);
++                audio_masks.at(static_cast<size_t>(q)));
+         }
++
+         core::set_backend_threads(backend_, compute_threads_);
+-        const ggml_status status = engine::core::compute_backend_graph(backend_, graph_);
++        const ggml_status status = core::compute_backend_graph(backend_, graph_);
+         ggml_backend_synchronize(backend_);
+         if (status != GGML_STATUS_SUCCESS) {
+-            throw std::runtime_error("MOSS global graph compute failed");
++            throw std::runtime_error("MOSS global prefill graph compute failed");
+         }
+-        core::read_tensor_f32_into(output_, output_values_);
+-        const int64_t hidden_size = assets_->config.global_transformer.hidden_size;
+-        std::vector<float> out(static_cast<size_t>(hidden_size));
+-        const auto offset = static_cast<size_t>((row_count - 1) * hidden_size);
+-        std::copy_n(output_values_.begin() + static_cast<std::ptrdiff_t>(offset), static_cast<size_t>(hidden_size), out.begin());
+-        return out;
++        std::vector<float> output(static_cast<size_t>(config.hidden_size));
++        ggml_backend_tensor_get(
++            hidden_,
++            output.data(),
++            static_cast<size_t>((rows_ - 1) * config.hidden_size) * sizeof(float),
++            output.size() * sizeof(float));
++        step_graph_.cache().advance_after_direct_append(rows_);
++        return output;
+     }
+ 
+ private:
+@@ -263,6 +669,7 @@ private:
+     int compute_threads_ = 1;
+     int64_t rows_ = 0;
+     int64_t row_width_ = 0;
++    MossTTSNanoGlobalTransformerRuntime::StepGraph & step_graph_;
+     std::unique_ptr<ggml_context, GgmlContextDeleter> ctx_;
+     ggml_cgraph * graph_ = nullptr;
+     ggml_gallocr_t gallocr_ = nullptr;
+@@ -270,8 +677,7 @@ private:
+     ggml_tensor * positions_ = nullptr;
+     std::vector<ggml_tensor *> audio_ids_;
+     std::vector<ggml_tensor *> audio_masks_;
+-    ggml_tensor * output_ = nullptr;
+-    std::vector<float> output_values_;
++    ggml_tensor * hidden_ = nullptr;
+ };
+ 
+ MossTTSNanoGlobalTransformerRuntime::MossTTSNanoGlobalTransformerRuntime(
+@@ -282,8 +688,9 @@ MossTTSNanoGlobalTransformerRuntime::MossTTSNanoGlobalTransformerRuntime(
+     size_t weight_context_bytes,
+     engine::assets::TensorStorageType weight_storage_type)
+     : assets_(std::move(assets)),
+-      execution_context_(execution_context) {
+-    (void) decode_graph_arena_bytes;
++      execution_context_(execution_context),
++      prefill_graph_arena_bytes_(prefill_graph_arena_bytes),
++      decode_graph_arena_bytes_(decode_graph_arena_bytes) {
+     if (assets_ == nullptr) {
+         throw std::runtime_error("MOSS global transformer requires assets");
+     }
+@@ -311,57 +718,138 @@ MossTTSNanoGlobalTransformerRuntime::MossTTSNanoGlobalTransformerRuntime(
+     weights_->layers.reserve(static_cast<size_t>(config.num_hidden_layers));
+     for (int64_t layer = 0; layer < config.num_hidden_layers; ++layer) {
+         const std::string prefix = "transformer.h." + std::to_string(layer);
+-        TransformerLayerWeights w;
+-        w.ln1_weight = weights_->store->load_f32_tensor(source, prefix + ".ln_1.weight", {config.hidden_size});
+-        w.ln1_bias = weights_->store->load_f32_tensor(source, prefix + ".ln_1.bias", {config.hidden_size});
+-        w.c_attn = modules::binding::linear_from_source(*weights_->store, source, prefix + ".attn.c_attn", weight_storage_type, config.hidden_size * 3, config.hidden_size, true);
+-        w.c_proj = modules::binding::linear_from_source(*weights_->store, source, prefix + ".attn.c_proj", weight_storage_type, config.hidden_size, config.hidden_size, true);
+-        w.ln2_weight = weights_->store->load_f32_tensor(source, prefix + ".ln_2.weight", {config.hidden_size});
+-        w.ln2_bias = weights_->store->load_f32_tensor(source, prefix + ".ln_2.bias", {config.hidden_size});
+-        w.fc_in = modules::binding::linear_from_source(*weights_->store, source, prefix + ".mlp.fc_in", weight_storage_type, config.intermediate_size, config.hidden_size, true);
+-        w.fc_out = modules::binding::linear_from_source(*weights_->store, source, prefix + ".mlp.fc_out", weight_storage_type, config.hidden_size, config.intermediate_size, true);
+-        weights_->layers.push_back(std::move(w));
++        TransformerLayerWeights weights;
++        weights.ln1_weight = weights_->store->load_f32_tensor(
++            source,
++            prefix + ".ln_1.weight",
++            {config.hidden_size});
++        weights.ln1_bias = weights_->store->load_f32_tensor(
++            source,
++            prefix + ".ln_1.bias",
++            {config.hidden_size});
++        weights.c_attn = modules::binding::linear_from_source(
++            *weights_->store,
++            source,
++            prefix + ".attn.c_attn",
++            weight_storage_type,
++            config.hidden_size * 3,
++            config.hidden_size,
++            true);
++        weights.c_proj = modules::binding::linear_from_source(
++            *weights_->store,
++            source,
++            prefix + ".attn.c_proj",
++            weight_storage_type,
++            config.hidden_size,
++            config.hidden_size,
++            true);
++        weights.ln2_weight = weights_->store->load_f32_tensor(
++            source,
++            prefix + ".ln_2.weight",
++            {config.hidden_size});
++        weights.ln2_bias = weights_->store->load_f32_tensor(
++            source,
++            prefix + ".ln_2.bias",
++            {config.hidden_size});
++        weights.fc_in = modules::binding::linear_from_source(
++            *weights_->store,
++            source,
++            prefix + ".mlp.fc_in",
++            weight_storage_type,
++            config.intermediate_size,
++            config.hidden_size,
++            true);
++        weights.fc_out = modules::binding::linear_from_source(
++            *weights_->store,
++            source,
++            prefix + ".mlp.fc_out",
++            weight_storage_type,
++            config.hidden_size,
++            config.intermediate_size,
++            true);
++        weights_->layers.push_back(std::move(weights));
+     }
+-    weights_->final_norm_weight = weights_->store->load_f32_tensor(source, "transformer.ln_f.weight", {config.hidden_size});
+-    weights_->final_norm_bias = weights_->store->load_f32_tensor(source, "transformer.ln_f.bias", {config.hidden_size});
++    weights_->final_norm_weight = weights_->store->load_f32_tensor(
++        source,
++        "transformer.ln_f.weight",
++        {config.hidden_size});
++    weights_->final_norm_bias = weights_->store->load_f32_tensor(
++        source,
++        "transformer.ln_f.bias",
++        {config.hidden_size});
+     weights_->store->upload();
+-    prefill_graph_arena_bytes_ = prefill_graph_arena_bytes;
+ }
+ 
+-MossTTSNanoGlobalTransformerRuntime::~MossTTSNanoGlobalTransformerRuntime() = default;
++MossTTSNanoGlobalTransformerRuntime::~MossTTSNanoGlobalTransformerRuntime() {
++    prefill_graph_.reset();
++    step_graph_.reset();
++}
+ 
+ void MossTTSNanoGlobalTransformerRuntime::prepare_prefill(int64_t prompt_rows) {
+     if (prompt_rows <= 0) {
+         throw std::runtime_error("MOSS global prefill requires positive prompt rows");
+     }
++    prefill_graph_.reset();
++    cached_rows_ = 0;
+ }
+ 
+ void MossTTSNanoGlobalTransformerRuntime::prepare_decode(int64_t cache_rows) {
+     if (cache_rows <= 0) {
+         throw std::runtime_error("MOSS global decode requires positive cache rows");
+     }
++    prefill_graph_.reset();
+     decode_capacity_ = cache_rows;
+-    graph_.reset();
++    cached_rows_ = 0;
++    if (step_graph_ == nullptr ||
++        !step_graph_->can_run(
++            cache_rows,
++            execution_context_.backend(),
++            execution_context_.config().threads)) {
++        step_graph_ = std::make_unique<StepGraph>(
++            assets_,
++            *weights_,
++            execution_context_,
++            decode_graph_arena_bytes_,
++            cache_rows);
++        ++graph_builds_;
++    } else {
++        step_graph_->reset();
++    }
+ }
+ 
+ std::vector<float> MossTTSNanoGlobalTransformerRuntime::last_hidden(
+     const std::vector<int32_t> & rows,
+     int64_t row_count,
+     int64_t row_width) {
+-    const int64_t graph_rows = std::max(row_count, decode_capacity_);
+-    if (graph_ == nullptr) {
+-        graph_ = std::make_unique<Graph>(
++    if (step_graph_ == nullptr) {
++        throw std::runtime_error("MOSS global transformer was not prepared for decode");
++    }
++    if (row_count <= 0 || row_count > decode_capacity_ ||
++        row_width != assets_->config.n_vq + 1 ||
++        static_cast<int64_t>(rows.size()) != row_count * row_width) {
++        throw std::runtime_error("MOSS global transformer input shape is invalid");
++    }
++    if (cached_rows_ == 0) {
++        prefill_graph_ = std::make_unique<PrefillGraph>(
+             assets_,
+             *weights_,
+             execution_context_,
+             prefill_graph_arena_bytes_,
+-            graph_rows,
+-            row_width);
++            row_count,
++            row_width,
++            *step_graph_);
+         ++graph_builds_;
+-    } else if (!graph_->can_run(row_count, row_width, execution_context_.backend(), execution_context_.config().threads)) {
+-        throw std::runtime_error("MOSS global graph was prepared with an incompatible shape");
++        auto output = prefill_graph_->run(rows);
++        cached_rows_ = row_count;
++        prefill_graph_.reset();
++        return output;
++    }
++    if (row_count != cached_rows_ + 1) {
++        throw std::runtime_error("MOSS global cached decode requires exactly one appended row");
+     }
+-    return graph_->run(rows, row_count);
++    auto output = step_graph_->run_row(rows, row_count, row_width);
++    cached_rows_ = row_count;
++    return output;
+ }
+ 
+ int64_t MossTTSNanoGlobalTransformerRuntime::graph_builds() const noexcept {
+diff --git a/src/models/moss/moss_tts_nano/session.cpp b/src/models/moss/moss_tts_nano/session.cpp
+index e724d5f..39fe7d1 100644
+--- a/src/models/moss/moss_tts_nano/session.cpp
++++ b/src/models/moss/moss_tts_nano/session.cpp
+@@ -256,10 +256,18 @@ void MossTTSNanoSession::prepare(const runtime::SessionPreparationRequest & requ
+     }
+     if (request.voice.has_value() && request.voice->speaker.has_value() &&
+         request.voice->speaker->audio.has_value()) {
+-        prepared_prompt_audio_ = *request.voice->speaker->audio;
+-        prepared_reference_codes_ = encode_reference_audio(
+-            *request.voice->speaker->audio,
+-            assets_->config.n_vq);
++        const auto & prompt_audio = *request.voice->speaker->audio;
++        const bool reference_is_cached =
++            prepared_prompt_audio_.has_value() &&
++            prepared_reference_codes_.has_value() &&
++            prepared_reference_codes_->codebooks == assets_->config.n_vq &&
++            audio_buffers_equal(*prepared_prompt_audio_, prompt_audio);
++        if (!reference_is_cached) {
++            prepared_prompt_audio_ = prompt_audio;
++            prepared_reference_codes_ = encode_reference_audio(
++                prompt_audio,
++                assets_->config.n_vq);
++        }
+     } else {
+         prepared_prompt_audio_.reset();
+         prepared_reference_codes_.reset();
