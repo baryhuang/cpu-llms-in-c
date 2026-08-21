@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Qwen3.8 server memory pressure
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

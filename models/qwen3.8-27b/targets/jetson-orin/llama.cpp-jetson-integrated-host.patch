@@ -1,0 +1,18 @@
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 49d97e0da..000000000 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -304,7 +304,11 @@ static ggml_cuda_device_info ggml_cuda_init() {
+ #if defined(GGML_USE_HIP)
+         info.devices[id].integrated = prop.integrated;
+ #else
+-        info.devices[id].integrated = false; // Temporarily disabled due to issues with corrupted output (e.g. #15034)
++        // CUDA integrated-host execution is disabled upstream while #15034 is
++        // unresolved.  Tegra has coherent CPU/GPU system memory, so expose the
++        // path only when the operator explicitly opts in and can validate it.
++        info.devices[id].integrated = prop.integrated &&
++            getenv("GGML_CUDA_ENABLE_INTEGRATED_HOST") != nullptr;
+ #endif
+         info.devices[id].nsm        = prop.multiProcessorCount;
+         info.devices[id].smpb       = prop.sharedMemPerBlock;
+         info.devices[id].warp_size  = prop.warpSize;

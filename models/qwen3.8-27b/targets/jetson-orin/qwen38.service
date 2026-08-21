@@ -1,0 +1,27 @@
+[Unit]
+Description=Qwen3.8-27B llama.cpp server
+Requires=qwen38-model-swap.service
+After=network.target qwen38-model-swap.service
+
+[Service]
+Type=simple
+Environment=GGML_CUDA_DISABLE_GRAPHS=1
+ExecStartPre=/usr/bin/jetson_clocks
+ExecStart=/root/qwen38-jetson/src/llama.cpp/build-orin-lean/bin/llama-server \
+    --model /root/qwen38-jetson/models/Qwen3.8-27B-UD-IQ1_S.gguf \
+    --alias qwen3.8-27b \
+    --host 127.0.0.1 --port 8199 \
+    --ctx-size 1024 --parallel 1 \
+    --threads 6 --batch-size 2 --ubatch-size 2 \
+    --n-gpu-layers all --flash-attn on --load-mode dio \
+    --ctx-checkpoints 1 --no-cache-prompt --slot-prompt-similarity 0 \
+    --reasoning on --metrics --no-webui
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=180
+TimeoutStopSec=30
+Nice=-5
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=Restart an idle Qwen3.8 server before recurrent-state swap thrashing
+After=qwen38.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/qwen38-memory-guard.sh

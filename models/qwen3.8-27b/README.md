@@ -31,13 +31,19 @@ The hybrid graph changes the optimization problem. DeltaNet layers carry recurre
 | MTP draft checkpoint | `mlx-community/Qwen3.8-27B-MTP-4bit` at `b643c01b6d3b094e325edb6ebd832e16c486c575`; SHA-256 `76663c101e7e8ea9c0ae17bcb95183cd7f733ce424c912b8b264a7b1c48e4cc6` |
 | Tokenizer | checkpoint `tokenizer.json`; SHA-256 `06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523` |
 | Numerical reference | `Qwen/Qwen3.8-27B` BF16 checkpoint |
+| Jetson mixed-IQ GGUF | `unsloth/Qwen3.8-27B-GGUF` `Qwen3.8-27B-UD-IQ1_S.gguf`; SHA-256 `3895b6eaa91e705c06ad1938d16c22e86f073c6a67df86260a1da79be3d1f887` |
 
-The deployed weights use affine four-bit groups of 64 values. MTP normalization tensors in the quantized checkpoint are already stored as direct multipliers and are copied without adding one during packing.
+The Apple target uses affine four-bit groups of 64 values. MTP normalization
+tensors in that checkpoint are already stored as direct multipliers and are
+copied without adding one during packing. The memory-constrained Jetson target
+instead uses a dynamically mixed IQ1 GGUF; its quality and performance results
+are not comparable to the affine-Q4 target.
 
 ## Targets
 
 | Target | Status | Entry point |
 |---|---|---|
 | Apple M3 Pro | End-to-end text generation, batched prefill, adaptive MTP and local serving measured on device | [target documentation](targets/apple-m3-pro/README.md) |
+| Jetson Orin Nano Super 8 GB | Resident full-CUDA service measured at 4.17 tok/s; final interactive trial rejected after 114–156 s Chatbox turns and near-1 GiB process swap | [target documentation](targets/jetson-orin/README.md) |
 
 Quality and performance are target-specific. The five-case ARC-Easy adaptation is a smoke test rather than an official benchmark score; its raw outputs are recorded in [`benchmarks/arc-easy-5/results-macos-m3-pro.json`](benchmarks/arc-easy-5/results-macos-m3-pro.json).

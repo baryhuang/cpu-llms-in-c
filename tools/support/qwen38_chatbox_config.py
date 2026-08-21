@@ -34,11 +34,13 @@ def load_config():
     return {}
 
 
-def configured(config, base_url):
+def configured(config, base_url, context_window, nickname):
     settings = config.get("settings", {})
     provider = settings.get("providers", {}).get(PROVIDER_ID, {})
     return (provider.get("apiHost") == base_url and
-            any(model.get("modelId") == MODEL_ID
+            any(model.get("modelId") == MODEL_ID and
+                model.get("contextWindow") == context_window and
+                model.get("nickname") == nickname
                 for model in provider.get("models") or []) and
             any(entry.get("id") == PROVIDER_ID
                 for entry in settings.get("customProviders") or []) and
@@ -49,8 +51,11 @@ def configured(config, base_url):
 def main():
     base_url = sys.argv[1] if len(sys.argv) > 1 else \
         "http://127.0.0.1:8199/v1"
+    context_window = int(sys.argv[2]) if len(sys.argv) > 2 else 4096
+    nickname = sys.argv[3] if len(sys.argv) > 3 else \
+        "Qwen3.8-27B (local C/Metal)"
 
-    if configured(load_config(), base_url):
+    if configured(load_config(), base_url, context_window, nickname):
         print("Chatbox already configured for the local model")
         return 0
 
@@ -74,8 +79,8 @@ def main():
     provider["apiKey"] = "local"
     provider["models"] = [{
         "modelId": MODEL_ID, "type": "chat", "apiStyle": "openai",
-        "nickname": "Qwen3.8-27B (local C/Metal)",
-        "contextWindow": 4096, "capabilities": [],
+        "nickname": nickname,
+        "contextWindow": context_window, "capabilities": [],
     }]
     settings["defaultChatModel"] = {"provider": PROVIDER_ID,
                                     "model": MODEL_ID}

@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-20",
+  "host": {
+    "hostname": "caremojo",
+    "machine": "NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super",
+    "usable_dram_bytes": 7849185280,
+    "cpu": "6-core Arm Cortex-A78AE",
+    "gpu": "Orin, compute capability 8.7, 4 TPC",
+    "l4t": "R39.2.1",
+    "operating_system": "Ubuntu 24.04.4 LTS",
+    "kernel": "6.8.12-1021-tegra",
+    "cuda": "13.2",
+    "power_mode": "MAXN_SUPER",
+    "pinned_clocks": {
+      "cpu_hz": 1728000000,
+      "gpu_hz": 1020000000,
+      "emc_hz": 3199000000
+    },
+    "model_storage": "ext4 on /dev/mmcblk0p1",
+    "measured_sequential_read_mib_per_second": 85.8
+  },
+  "artifact": {
+    "repository": "unsloth/Qwen3.8-27B-GGUF",
+    "filename": "Qwen3.8-27B-UD-IQ1_S.gguf",
+    "file_bytes": 6192222208,
+    "tensor_bytes": 6181226496,
+    "sha256": "3895b6eaa91e705c06ad1938d16c22e86f073c6a67df86260a1da79be3d1f887",
+    "reported_quantization": "IQ1_S, 1.5625 bpw",
+    "tensor_count": 851,
+    "tensor_type_counts": {
+      "F32": 353,
+      "IQ1_M": 25,
+      "IQ1_S": 264,
+      "IQ2_S": 9,
+      "IQ2_XS": 21,
+      "IQ2_XXS": 59,
+      "IQ3_S": 1,
+      "IQ3_XXS": 12,
+      "IQ4_XS": 2,
+      "Q2_K": 8,
+      "Q3_K": 1,
+      "Q8_0": 96
+    }
+  },
+  "runtime": {
+    "llama_cpp_commit": "749f688fcaa4c472ec034b08cb8a907c45cfaa02",
+    "build": "Release, GGML_CUDA, GGML_NATIVE, OpenMP, CUDA architecture 87",
+    "selected_service": {
+      "load_mode": "dio",
+      "gpu_layers": "all",
+      "flash_attention": true,
+      "cuda_graphs": false,
+      "context_tokens": 1024,
+      "parallel_slots": 1,
+      "batch": 2,
+      "microbatch": 2,
+      "context_checkpoints": 1,
+      "prompt_cache": false,
+      "slot_prompt_similarity": 0,
+      "reasoning_default": true,
+      "listen": "127.0.0.1:8199"
+    },
+    "swap_reserve_bytes": 4294967296,
+    "memory_guard": "restart only while idle when server VmSwap reaches 1048576 KiB"
+  },
+  "memory_probe": {
+    "probe_bytes": 268435456,
+    "device_read_gb_per_second": 30.175,
+    "managed_read_gb_per_second": 22.950,
+    "registered_mmap_read_gb_per_second": 24.607,
+    "checksums_match": true
+  },
+  "load_and_decode_experiments": [
+    {
+      "name": "cpu_mmap",
+      "gpu_layers": 0,
+      "load_mode": "mmap",
+      "generation_tokens": 4,
+      "tokens_per_second": 0.749818,
+      "maximum_rss_kib": 6207656,
+      "process_wall_seconds": 59.70
+    },
+    {
+      "name": "gpu_mmap",
+      "gpu_layers": 999,
+      "load_mode": "mmap",
+      "generation_tokens": 4,
+      "tokens_per_second": 3.291192,
+      "maximum_rss_kib": 11926484,
+      "process_wall_seconds": 98.09
+    },
+    {
+      "name": "gpu_direct_io",
+      "gpu_layers": 999,
+      "load_mode": "dio",
+      "generation_tokens": 4,
+      "tokens_per_second": 3.924656,
+      "maximum_rss_kib": 6744916,
+      "process_wall_seconds": 81.62
+    },
+    {
+      "name": "gpu_buffered_read",
+      "gpu_layers": 999,
+      "load_mode": "none",
+      "generation_tokens": 4,
+      "tokens_per_second": 3.900783,
+      "maximum_rss_kib": 6629984,
+      "process_wall_seconds": 82.03
+    },
+    {
+      "name": "gpu_managed_direct_io",
+      "gpu_layers": 999,
+      "load_mode": "dio",
+      "environment": "GGML_CUDA_ENABLE_UNIFIED_MEMORY=1",
+      "generation_tokens": 4,
+      "tokens_per_second": 3.851170,
+      "maximum_rss_kib": 6822524,
+      "process_wall_seconds": 79.25
+    },
+    {
+      "name": "cpu_gpu_32_layer_split",
+      "gpu_layers": 32,
+      "load_mode": "dio",
+      "generation_tokens": 4,
+      "tokens_per_second": 1.668917,
+      "maximum_rss_kib": 6735400,
+      "process_wall_seconds": 82.37
+    }
+  ],
+  "finalist_benchmark": {
+    "load_mode": "dio",
+    "gpu_layers": 999,
+    "generation_tokens": 16,
+    "repetitions": 3,
+    "flash_attention_off_tokens_per_second": 4.105423,
+    "flash_attention_on_tokens_per_second": 4.167919,
+    "maximum_rss_kib_for_combined_run": 6698416
+  },
+  "resident_api_smoke": [
+    {
+      "prompt": "What is 2+2? Reply with only the number.",
+      "content": "4",
+      "decode_tokens_per_second": 4.094594
+    },
+    {
+      "prompt": "What is the capital of France? Answer in one word.",
+      "content": "Paris",
+      "decode_tokens_per_second": 4.074773
+    }
+  ],
+  "chatbox_interactive_trial": {
+    "transport": "Chatbox OpenAI-compatible client over an SSH loopback tunnel",
+    "context_tokens": 1024,
+    "reasoning": "unrestricted",
+    "prompt_cache": false,
+    "completed_turns": [
+      {
+        "prompt_tokens": 164,
+        "prompt_milliseconds": 21781.36,
+        "prompt_tokens_per_second": 7.53,
+        "generation_tokens": 377,
+        "generation_milliseconds": 92629.20,
+        "generation_tokens_per_second": 4.06,
+        "total_milliseconds": 114410.56
+      },
+      {
+        "prompt_tokens": 202,
+        "prompt_milliseconds": 28218.90,
+        "prompt_tokens_per_second": 7.16,
+        "generation_tokens": 525,
+        "generation_milliseconds": 128256.08,
+        "generation_tokens_per_second": 4.09,
+        "total_milliseconds": 156474.98
+      }
+    ],
+    "later_history_prefill": {
+      "prompt_tokens_observed": 310,
+      "elapsed_milliseconds": 41710,
+      "tokens_per_second": 7.43
+    },
+    "late_session_memory_snapshot": {
+      "server_rss_kib": 6814568,
+      "server_swap_kib": 1012092,
+      "system_available_bytes": 272711680,
+      "system_swap_used_bytes": 1445265408
+    },
+    "apple_m3_pro_reference": {
+      "note": "separate five-workload aggregate, not a same-prompt comparison",
+      "plain_tokens_per_second": 7.96,
+      "adaptive_mtp_tokens_per_second": 11.95
+    },
+    "disposition": "Fits and runs fully offloaded, but is not recommended for interactive chat on the 8 GB Jetson. Use a smaller Q4-class model on this target or run Qwen3.8-27B on the 36 GB M3."
+  },
+  "rejected_experiments": [
+    {
+      "name": "registered/pinned host zero-copy weights",
+      "result": "failed during context creation with Jetson NvMap error 12 after the 6.2 GB host allocation"
+    },
+    {
+      "name": "managed CUDA weights",
+      "result": "worked but was 1.9 percent slower than the short direct-allocation probe and used more RSS"
+    },
+    {
+      "name": "partial CPU/GPU offload",
+      "result": "32 layers on GPU reached only 1.67 tok/s versus 3.92 tok/s with all layers on GPU"
+    },
+    {
+      "name": "mmap plus full GPU offload",
+      "result": "worked but faulted the source while copying, producing an 11.4 GiB RSS peak and a 98 second startup"
+    },
+    {
+      "name": "zero recurrent context checkpoints",
+      "result": "bounded memory but corrupted DeltaNet execution; the 2+2 smoke reasoned as 4+2=6"
+    }
+  ],
+  "quality_note": "UD-IQ1_S is an extreme capacity quantization. Thinking mode passed the two basic smoke checks; no-thinking mode produced an immediate EOS in one probe. This record does not claim an official quality benchmark score."
+}

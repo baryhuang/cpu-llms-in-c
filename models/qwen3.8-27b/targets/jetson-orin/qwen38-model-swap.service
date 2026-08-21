@@ -1,0 +1,13 @@
+[Unit]
+Description=Cold-page swap reserve for Qwen3.8-27B
+ConditionPathExists=/var/lib/qwen38-jetson.swap
+Before=qwen38.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-/usr/sbin/swapon --priority 10 /var/lib/qwen38-jetson.swap
+ExecStop=-/usr/sbin/swapoff /var/lib/qwen38-jetson.swap
+
+[Install]
+WantedBy=multi-user.target
