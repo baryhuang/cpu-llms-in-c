@@ -31,9 +31,12 @@ enum {
     KIND_U8 = 3,
     KIND_Q4 = 4,
     KIND_Q8 = 5,
+    KIND_Q4_OUTPUT_BLOCKED = 6,
+    KIND_Q8_OUTPUT_BLOCKED = 7,
     GROUP = 128,
     Q4_RECORD = 66,
     Q8_RECORD = 130,
+    A113X_OUTPUT_BLOCK = 4,
     MAX_ANSWERS = 64,
     MAX_TOKENS = 4096,
     MAX_GENERATE = 256
@@ -242,7 +245,7 @@ static int map_image(const char *path, struct mapped_image *image)
     }
     image->header = (const struct image_header *)image->base;
     if (memcmp(image->header->magic, "QW35TSK1", 8) != 0 ||
-        (image->header->version != 1U && image->header->version != 2U) ||
+        (image->header->version < 1U || image->header->version > 3U) ||
         image->header->group_size != GROUP || image->header->file_bytes != image->bytes ||
         image->header->hidden != HIDDEN || image->header->layer_count != LAYERS ||
         image->header->full_interval != FULL_INTERVAL) {
@@ -254,6 +257,18 @@ static int map_image(const char *path, struct mapped_image *image)
         if (entry->offset > image->bytes || entry->byte_count > image->bytes - entry->offset ||
             memchr(entry->name, '\0', sizeof(entry->name)) == NULL) {
             return -1;
+        }
+        if (entry->kind == KIND_Q4_OUTPUT_BLOCKED ||
+            entry->kind == KIND_Q8_OUTPUT_BLOCKED) {
+            const uint64_t record_bytes =
+                entry->kind == KIND_Q4_OUTPUT_BLOCKED ? Q4_RECORD : Q8_RECORD;
+            if (entry->rank != 2U || entry->shape[1] % GROUP != 0U ||
+                entry->reserved != A113X_OUTPUT_BLOCK ||
+                entry->shape[0] % A113X_OUTPUT_BLOCK != 0U ||
+                entry->byte_count != (uint64_t)entry->shape[0] *
+                    (entry->shape[1] / GROUP) * record_bytes) {
+                return -1;
+            }
         }
     }
     return 0;
@@ -268,12 +283,67 @@ static int map_image(const char *path, struct mapped_image *image)
 #include QWEN35_TARGET_KERNELS
 #endif
 
+static float qwen35_q4_group_sum(const uint8_t *packed, const float *values)
+{
+#ifdef QWEN35_HAVE_TARGET_GROUP_DOT
+    return qwen35_q4_group_dot(packed, values);
+#else
+    float sum = 0.0f;
+    for (uint32_t index = 0; index < GROUP / 2; ++index) {
+        const uint8_t byte = packed[index];
+        int low = byte & 0x0F;
+        int high = byte >> 4;
+        low = low >= 8 ? low - 16 : low;
+        high = high >= 8 ? high - 16 : high;
+        sum += values[index * 2] * (float)low;
+        sum += values[index * 2 + 1] * (float)high;
+    }
+    return sum;
+#endif
+}
+
+static float qwen35_q8_group_sum(const int8_t *weights, const float *values)
+{
+#ifdef QWEN35_HAVE_TARGET_GROUP_DOT
+    return qwen35_q8_group_dot(weights, values);
+#else
+    float sum = 0.0f;
+    for (uint32_t index = 0; index < GROUP; ++index) {
+        sum += values[index] * (float)weights[index];
+    }
+    return sum;
+#endif
+}
+
 static void q4_gemv(const struct mapped_image *image, const struct descriptor *matrix,
                     const float *input, float *output)
 {
     const uint8_t *data = entry_data(image, matrix);
     const uint32_t rows = matrix->shape[0];
     const uint32_t groups = matrix->shape[1] / GROUP;
+    if (matrix->kind == KIND_Q4_OUTPUT_BLOCKED) {
+        const uint32_t blocks = rows / A113X_OUTPUT_BLOCK;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (uint32_t block = 0; block < blocks; ++block) {
+            float sums[A113X_OUTPUT_BLOCK] = {0.0f, 0.0f, 0.0f, 0.0f};
+            const uint8_t *record = data +
+                (uint64_t)block * groups * A113X_OUTPUT_BLOCK * Q4_RECORD;
+            for (uint32_t group = 0; group < groups; ++group) {
+                const float *values = input + (uint64_t)group * GROUP;
+                for (uint32_t lane = 0; lane < A113X_OUTPUT_BLOCK; ++lane) {
+                    sums[lane] += bf16_to_float(record) *
+                        qwen35_q4_group_sum(record + 2, values);
+                    record += Q4_RECORD;
+                }
+            }
+            for (uint32_t lane = 0; lane < A113X_OUTPUT_BLOCK; ++lane) {
+                output[block * A113X_OUTPUT_BLOCK + lane] = sums[lane];
+            }
+        }
+        return;
+    }
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
@@ -284,21 +354,7 @@ static void q4_gemv(const struct mapped_image *image, const struct descriptor *m
             const float scale = bf16_to_float(record);
             const uint8_t *packed = record + 2;
             const float *values = input + (uint64_t)group * GROUP;
-#ifdef QWEN35_HAVE_TARGET_GROUP_DOT
-            const float group_sum = qwen35_q4_group_dot(packed, values);
-#else
-            float group_sum = 0.0f;
-            for (uint32_t index = 0; index < GROUP / 2; ++index) {
-                const uint8_t byte = packed[index];
-                int low = byte & 0x0F;
-                int high = byte >> 4;
-                low = low >= 8 ? low - 16 : low;
-                high = high >= 8 ? high - 16 : high;
-                group_sum += values[index * 2] * (float)low;
-                group_sum += values[index * 2 + 1] * (float)high;
-            }
-#endif
-            sum += group_sum * scale;
+            sum += qwen35_q4_group_sum(packed, values) * scale;
             record += Q4_RECORD;
         }
         output[row] = sum;
@@ -311,6 +367,29 @@ static void q8_gemv(const struct mapped_image *image, const struct descriptor *m
     const uint8_t *data = entry_data(image, matrix);
     const uint32_t rows = matrix->shape[0];
     const uint32_t groups = matrix->shape[1] / GROUP;
+    if (matrix->kind == KIND_Q8_OUTPUT_BLOCKED) {
+        const uint32_t blocks = rows / A113X_OUTPUT_BLOCK;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (uint32_t block = 0; block < blocks; ++block) {
+            float sums[A113X_OUTPUT_BLOCK] = {0.0f, 0.0f, 0.0f, 0.0f};
+            const uint8_t *record = data +
+                (uint64_t)block * groups * A113X_OUTPUT_BLOCK * Q8_RECORD;
+            for (uint32_t group = 0; group < groups; ++group) {
+                const float *values = input + (uint64_t)group * GROUP;
+                for (uint32_t lane = 0; lane < A113X_OUTPUT_BLOCK; ++lane) {
+                    sums[lane] += bf16_to_float(record) *
+                        qwen35_q8_group_sum((const int8_t *)(record + 2), values);
+                    record += Q8_RECORD;
+                }
+            }
+            for (uint32_t lane = 0; lane < A113X_OUTPUT_BLOCK; ++lane) {
+                output[block * A113X_OUTPUT_BLOCK + lane] = sums[lane];
+            }
+        }
+        return;
+    }
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
@@ -321,15 +400,7 @@ static void q8_gemv(const struct mapped_image *image, const struct descriptor *m
             const float scale = bf16_to_float(record);
             const int8_t *values8 = (const int8_t *)(record + 2);
             const float *values = input + (uint64_t)group * GROUP;
-#ifdef QWEN35_HAVE_TARGET_GROUP_DOT
-            const float group_sum = qwen35_q8_group_dot(values8, values);
-#else
-            float group_sum = 0.0f;
-            for (uint32_t index = 0; index < GROUP; ++index) {
-                group_sum += values[index] * (float)values8[index];
-            }
-#endif
-            sum += group_sum * scale;
+            sum += qwen35_q8_group_sum(values8, values) * scale;
             record += Q8_RECORD;
         }
         output[row] = sum;
@@ -356,9 +427,13 @@ static void dequantize_q4_row(const struct mapped_image *image, const struct des
                               uint32_t row, float *output)
 {
     const uint32_t groups = matrix->shape[1] / GROUP;
-    const uint8_t *record = (const uint8_t *)entry_data(image, matrix) +
-                            (uint64_t)row * groups * Q4_RECORD;
+    const uint8_t *data = entry_data(image, matrix);
     for (uint32_t group = 0; group < groups; ++group) {
+        const uint64_t record_index = matrix->kind == KIND_Q4_OUTPUT_BLOCKED
+            ? (((uint64_t)row / A113X_OUTPUT_BLOCK * groups + group) *
+               A113X_OUTPUT_BLOCK + row % A113X_OUTPUT_BLOCK)
+            : (uint64_t)row * groups + group;
+        const uint8_t *record = data + record_index * Q4_RECORD;
         const float scale = bf16_to_float(record);
         const uint8_t *packed = record + 2;
         float *values = output + (uint64_t)group * GROUP;
@@ -371,7 +446,6 @@ static void dequantize_q4_row(const struct mapped_image *image, const struct des
             values[index * 2] = (float)low * scale;
             values[index * 2 + 1] = (float)high * scale;
         }
-        record += Q4_RECORD;
     }
 }
 
@@ -440,7 +514,9 @@ static int resolve_model(const char *path, struct model *model)
     }
     model->embed = find_entry(&model->image, "embed_tokens.weight");
     model->final_norm = find_entry(&model->image, "norm.weight");
-    if (model->embed == NULL || model->embed->kind != KIND_Q4 ||
+    if (model->embed == NULL ||
+        (model->embed->kind != KIND_Q4 &&
+         model->embed->kind != KIND_Q4_OUTPUT_BLOCKED) ||
         model->final_norm == NULL || model->final_norm->kind != KIND_F32) {
         return -1;
     }
@@ -1269,6 +1345,57 @@ static int parse_id_list(const char *text, uint32_t *values, int capacity)
     return count;
 }
 
+/* Keep the mapped model and tokenizer resident while accepting one UTF-8
+ * prompt per input line. Each response is the same single-line JSON object
+ * emitted by --generate, which makes the protocol usable from a POSIX-shell
+ * FIFO without an HTTP or Python adapter. */
+static int run_generate_server(const struct model *model, int requested_tokens)
+{
+    char *line = NULL;
+    size_t line_capacity = 0;
+    static uint32_t token_ids[MAX_TOKENS];
+
+    fprintf(stderr, "qwen35_server_ready generate_tokens=%d\n", requested_tokens);
+    fflush(stderr);
+
+    while (getline(&line, &line_capacity, stdin) >= 0) {
+        size_t length = strlen(line);
+        while (length > 0U && (line[length - 1U] == '\n' || line[length - 1U] == '\r')) {
+            line[--length] = '\0';
+        }
+        if (length == 0U) {
+            printf("{\"error\":\"empty prompt\"}\n");
+            fflush(stdout);
+            continue;
+        }
+
+        const int token_count = encode_text(&model->tokenizer, line, token_ids, MAX_TOKENS);
+        if (token_count <= 0 || token_count + requested_tokens > MAX_TOKENS) {
+            printf("{\"error\":\"prompt exceeds token capacity\"}\n");
+            fflush(stdout);
+            continue;
+        }
+        int valid = 1;
+        for (int index = 0; index < token_count; ++index) {
+            if (token_ids[index] >= model->image.header->vocab_rows) {
+                valid = 0;
+                break;
+            }
+        }
+        if (!valid) {
+            printf("{\"error\":\"token id outside the vocabulary\"}\n");
+            fflush(stdout);
+            continue;
+        }
+        if (run_generate(model, token_ids, token_count, requested_tokens) != 0) {
+            free(line);
+            return -1;
+        }
+    }
+    free(line);
+    return ferror(stdin) ? -1 : 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *image_path = NULL;
@@ -1278,9 +1405,11 @@ int main(int argc, char **argv)
     const char *answer_words = NULL;
     const char *prompts_file = NULL;
     int generate_count = 0;
+    int serve_mode = 0;
     int encode_only = 0;
     const char *usage = "usage: %s IMAGE (--prompt TEXT | --ids ID,... | --prompts-file PATH) "
-                        "((--answers-text WORD,... | --answers ID,...) | --generate N)\n";
+                        "((--answers-text WORD,... | --answers ID,...) | --generate N)\n"
+                        "       %s IMAGE --serve N\n";
     for (int index = 1; index < argc; ++index) {
         if (strcmp(argv[index], "--ids") == 0 && index + 1 < argc) {
             ids_text = argv[++index];
@@ -1296,24 +1425,35 @@ int main(int argc, char **argv)
             char *end = NULL;
             const long parsed = strtol(argv[++index], &end, 10);
             if (end == argv[index] || *end != '\0' || parsed < 1 || parsed > MAX_GENERATE) {
-                fprintf(stderr, usage, argv[0]);
+                fprintf(stderr, usage, argv[0], argv[0]);
                 return 2;
             }
             generate_count = (int)parsed;
+        } else if (strcmp(argv[index], "--serve") == 0 && index + 1 < argc) {
+            char *end = NULL;
+            const long parsed = strtol(argv[++index], &end, 10);
+            if (end == argv[index] || *end != '\0' || parsed < 1 || parsed > MAX_GENERATE) {
+                fprintf(stderr, usage, argv[0], argv[0]);
+                return 2;
+            }
+            generate_count = (int)parsed;
+            serve_mode = 1;
         } else if (strcmp(argv[index], "--encode-only") == 0) {
             encode_only = 1;
         } else if (image_path == NULL) {
             image_path = argv[index];
         } else {
-            fprintf(stderr, usage, argv[0]);
+            fprintf(stderr, usage, argv[0], argv[0]);
             return 2;
         }
     }
     const int answer_mode = answers_text != NULL || answer_words != NULL;
+    const int has_prompt = ids_text != NULL || prompt_text != NULL || prompts_file != NULL;
     if (image_path == NULL ||
-        (ids_text == NULL && prompt_text == NULL && prompts_file == NULL) ||
-        answer_mode == (generate_count > 0) || (prompts_file != NULL && generate_count > 0)) {
-        fprintf(stderr, usage, argv[0]);
+        (serve_mode && (has_prompt || answer_mode || encode_only)) ||
+        (!serve_mode && (!has_prompt || answer_mode == (generate_count > 0) ||
+                         (prompts_file != NULL && generate_count > 0)))) {
+        fprintf(stderr, usage, argv[0], argv[0]);
         return 2;
     }
 
@@ -1326,6 +1466,19 @@ int main(int argc, char **argv)
         !model.tokenizer.present) {
         fprintf(stderr, "image carries no tokenizer tables; pass --ids/--answers\n");
         return 2;
+    }
+    if (serve_mode) {
+        if (!model.tokenizer.present) {
+            fprintf(stderr, "image carries no tokenizer tables; --serve is unavailable\n");
+            return 2;
+        }
+#ifdef _OPENMP
+        omp_set_dynamic(0);
+#endif
+        const int server_status = run_generate_server(&model, generate_count);
+        munmap((void *)model.image.base, model.image.bytes);
+        close(model.image.fd);
+        return server_status == 0 ? 0 : 2;
     }
 
     static uint32_t token_ids[MAX_TOKENS];

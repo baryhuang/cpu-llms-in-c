@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile the pinned Qwen3.5-0.8B checkpoint into a framework-free Q4 image.
 
-Image v1 carries the full text graph for the prompt-defined runtime:
+The image family carries the full text graph for the prompt-defined runtime:
 every text-layer matrix and the complete tied embedding/output table in
 signed Q4 group-128, small tensors in float32. The vision tower and the
 MTP head never enter the image. Tokenizer tables land in a later image
@@ -11,11 +11,11 @@ version; until then the runtime accepts token ids.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import struct
 import time
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,7 +27,9 @@ try:
         q4_byte_count,
         q8_byte_count,
         quantize_q4_grouped,
+        quantize_q4_grouped_output_blocked,
         quantize_q8_grouped,
+        quantize_q8_grouped_output_blocked,
         sha256_file,
     )
     from .gemma4_task_reference import decode_float32
@@ -38,7 +40,9 @@ except ImportError:
         q4_byte_count,
         q8_byte_count,
         quantize_q4_grouped,
+        quantize_q4_grouped_output_blocked,
         quantize_q8_grouped,
+        quantize_q8_grouped_output_blocked,
         sha256_file,
     )
     from gemma4_task_reference import decode_float32
@@ -46,8 +50,10 @@ except ImportError:
 
 
 MAGIC = b"QW35TSK1"
-VERSION = 2
+GENERIC_VERSION = 2
+A113X_VERSION = 3
 GROUP_SIZE = 128
+A113X_OUTPUT_BLOCK = 4
 TEXT_PREFIX = "model.language_model."
 HEADER = struct.Struct("<8s8I4Q")
 DESCRIPTOR = struct.Struct("<96sII4IQQQ")
@@ -56,6 +62,8 @@ KIND_U32 = 2
 KIND_U8 = 3
 KIND_Q4_GROUPED = 4
 KIND_Q8_GROUPED = 5
+KIND_Q4_OUTPUT_BLOCKED = 6
+KIND_Q8_OUTPUT_BLOCKED = 7
 
 LAYER_COUNT = 24
 FULL_ATTENTION_INTERVAL = 4
@@ -84,6 +92,9 @@ class Entry:
     name: str
     kind: int
     shape: tuple[int, ...]
+    source_name: str | None = None
+    payload: bytes | None = None
+    output_block: int = 0
     offset: int = 0
     byte_count: int = 0
 
@@ -94,18 +105,69 @@ def pack_descriptor(entry: Entry) -> bytes:
         raise ValueError(f"tensor name is too long: {entry.name}")
     shape = list(entry.shape) + [0] * (4 - len(entry.shape))
     return DESCRIPTOR.pack(
-        encoded, entry.kind, len(entry.shape), *shape, entry.offset, entry.byte_count, 0
+        encoded,
+        entry.kind,
+        len(entry.shape),
+        *shape,
+        entry.offset,
+        entry.byte_count,
+        entry.output_block,
     )
 
 
-def classify(name: str, shape: tuple[int, ...]) -> int:
+def classify(name: str, shape: tuple[int, ...], target: str = "generic") -> int:
     if len(shape) == 2 and shape[1] % GROUP_SIZE == 0:
         if any(name.endswith(suffix) for suffix in F32_MATRIX_SUFFIXES):
             return KIND_F32
         if any(name.endswith(suffix) for suffix in Q8_MATRIX_SUFFIXES):
-            return KIND_Q8_GROUPED
-        return KIND_Q4_GROUPED
+            return (
+                KIND_Q8_OUTPUT_BLOCKED
+                if target == "a113x"
+                else KIND_Q8_GROUPED
+            )
+        return KIND_Q4_OUTPUT_BLOCKED if target == "a113x" else KIND_Q4_GROUPED
     return KIND_F32
+
+
+QWEN_LAYER_READ_ORDER = {
+    "input_layernorm.weight": 0,
+    "linear_attn.in_proj_qkv.weight": 1,
+    "linear_attn.in_proj_z.weight": 2,
+    "linear_attn.in_proj_b.weight": 3,
+    "linear_attn.in_proj_a.weight": 4,
+    "linear_attn.conv1d.weight": 5,
+    "linear_attn.A_log": 6,
+    "linear_attn.dt_bias": 7,
+    "linear_attn.norm.weight": 8,
+    "linear_attn.out_proj.weight": 9,
+    "self_attn.q_proj.weight": 1,
+    "self_attn.k_proj.weight": 2,
+    "self_attn.v_proj.weight": 3,
+    "self_attn.q_norm.weight": 4,
+    "self_attn.k_norm.weight": 5,
+    "self_attn.o_proj.weight": 6,
+    "post_attention_layernorm.weight": 10,
+    "mlp.gate_proj.weight": 11,
+    "mlp.up_proj.weight": 12,
+    "mlp.down_proj.weight": 13,
+}
+
+
+def a113x_tensor_read_order(name: str) -> tuple[int, int, int, str]:
+    """Order payloads by the cold inference traversal on A113X."""
+    match = re.fullmatch(r"layers\.(\d+)\.(.+)", name)
+    if match is not None:
+        layer = int(match.group(1))
+        suffix = match.group(2)
+        return (1, layer, QWEN_LAYER_READ_ORDER.get(suffix, 100), suffix)
+    if name == "norm.weight":
+        return (2, 0, 0, name)
+    if name == "embed_tokens.weight":
+        # The tied table is touched once for input lookup, then scanned after
+        # the final norm. Keeping it last makes the large sequential scan
+        # follow the transformer payloads in the image.
+        return (3, 0, 0, name)
+    return (0, 0, 0, name)
 
 
 def bytes_to_unicode() -> dict[int, str]:
@@ -197,6 +259,12 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument(
+        "--target",
+        choices=("generic", "a113x"),
+        default="generic",
+        help="select the runtime-native tensor and quantized-record layout",
+    )
+    parser.add_argument(
         "--skip-checkpoint-hash",
         action="store_true",
         help="trust the pinned size check only; skip hashing the 1.7 GB file",
@@ -227,7 +295,6 @@ def main() -> None:
         raise ValueError("config does not describe the expected Qwen3.5-0.8B text graph")
 
     started = time.monotonic()
-    entries: list[Entry] = []
     with SafetensorsFile(args.checkpoint) as source:
         selected = []
         for name in sorted(source.tensors):
@@ -240,22 +307,54 @@ def main() -> None:
                 shape = (shape[0], shape[2])  # squeeze the grouped-conv middle axis
             selected.append((short, name, shape))
 
-        for short, _, shape in selected:
-            kind = classify(short, shape)
-            if kind == KIND_Q4_GROUPED:
+        if args.target == "a113x":
+            selected.sort(key=lambda item: a113x_tensor_read_order(item[0]))
+
+        matrix_entries = []
+        for short, full_name, shape in selected:
+            kind = classify(short, shape, args.target)
+            if kind in (KIND_Q4_GROUPED, KIND_Q4_OUTPUT_BLOCKED):
                 byte_count = q4_byte_count(shape)
-            elif kind == KIND_Q8_GROUPED:
+            elif kind in (KIND_Q8_GROUPED, KIND_Q8_OUTPUT_BLOCKED):
                 byte_count = q8_byte_count(shape)
             else:
                 byte_count = int(np.prod(shape)) * 4
-            entries.append(Entry(short, kind, shape, byte_count=byte_count))
+            matrix_entries.append(
+                Entry(
+                    short,
+                    kind,
+                    shape,
+                    source_name=full_name,
+                    output_block=(
+                        A113X_OUTPUT_BLOCK
+                        if kind in (KIND_Q4_OUTPUT_BLOCKED, KIND_Q8_OUTPUT_BLOCKED)
+                        else 0
+                    ),
+                    byte_count=byte_count,
+                )
+            )
 
-        raw_payloads: dict[str, bytes] = {}
+        tokenizer_entries = []
         for name, kind, array in build_tokenizer_entries(args.tokenizer):
             dtype = "<u4" if kind == KIND_U32 else np.uint8
             payload = np.ascontiguousarray(array, dtype=dtype).tobytes()
-            entries.append(Entry(name, kind, tuple(array.shape), byte_count=len(payload)))
-            raw_payloads[name] = payload
+            tokenizer_entries.append(
+                Entry(
+                    name,
+                    kind,
+                    tuple(array.shape),
+                    payload=payload,
+                    byte_count=len(payload),
+                )
+            )
+
+        # A113X tokenizes before inference, then walks transformer tensors in
+        # numeric layer order. The generic image retains its historical order.
+        entries = (
+            tokenizer_entries + matrix_entries
+            if args.target == "a113x"
+            else matrix_entries + tokenizer_entries
+        )
 
         directory_offset = HEADER.size
         data_offset = align(directory_offset + len(entries) * DESCRIPTOR.size)
@@ -273,7 +372,7 @@ def main() -> None:
             output.write(
                 HEADER.pack(
                     MAGIC,
-                    VERSION,
+                    A113X_VERSION if args.target == "a113x" else GENERIC_VERSION,
                     len(entries),
                     LAYER_COUNT,
                     FULL_ATTENTION_INTERVAL,
@@ -292,36 +391,61 @@ def main() -> None:
                 output.write(pack_descriptor(entry))
 
             matrix_total = sum(
-                entry.kind in (KIND_Q4_GROUPED, KIND_Q8_GROUPED) for entry in entries
+                entry.kind
+                in (
+                    KIND_Q4_GROUPED,
+                    KIND_Q8_GROUPED,
+                    KIND_Q4_OUTPUT_BLOCKED,
+                    KIND_Q8_OUTPUT_BLOCKED,
+                )
+                for entry in entries
             )
             matrix_index = 0
-            for (short, full_name, shape), entry in zip(selected, entries):
-                info = source.tensors[full_name]
-                array = decode_float32(source.read_bytes(full_name), info.dtype, info.shape)
-                array = np.asarray(array, dtype=np.float32).reshape(entry.shape)
+            for entry in entries:
                 output.seek(entry.offset)
-                if entry.kind in (KIND_Q4_GROUPED, KIND_Q8_GROUPED):
-                    quantize = (
-                        quantize_q4_grouped
-                        if entry.kind == KIND_Q4_GROUPED
-                        else quantize_q8_grouped
+                if entry.payload is not None:
+                    payload = entry.payload
+                else:
+                    info = source.tensors[entry.source_name]
+                    array = decode_float32(
+                        source.read_bytes(entry.source_name), info.dtype, info.shape
                     )
-                    payload = quantize(array)
+                    array = np.asarray(array, dtype=np.float32).reshape(entry.shape)
+                    if entry.kind == KIND_Q4_GROUPED:
+                        payload = quantize_q4_grouped(array)
+                    elif entry.kind == KIND_Q8_GROUPED:
+                        payload = quantize_q8_grouped(array)
+                    elif entry.kind == KIND_Q4_OUTPUT_BLOCKED:
+                        payload = quantize_q4_grouped_output_blocked(
+                            array, entry.output_block
+                        )
+                    elif entry.kind == KIND_Q8_OUTPUT_BLOCKED:
+                        payload = quantize_q8_grouped_output_blocked(
+                            array, entry.output_block
+                        )
+                    else:
+                        payload = array.astype("<f4").tobytes(order="C")
+                if entry.kind in (
+                    KIND_Q4_GROUPED,
+                    KIND_Q8_GROUPED,
+                    KIND_Q4_OUTPUT_BLOCKED,
+                    KIND_Q8_OUTPUT_BLOCKED,
+                ):
                     if len(payload) != entry.byte_count:
-                        raise AssertionError(f"quantized byte count mismatch for {short}")
-                    output.write(payload)
+                        raise AssertionError(
+                            f"quantized byte count mismatch for {entry.name}"
+                        )
                     matrix_index += 1
                     print(
-                        f"quantized matrix={matrix_index}/{matrix_total} name={short} "
-                        f"kind={'q4' if entry.kind == KIND_Q4_GROUPED else 'q8'} "
+                        f"quantized matrix={matrix_index}/{matrix_total} name={entry.name} "
+                        f"kind={'q4' if entry.kind in (KIND_Q4_GROUPED, KIND_Q4_OUTPUT_BLOCKED) else 'q8'} "
+                        f"output_block={entry.output_block} "
                         f"elapsed_seconds={time.monotonic() - started:.3f}",
                         flush=True,
                     )
-                else:
-                    output.write(array.astype("<f4").tobytes(order="C"))
-            for entry in entries[len(selected) :]:
-                output.seek(entry.offset)
-                output.write(raw_payloads[entry.name])
+                if len(payload) != entry.byte_count:
+                    raise AssertionError(f"payload byte count mismatch for {entry.name}")
+                output.write(payload)
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, args.output)
@@ -329,6 +453,10 @@ def main() -> None:
     manifest = {
         "schema_version": 1,
         "format": MAGIC.decode(),
+        "format_version": (
+            A113X_VERSION if args.target == "a113x" else GENERIC_VERSION
+        ),
+        "target": args.target,
         "checkpoint_revision": pins["model"]["revision"],
         "checkpoint_sha256": pins["model"]["files"][checkpoint_name],
         "quantization": (
@@ -338,12 +466,32 @@ def main() -> None:
         "image_bytes": args.output.stat().st_size,
         "image_sha256": sha256_file(args.output),
         "tensor_count": len(entries),
-        "q4_matrix_count": sum(entry.kind == KIND_Q4_GROUPED for entry in entries),
-        "q8_matrix_count": sum(entry.kind == KIND_Q8_GROUPED for entry in entries),
+        "q4_matrix_count": sum(
+            entry.kind in (KIND_Q4_GROUPED, KIND_Q4_OUTPUT_BLOCKED)
+            for entry in entries
+        ),
+        "q8_matrix_count": sum(
+            entry.kind in (KIND_Q8_GROUPED, KIND_Q8_OUTPUT_BLOCKED)
+            for entry in entries
+        ),
+        "quantized_output_block": (
+            A113X_OUTPUT_BLOCK if args.target == "a113x" else 0
+        ),
+        "tensor_payload_order": (
+            "tokenizer, numeric graph execution order, final norm, tied head"
+            if args.target == "a113x"
+            else "checkpoint name order followed by tokenizer"
+        ),
         "quantized_matrix_bytes": sum(
             entry.byte_count
             for entry in entries
-            if entry.kind in (KIND_Q4_GROUPED, KIND_Q8_GROUPED)
+            if entry.kind
+            in (
+                KIND_Q4_GROUPED,
+                KIND_Q8_GROUPED,
+                KIND_Q4_OUTPUT_BLOCKED,
+                KIND_Q8_OUTPUT_BLOCKED,
+            )
         ),
         "tokenizer_sha256": pins["model"]["files"]["tokenizer.json"],
         "tokenizer_tables": "vocab byte strings, ranked merges, byte map, special tokens",

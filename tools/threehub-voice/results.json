@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "target": {
+    "board": "ThirdReality TRHub-V3",
+    "soc": "Amlogic A113X",
+    "cpu": "4x Cortex-A53",
+    "memory_mib": 1963
+  },
+  "runtime": {
+    "capture": "arecord lifetime stream plus native C RMS segmenter",
+    "asr": "whisper.cpp v1.8.0 server, multilingual Base Q5_1, Silero VAD v5.1.2",
+    "llm": "Qwen3.5-0.8B QW35TSK1 v3, resident line protocol",
+    "tts": "MOSS-TTS-Nano Q8_0 persistent KV-cache server",
+    "python_runtime_processes": 0
+  },
+  "validation": {
+    "continuous_capture": {
+      "alsa_owner_processes": 1,
+      "alsa_released_during_inference": false,
+      "status_update_hz": 10,
+      "synthetic_high_rms_wav_count": 1,
+      "synthetic_low_rms_wav_count": 0,
+      "synthetic_output_seconds": 1.8,
+      "queue_limit": 8,
+      "live_idle_rms_gate_observation_seconds": 148,
+      "live_idle_utterances": 0,
+      "live_idle_queued": 0
+    },
+    "qwen_resident_request": {
+      "prompt_tokens": 11,
+      "generated_tokens": 8,
+      "prefill_seconds": 4.968185,
+      "generation_seconds": 3.853296,
+      "text_suffix": "Ready."
+    },
+    "whisper_resident_first_warm_request": {
+      "input_seconds": 2.0,
+      "wall_seconds": 86.73,
+      "server_rss_kib_after_request": 156840,
+      "language": "zh"
+    },
+    "service": {
+      "supervisor": "systemd",
+      "restart_policy": "always",
+      "resident_components": ["capture", "whisper", "qwen", "moss"]
+    }
+  },
+  "notes": [
+    "Warm-up time is intentionally outside interactive turns.",
+    "Model processes stay alive; Linux may still reclaim clean file-backed pages under memory pressure.",
+    "The first Whisper timing was measured while bringing up the resident stack and is not a latency distribution."
+  ]
+}

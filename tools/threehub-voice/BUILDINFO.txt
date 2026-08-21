@@ -1,0 +1,9 @@
+Target: ThirdReality TRHub-V3 / Amlogic A113X / Linux AArch64
+Capture: native C11 RMS segmenter, persistent ALSA stream, 16 kHz mono PCM16
+Whisper: whisper.cpp v1.8.0, commit 41fc9dea6a4fe056424be86f61164413903fcff4
+ASR model: multilingual Whisper Base Q5_1
+VAD model: Silero v5.1.2
+Qwen: Qwen3.5-0.8B, QW35TSK1 v3 output-blocked image, resident line protocol
+MOSS: MOSS-TTS-Nano Q8_0, persistent exact incremental KV-cache server
+Build: Debian 12 Linux/AArch64, GCC 12.2, Cortex-A53 flags, no Python
+Runtime: POSIX shell plus native C/C++ executables; no Python process

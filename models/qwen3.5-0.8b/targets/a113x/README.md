@@ -41,6 +41,26 @@ The missing Stage 0 and Stage 1 decode cells require runs of the same generation
 
 The stages are additive, not three unrelated builds. Every reported increment uses the immediately preceding cumulative stage as its denominator. Verification is a gate after each implementation change and is excluded from benchmark duration.
 
+## A113X-native weight image
+
+`QW35TSK1` version 3 is the target-specific image format. Q4 and Q8 records
+are stored as `[4-output block][input group][output lane][record]`, exactly the
+order consumed by the four-output A113X GEMV loop. Tensor payloads are also
+stored in numeric layer/execution order, followed by final norm and the tied
+embedding/output head. Tokenizer tables precede the graph because prompt
+tokenization runs first.
+
+The runtime still accepts the measured row-major version 2 image. Version 3
+has packing and record-order tests, but has not yet been benchmarked on
+the A113X; no speedup is claimed from the layout alone.
+
+```sh
+python3 compiler/compile_qwen35_task_image.py \
+  --checkpoint model.safetensors-00001-of-00001.safetensors \
+  --config config.json --tokenizer tokenizer.json \
+  --target a113x --output qwen35-a113x-v3.qtask
+```
+
 ## Incremental benchmark
 
 Benchmark and verification are separate. Every row below is a warm single-process run over the same 488 prompt tokens in 12 cases with `OMP_NUM_THREADS=4`. `Duration` is model classification time summed from the runtime; `Wall` comes from `/usr/bin/time -v`. Throughput is prompt prefill/classification throughput, not free-generation decode throughput.
@@ -142,7 +162,7 @@ Measured steps are not estimates. Future steps remain unmeasured.
 3. **Done — DeltaNet state kernel:** contiguous `state[key][value]` row traversal plus 16 independent heads statically partitioned across four cores; 3.6353 token/s, 1.50x incremental.
 4. **Next — NEON TBL lookup:** compare a table-lookup low-bit GEMV with the current multiply kernel; keep it only after full logit and 12-case gates.
 5. **Next — multi-token prefill:** reuse weights or lookup tables across prompt tokens. DeltaNet recurrence stays ordered, but projections and MLPs can batch.
-6. **Next — A53 weight layout and prefetch:** reorder Q4 records offline for the measured cache and DRAM path.
+6. **Implemented, measurement pending — A53 weight layout:** Q4/Q8 records are output-blocked offline in the kernel's group/lane traversal order; the version 3 image still needs same-window device measurement.
 7. **Experimental — Q3/Q2:** reduce traffic only if a larger held-out quality set passes.
 
 ## Feasibility notes

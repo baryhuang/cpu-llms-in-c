@@ -1,0 +1,20 @@
+[Unit]
+Description=ThreeHub resident voice assistant
+Wants=network-online.target
+After=network-online.target sound.target
+
+[Service]
+Type=simple
+ExecStart=/root/threehub-voice/threehub-voice-assistant.sh
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=15
+Environment=VOICE_MIC_DEVICE=plughw:0,0
+Environment=VOICE_SPEAKER_DEVICE=plughw:0,0
+Environment=MOSS_VOICE_REF=/root/threehub-voice/voice_ref.wav
+StandardOutput=append:/root/threehub-voice/voice-assistant-live.log
+StandardError=append:/root/threehub-voice/voice-assistant-live.log
+
+[Install]
+WantedBy=multi-user.target

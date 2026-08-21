@@ -41,7 +41,27 @@ def q8_byte_count(shape: tuple[int, ...]) -> int:
     return shape[0] * (shape[1] // GROUP_SIZE) * (2 + GROUP_SIZE)
 
 
-def quantize_q8_grouped(weights: np.ndarray) -> bytes:
+def _output_block_records(records: np.ndarray, output_block: int) -> bytes:
+    """Serialize [output, group, record] in kernel traversal order.
+
+    Output-blocked kernels visit every quantization group for a small block of
+    output rows and consume all rows in that group before advancing. The
+    resulting on-disk order is [output_block, group, output_lane, record].
+    """
+    rows, groups, record_bytes = records.shape
+    if output_block <= 1:
+        raise ValueError("output block must be greater than one")
+    if rows % output_block:
+        raise ValueError(
+            f"matrix row count {rows} is not divisible by output block {output_block}"
+        )
+    blocked = records.reshape(
+        rows // output_block, output_block, groups, record_bytes
+    ).transpose(0, 2, 1, 3)
+    return blocked.tobytes(order="C")
+
+
+def _quantize_q8_records(weights: np.ndarray) -> np.ndarray:
     rows, columns = weights.shape
     if columns % GROUP_SIZE:
         raise ValueError(f"matrix width {columns} is not divisible by {GROUP_SIZE}")
@@ -53,10 +73,20 @@ def quantize_q8_grouped(weights: np.ndarray) -> bytes:
     records = np.empty((rows, groups, 2 + GROUP_SIZE), dtype=np.uint8)
     records[..., :2] = float32_to_bf16(scale).view(np.uint8).reshape(rows, groups, 2)
     records[..., 2:] = quantized.view(np.uint8)
-    return records.tobytes(order="C")
+    return records
 
 
-def quantize_q4_grouped(weights: np.ndarray) -> bytes:
+def quantize_q8_grouped(weights: np.ndarray) -> bytes:
+    return _quantize_q8_records(weights).tobytes(order="C")
+
+
+def quantize_q8_grouped_output_blocked(
+    weights: np.ndarray, output_block: int
+) -> bytes:
+    return _output_block_records(_quantize_q8_records(weights), output_block)
+
+
+def _quantize_q4_records(weights: np.ndarray) -> np.ndarray:
     rows, columns = weights.shape
     if columns % GROUP_SIZE:
         raise ValueError(f"matrix width {columns} is not divisible by {GROUP_SIZE}")
@@ -72,4 +102,14 @@ def quantize_q4_grouped(weights: np.ndarray) -> bytes:
     records = np.empty((rows, groups, 2 + GROUP_SIZE // 2), dtype=np.uint8)
     records[..., :2] = float32_to_bf16(scale).view(np.uint8).reshape(rows, groups, 2)
     records[..., 2:] = packed
-    return records.tobytes(order="C")
+    return records
+
+
+def quantize_q4_grouped(weights: np.ndarray) -> bytes:
+    return _quantize_q4_records(weights).tobytes(order="C")
+
+
+def quantize_q4_grouped_output_blocked(
+    weights: np.ndarray, output_block: int
+) -> bytes:
+    return _output_block_records(_quantize_q4_records(weights), output_block)
