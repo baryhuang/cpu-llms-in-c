@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_BUILD_RPATH "$ORIGIN/lib")
 set(CMAKE_INSTALL_RPATH "$ORIGIN/lib")
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 
 set(RKNN_TOOLKIT_ROOT "" CACHE PATH "Path to rknn-toolkit2 checkout")
 set(RKNN_MODEL_ZOO_ROOT "" CACHE PATH "Path to rknn_model_zoo checkout")
@@ -23,10 +24,66 @@ endif()
 
 find_library(FFTW3F_LIBRARY NAMES fftw3f REQUIRED)
 find_library(SNDFILE_LIBRARY NAMES sndfile libsndfile.so.1 REQUIRED)
+set(SAVED_CMAKE_FIND_LIBRARY_SUFFIXES "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+find_library(FFTW3F_STATIC_LIBRARY NAMES fftw3f REQUIRED)
+set(CMAKE_FIND_LIBRARY_SUFFIXES "${SAVED_CMAKE_FIND_LIBRARY_SUFFIXES}")
 
 add_executable(whisper_rknpu2_llmc
   whisper_rknpu2_llmc.cc
   "${RKNN_MODEL_ZOO_ROOT}/utils/audio_utils.c"
+)
+
+add_executable(w4a16_package_test
+  w4a16_package_test.cc
+  w4a16_model.cc
+)
+target_compile_options(w4a16_package_test PRIVATE -O3 -DNDEBUG)
+
+add_executable(pcm16_wav_test
+  pcm16_wav_test.cc
+  pcm16_wav.cc
+)
+target_compile_options(pcm16_wav_test PRIVATE -O3 -DNDEBUG)
+
+add_executable(w4a16_matmul_smoke
+  w4a16_matmul_smoke.cc
+  w4a16_matmul.cc
+  w4a16_model.cc
+)
+target_include_directories(w4a16_matmul_smoke PRIVATE "${RKNN_INCLUDE}")
+target_compile_options(w4a16_matmul_smoke PRIVATE -O3 -DNDEBUG)
+target_link_libraries(w4a16_matmul_smoke PRIVATE
+  "${RKNN_LIBRARY}"
+  pthread
+  dl
+)
+set_target_properties(w4a16_matmul_smoke PROPERTIES
+  BUILD_RPATH "$ORIGIN/../lib"
+  INSTALL_RPATH "$ORIGIN/../lib"
+)
+
+add_executable(whisper_rknpu2_w4a16
+  whisper_rknpu2_w4a16.cc
+  w4a16_matmul.cc
+  w4a16_model.cc
+  pcm16_wav.cc
+)
+target_include_directories(whisper_rknpu2_w4a16 PRIVATE
+  "${RKNN_INCLUDE}"
+  "${RKNN_MODEL_ZOO_ROOT}/3rdparty/fftw/include"
+)
+target_compile_options(whisper_rknpu2_w4a16 PRIVATE -O3 -DNDEBUG)
+target_link_libraries(whisper_rknpu2_w4a16 PRIVATE
+  "${RKNN_LIBRARY}"
+  "${FFTW3F_STATIC_LIBRARY}"
+  m
+  pthread
+  dl
+)
+set_target_properties(whisper_rknpu2_w4a16 PROPERTIES
+  BUILD_RPATH "$ORIGIN/../lib"
+  INSTALL_RPATH "$ORIGIN/../lib"
 )
 target_include_directories(whisper_rknpu2_llmc PRIVATE
   "${RKNN_INCLUDE}"

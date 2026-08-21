@@ -51,6 +51,59 @@ are not the PDF's q8/q4/q5 formats. No calibrated large-v3-turbo `w8a8` graph
 was produced, so no native INT8 number is presented. The exact support probe is
 in [`toolkit-2.3.2-quantization-support.log`](benchmarks/rknpu2/toolkit-2.3.2-quantization-support.log).
 
+### Native W4A16 MatMul-API path (built locally, not measured yet)
+
+Toolkit2 2.3.2 rejects `quantized_dtype=w4a16` when compiling an RK3588
+`.rknn` graph. The proprietary RKNPU2 runtime nevertheless exposes
+`RKNN_FLOAT16_MM_INT4_TO_FLOAT16` for RK3588, including symmetric per-group
+scales with group size 32. The new path uses that lower-level API directly; it
+does not relabel a GGML q4 format and does not deploy an RK3576 graph.
+
+Two comparable modes are implemented in the same Python-free C++17 binary:
+
+- `baseline` uses normal-layout INT4 weights and uploads each weight on every
+  invocation.
+- `llmc` converts each weight once to the RK3588 native B layout, keeps the
+  buffer resident and reuses its MatMul context and DMA allocations.
+
+Both modes use the same v2 W4A16 files, FP16 activation/attention MatMuls,
+native audio preprocessing, greedy decoder and `std30.wav`. The runner logs
+configured and observed NPU core counts plus per-core average/maximum load for
+the encoder and decoder stages. The shell gate rejects the run if the baseline
+and LLMC MatMul checksum or final token sequence differs.
+
+Local build state on 2026-08-20:
+
+| Artifact | State |
+|---|---|
+| Encoder W4A16 v2 | 409,684,160 bytes; 202 INT4 tensors; SHA-256 `22f02d37…30efc4fe` |
+| Decoder W4A16 v2 | 241,173,248 bytes; 41 INT4 tensors; SHA-256 `8ff480c2…c5d3061` |
+| Target executable | ARM64 Linux, pure C++17, maximum required glibc 2.29; FFTW linked statically; no Python, libsndfile or external FFTW runtime dependency |
+| Local validation | Full container/shape/alignment check passed; representative packed INT4 and scale payloads exactly match re-quantization from the source checkpoint |
+| RK3588 result | Pending device-only kernel/correctness/performance validation; no number has been added to `REVIEW.html` |
+
+The scale payload is deliberately versioned. v2 stores scales in RKNPU2's
+`[K/32, N]` order; the native loader rejects the earlier v1 ordering.
+The fixed `std30.wav` gate also uses an in-tree PCM16 WAV reader and validates
+the exact 436,320-sample payload before initializing the NPU.
+
+Build the two packages on the host (Python is build-time only):
+
+```sh
+python scripts/build_w4a16_weights.py \
+  --checkpoint model.safetensors --scope encoder \
+  --output whisper-large-v3-turbo-encoder-w4a16-v2.llmc
+python scripts/build_w4a16_weights.py \
+  --checkpoint model.safetensors --scope decoder \
+  --output whisper-large-v3-turbo-decoder-w4a16-v2.llmc
+```
+
+The target-side gate is [`native/run_w4a16_std30.sh`](native/run_w4a16_std30.sh).
+The full implementation is
+[`native/whisper_rknpu2_w4a16.cc`](native/whisper_rknpu2_w4a16.cc), with the
+RKNPU2 backend in [`native/w4a16_matmul.cc`](native/w4a16_matmul.cc) and the
+versioned loader in [`native/w4a16_model.cc`](native/w4a16_model.cc).
+
 ## What LLMC changes
 
 - The encoder's two 15.36 MB cross-attention KV outputs are imported into the

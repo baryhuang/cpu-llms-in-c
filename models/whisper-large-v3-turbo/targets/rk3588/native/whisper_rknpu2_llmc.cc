@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -7,9 +8,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -17,6 +20,7 @@
 #include <fftw3.h>
 
 #include "audio_utils.h"
+#include "float16_compat.h"
 #include "rknn_api.h"
 
 namespace {
@@ -38,6 +42,10 @@ constexpr int kMaxNewTokens = 128;
 
 using Clock = std::chrono::steady_clock;
 
+constexpr int kNpuCoreCount = 3;
+constexpr int kNpuLoadSampleIntervalMs = 10;
+constexpr const char* kNpuLoadPath = "/sys/kernel/debug/rknpu/load";
+
 double milliseconds(Clock::time_point start, Clock::time_point end) {
   return std::chrono::duration<double, std::milli>(end - start).count();
 }
@@ -48,6 +56,131 @@ void check_rknn(int rc, const char* operation) {
                              std::to_string(rc));
   }
 }
+
+enum class NpuStage : int {
+  kIdle = 0,
+  kEncoder = 1,
+  kDecoder = 2,
+};
+
+struct NpuLoadStats {
+  uint64_t samples = 0;
+  std::array<uint64_t, kNpuCoreCount> sums{};
+  std::array<int, kNpuCoreCount> maxima{};
+};
+
+class NpuLoadMonitor {
+ public:
+  explicit NpuLoadMonitor(std::string path) : path_(std::move(path)) {}
+  NpuLoadMonitor(const NpuLoadMonitor&) = delete;
+  NpuLoadMonitor& operator=(const NpuLoadMonitor&) = delete;
+
+  ~NpuLoadMonitor() { stop(); }
+
+  void start() {
+    if (running_.exchange(true)) return;
+    worker_ = std::thread([this] { sample_loop(); });
+  }
+
+  void set_stage(NpuStage stage) {
+    stage_.store(static_cast<int>(stage), std::memory_order_release);
+  }
+
+  void stop() {
+    if (!running_.exchange(false)) return;
+    if (worker_.joinable()) worker_.join();
+  }
+
+  void print() const {
+    std::printf("npu_load_source: %s\n", path_.c_str());
+    std::printf("npu_load_sample_interval_ms: %d\n",
+                kNpuLoadSampleIntervalMs);
+    if (!source_available_) {
+      std::printf("npu_load_status: unavailable\n");
+      std::printf("npu_observed_active_cores: unavailable\n");
+      return;
+    }
+    std::printf("npu_load_status: sampled\n");
+    print_stage("encoder", stats_[0]);
+    print_stage("decoder", stats_[1]);
+
+    int active_cores = 0;
+    for (int core = 0; core < kNpuCoreCount; ++core) {
+      if (stats_[0].maxima[core] > 0 || stats_[1].maxima[core] > 0) {
+        ++active_cores;
+      }
+    }
+    std::printf("npu_observed_active_cores: %d\n", active_cores);
+  }
+
+ private:
+  static bool parse_load(const std::string& text,
+                         std::array<int, kNpuCoreCount>& loads) {
+    bool found_any = false;
+    for (int core = 0; core < kNpuCoreCount; ++core) {
+      const std::string label = "Core" + std::to_string(core);
+      size_t position = text.find(label);
+      if (position == std::string::npos) continue;
+      position = text.find(':', position + label.size());
+      if (position == std::string::npos) continue;
+      const char* begin = text.c_str() + position + 1;
+      char* end = nullptr;
+      const long value = std::strtol(begin, &end, 10);
+      if (end == begin || value < 0 || value > 100) continue;
+      loads[core] = static_cast<int>(value);
+      found_any = true;
+    }
+    return found_any;
+  }
+
+  static void print_stage(const char* name, const NpuLoadStats& stats) {
+    std::printf("npu_%s_load_samples: %llu\n", name,
+                static_cast<unsigned long long>(stats.samples));
+    for (int core = 0; core < kNpuCoreCount; ++core) {
+      const double average = stats.samples == 0
+          ? 0.0
+          : static_cast<double>(stats.sums[core]) / stats.samples;
+      std::printf("npu_%s_core%d_avg_load_pct: %.2f\n", name, core,
+                  average);
+      std::printf("npu_%s_core%d_max_load_pct: %d\n", name, core,
+                  stats.maxima[core]);
+    }
+  }
+
+  void sample_loop() {
+    while (running_.load(std::memory_order_acquire)) {
+      std::ifstream input(path_);
+      std::string text((std::istreambuf_iterator<char>(input)),
+                       std::istreambuf_iterator<char>());
+      std::array<int, kNpuCoreCount> loads{};
+      if (input.good() || input.eof()) {
+        if (parse_load(text, loads)) {
+          source_available_ = true;
+          const int stage = stage_.load(std::memory_order_acquire);
+          if (stage == static_cast<int>(NpuStage::kEncoder) ||
+              stage == static_cast<int>(NpuStage::kDecoder)) {
+            NpuLoadStats& stats =
+                stats_[stage == static_cast<int>(NpuStage::kEncoder) ? 0 : 1];
+            ++stats.samples;
+            for (int core = 0; core < kNpuCoreCount; ++core) {
+              stats.sums[core] += loads[core];
+              stats.maxima[core] = std::max(stats.maxima[core], loads[core]);
+            }
+          }
+        }
+      }
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(kNpuLoadSampleIntervalMs));
+    }
+  }
+
+  std::string path_;
+  std::atomic<bool> running_{false};
+  std::atomic<int> stage_{static_cast<int>(NpuStage::kIdle)};
+  std::thread worker_;
+  bool source_available_ = false;
+  std::array<NpuLoadStats, 2> stats_{};
+};
 
 struct Model {
   rknn_context context = 0;
@@ -480,7 +613,7 @@ bool suppressed(int token, int decode_index) {
   return decode_index == 0 && (token == 220 || token == kEos);
 }
 
-int argmax_logits(const _Float16* logits, int decode_index) {
+int argmax_logits(const llmc_float16* logits, int decode_index) {
   int best_token = -1;
   float best_value = -std::numeric_limits<float>::infinity();
   for (int token = 0; token < kVocabSize; ++token) {
@@ -505,13 +638,20 @@ rknn_core_mask parse_core_mask(const std::string& text) {
   throw std::runtime_error("invalid core mask: " + text);
 }
 
+int configured_core_count(const std::string& text) {
+  if (text == "0" || text == "1" || text == "2") return 1;
+  if (text == "0,1") return 2;
+  if (text == "0,1,2" || text == "all") return 3;
+  return 0;
+}
+
 void validate_models(const Model& encoder, const Model& decoder) {
   if (encoder.inputs.size() != 1 || encoder.outputs.size() != 3 ||
       decoder.inputs.size() != 6 || decoder.outputs.size() != 3) {
     throw std::runtime_error("unexpected encoder/decoder I/O count");
   }
-  if (encoder.inputs[0].size != kMels * kFrames * sizeof(_Float16) ||
-      decoder.outputs[0].size != kVocabSize * sizeof(_Float16)) {
+  if (encoder.inputs[0].size != kMels * kFrames * sizeof(llmc_float16) ||
+      decoder.outputs[0].size != kVocabSize * sizeof(llmc_float16)) {
     throw std::runtime_error("model tensor shapes do not match Whisper large-v3-turbo");
   }
   if (encoder.outputs[1].size != decoder.inputs[1].size ||
@@ -617,17 +757,21 @@ int main(int argc, char** argv) {
       throw std::runtime_error("resample_audio failed");
     }
     const std::vector<float> features = extract_features(audio.buffer);
-    auto* feature_half = static_cast<_Float16*>(encoder_input.memory->virt_addr);
+    auto* feature_half = static_cast<llmc_float16*>(encoder_input.memory->virt_addr);
     for (size_t i = 0; i < features.size(); ++i) {
-      feature_half[i] = static_cast<_Float16>(features[i]);
+      feature_half[i] = static_cast<llmc_float16>(features[i]);
     }
     check_rknn(rknn_mem_sync(encoder.context, encoder_input.memory,
                              RKNN_MEMORY_SYNC_TO_DEVICE),
                "sync encoder input");
     const auto preprocess_end = Clock::now();
 
+    NpuLoadMonitor npu_load_monitor(kNpuLoadPath);
+    npu_load_monitor.start();
     const auto encoder_start = Clock::now();
+    npu_load_monitor.set_stage(NpuStage::kEncoder);
     check_rknn(rknn_run(encoder.context, nullptr), "encoder rknn_run");
+    npu_load_monitor.set_stage(NpuStage::kIdle);
     const auto encoder_end = Clock::now();
 
     // The encoder K/V buffers stay device-resident and are imported into the
@@ -644,7 +788,9 @@ int main(int argc, char** argv) {
                                RKNN_MEMORY_SYNC_TO_DEVICE),
                  "sync cache_position");
       const auto start = Clock::now();
+      npu_load_monitor.set_stage(NpuStage::kDecoder);
       check_rknn(rknn_run(decoder.context, nullptr), "decoder rknn_run");
+      npu_load_monitor.set_stage(NpuStage::kIdle);
       check_rknn(rknn_mem_sync(decoder.context, logits.memory,
                                RKNN_MEMORY_SYNC_FROM_DEVICE),
                  "sync logits");
@@ -658,7 +804,7 @@ int main(int argc, char** argv) {
 
     for (int decode_index = 0; decode_index < kMaxNewTokens; ++decode_index) {
       const int next = argmax_logits(
-          static_cast<const _Float16*>(logits.memory->virt_addr), decode_index);
+          static_cast<const llmc_float16*>(logits.memory->virt_addr), decode_index);
       if (next < 0) throw std::runtime_error("argmax produced no token");
       tokens.push_back(next);
       if (next == kEos) break;
@@ -667,6 +813,7 @@ int main(int argc, char** argv) {
       decoder_step(next, position);
     }
     const auto inference_end = Clock::now();
+    npu_load_monitor.stop();
 
     std::string text;
     for (int token : tokens) {
@@ -702,6 +849,13 @@ int main(int argc, char** argv) {
     std::printf("zero_copy_decoder: true\n");
     std::printf("runtime: native-cpp\n");
     std::printf("core_mask: %s\n", core_text.c_str());
+    if (core_text == "auto") {
+      std::printf("npu_configured_cores: auto\n");
+    } else {
+      std::printf("npu_configured_cores: %d\n",
+                  configured_core_count(core_text));
+    }
+    npu_load_monitor.print();
     std::printf("text:\n%s\n", text.c_str());
   } catch (const std::exception& error) {
     std::fprintf(stderr, "error: %s\n", error.what());
