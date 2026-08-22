@@ -122,6 +122,27 @@ class ReviewReportTest(unittest.TestCase):
             self.assertIn(value, self.html)
         self.assertIn("no original row or value was removed or changed", self.html)
 
+    def test_rkllm_w8a8_negative_result_is_visible(self):
+        run = self.rk3588_results["runs"]["rkllm_w8a8"]
+        baseline = run["baseline_median"]
+        llmc = run["llmc_median"]
+        expected = (
+            f'{baseline["encoder_ms"]:,.0f} ms',
+            f'{baseline["e2e_ms"] / 1000:.3f} s',
+            f'{llmc["encoder_ms"]:,.0f} ms',
+            f'{llmc["e2e_ms"] / 1000:.3f} s',
+            "RKLLM 1.3.0 W8A8 decoder",
+            "comma repeated 128 times",
+            "not a deployable speed row",
+            "optimization_level=1",
+        )
+        for value in expected:
+            self.assertIn(value, self.html)
+        self.assertEqual(baseline["active_npu_cores"], 3)
+        self.assertEqual(llmc["active_npu_cores"], 3)
+        self.assertEqual(baseline["recognition_status"], "failed-degenerate-output")
+        self.assertEqual(llmc["recognition_status"], "failed-degenerate-output")
+
     def test_primary_a113x_records_are_linked(self):
         required_links = (
             "models/whisper-large-v3-turbo/targets/a113x/results.json",
@@ -135,6 +156,11 @@ class ReviewReportTest(unittest.TestCase):
             "models/whisper-large-v3-turbo/targets/rk3588/README.md",
             "models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/baseline-python-copy-std30.log",
             "models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/llmc-native-all-performance-std30.log",
+            "models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rkllm/w8a8/official-runtime-failure.log",
+            "models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rkllm/w8a8/baseline-w8a8-std30-run3.log",
+            "models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rkllm/w8a8/llmc-w8a8-std30-run1.log",
+            "models/whisper-large-v3-turbo/targets/rk3588/native/whisper_rkllm_w8a8.cc",
+            "models/whisper-large-v3-turbo/targets/rk3588/native/rkllm_no_rope_patch.cc",
             "models/whisper-large-v3-turbo/targets/rk3588/native/whisper_rknpu2_llmc.cc",
         )
         for link in required_links:

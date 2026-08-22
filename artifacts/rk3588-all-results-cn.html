@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920">
+<title>Whisper large-v3-turbo — RK3588 全部实测</title>
+<style>
+  :root {
+    --bg: #0c1218;
+    --panel: #151e28;
+    --panel2: #101923;
+    --line: #2a3745;
+    --text: #edf3f9;
+    --muted: #92a7bb;
+    --blue: #4295ff;
+    --green: #25d366;
+    --orange: #ff862e;
+    --purple: #9367ff;
+    --red: #ff4d55;
+    --yellow: #f4bb38;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1920px; background: var(--bg); color: var(--text); }
+  body { font: 15px/1.38 -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; }
+  main { width: 1920px; padding: 38px 40px 42px; }
+  h1 { margin: 0; font-size: 39px; line-height: 1.15; letter-spacing: -.5px; }
+  .sub { margin: 12px 0 0; color: var(--muted); font-size: 16px; }
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 24px; }
+  .card { min-height: 106px; padding: 18px 20px; border: 1px solid var(--line); border-radius: 13px; background: var(--panel); }
+  .card b { display: block; color: var(--blue); font-size: 28px; line-height: 1.08; }
+  .card span { display: block; margin-top: 10px; color: var(--muted); }
+  .banner { margin-top: 14px; padding: 15px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); font-size: 16px; }
+  .banner b { color: var(--blue); }
+  .warning { border-color: #70452f; background: #251a18; }
+  .warning b { color: var(--orange); }
+  h2 { margin: 28px 0 12px; padding-bottom: 11px; border-bottom: 1px solid var(--line); font-size: 23px; }
+  .table-wrap { overflow: hidden; border: 1px solid var(--line); background: var(--panel2); }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13.5px; }
+  col.platform { width: 8%; }
+  col.execution { width: 28%; }
+  col.quant { width: 13%; }
+  col.encoder { width: 11%; }
+  col.relative { width: 9%; }
+  col.e2e { width: 11%; }
+  col.quality { width: 20%; }
+  th, td { padding: 9px 11px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+  th:last-child, td:last-child { border-right: 0; }
+  tbody tr:last-child td { border-bottom: 0; }
+  thead th { color: var(--muted); background: #131d27; font-weight: 700; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .section td { padding: 8px 11px; background: #1c2a37; color: #a9bbca; font-weight: 800; }
+  .winner { background: #14243a; }
+  .experimental { background: #171d22; }
+  .rkllm { background: #221b1b; }
+  .a311 { color: var(--blue); font-weight: 800; }
+  .rk { color: var(--orange); font-weight: 800; }
+  .rocket { color: var(--purple); font-weight: 800; }
+  .good { color: var(--green); font-weight: 750; }
+  .bad { color: var(--red); font-weight: 750; }
+  .warn { color: var(--yellow); font-weight: 750; }
+  .best { color: var(--blue); font-weight: 850; }
+  .tag { display: inline-block; margin-left: 6px; padding: 1px 5px; border: 1px solid #415264; border-radius: 5px; color: #aab8c6; font-size: 10px; vertical-align: 1px; }
+  .tag.new { border-color: #9b5c37; color: #ffad71; }
+  .foot { margin-top: 15px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--muted); font-size: 13px; }
+  .foot b { color: var(--text); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Whisper large-v3-turbo — RK3588 全部实测</h1>
+  <p class="sub">A311Y3 NPU 对照 · 同一模型 large-v3-turbo · 同一段 std30.wav · encoder 均为固定 30 秒窗口 · 更新 2026-08-22</p>
+
+  <div class="cards">
+    <div class="card"><b>1,921 ms</b><span>A311Y3 NPU w4a16<br>原表最快且识别成功</span></div>
+    <div class="card"><b>8,725 ms</b><span>RK3588 最快正确 encoder<br>专有 RKNPU2 FP16 LLMC</span></div>
+    <div class="card"><b>16.485 s</b><span>RK3588 最快正确端到端<br>Rocket FP16 LLMC</span></div>
+    <div class="card"><b>26.213 s</b><span>自研 W4 最快端到端<br>三 NPU encoder + Mali GPU decoder</span></div>
+  </div>
+  <div class="banner"><b>结论：</b> A311Y3 的 1.921 s encoder 仍明显领先。RK3588 专有 FP16 LLMC 的正确 encoder 为 8.725 s（慢 4.5×）；自研 packed-W4 GPU hybrid 把 decoder 降至 4.267 s，但 encoder 仍需 21.717 s，因此端到端为 26.213 s。</div>
+  <div class="banner warning"><b>新增 RKLLM W8A8：</b> native baseline / LLMC 中位数分别为 12.208 / 12.146 s 端到端，三颗 NPU core 都被观测到；但两者都把同一个逗号 token 重复 128 次，识别失败。官方精度优先 level-1 与 level-0 导出字节完全相同；未修改的 RKLLM 1.3.0 还会在 all-no-RoPE position buffer 上断言，因此这些时间仅是失败路径的执行记录，不是可用成绩。</div>
+
+  <h2>encoder / 30 秒窗口 + std30.wav 端到端</h2>
+  <div class="table-wrap">
+  <table>
+    <colgroup><col class="platform"><col class="execution"><col class="quant"><col class="encoder"><col class="relative"><col class="e2e"><col class="quality"></colgroup>
+    <thead><tr><th>平台</th><th>计算方式</th><th>量化</th><th class="num">encoder</th><th class="num">vs A311Y3</th><th class="num">端到端</th><th>识别 / 结论</th></tr></thead>
+    <tbody>
+      <tr class="section"><td colspan="7">原图数据（五行原值完整保留）</td></tr>
+      <tr><td class="a311">A311Y3</td><td>NPU（ADLA3，1 核 4T INT8） <span class="tag">原表</span></td><td>w4a16</td><td class="num good">1,921 ms</td><td class="num">基准（最快）</td><td class="num">—</td><td class="good">✅ 正确，5.03% WER</td></tr>
+      <tr><td class="rk">RK3588</td><td>NPU（RKNNPU2，单核可用） <span class="tag">原表</span></td><td>i8</td><td class="num">7,623 ms</td><td class="num warn">4.0× 慢</td><td class="num">—</td><td class="bad">❌ 识别失败（量化崩溃，decoder 第 2 步停）</td></tr>
+      <tr><td class="rk">RK3588</td><td>NPU（不量化） <span class="tag">原表</span></td><td>fp</td><td class="num">12,008 ms</td><td class="num">6.3× 慢</td><td class="num">—</td><td class="good">✅ 正确（decoder 60 步）</td></tr>
+      <tr><td class="rocket">RK3588</td><td><b>CPU（4×A76+4×A55，8 核满载 98.2%）</b> <span class="tag">原表</span></td><td>q5</td><td class="num bad">48,671 ms</td><td class="num bad">25× 慢</td><td class="num">—</td><td class="good">✅ 正确</td></tr>
+      <tr><td class="rocket">RK3588</td><td>CPU（4 核，对照） <span class="tag">原表</span></td><td>q5</td><td class="num">56,470 ms</td><td class="num">29× 慢</td><td class="num">—</td><td class="good">✅ 正确</td></tr>
+
+      <tr class="section"><td colspan="7">追加：专有 RKNPU2 FP16 与自研 W4 系统路径</td></tr>
+      <tr><td class="rk">RK3588</td><td>专有 RKNPU2 baseline · Python host orchestration</td><td>FP16</td><td class="num">12,840 ms</td><td class="num">6.7× 慢</td><td class="num">45.774 s</td><td class="good">✅ 正确，77 tokens</td></tr>
+      <tr class="winner"><td class="rk">RK3588</td><td><b>专有 RKNPU2 LLMC · native C++ zero-copy</b></td><td>FP16</td><td class="num best">8,725 ms</td><td class="num"><b>4.5× 慢</b></td><td class="num best">17.933 s</td><td class="good">✅ 与 fresh baseline 完全一致</td></tr>
+      <tr><td class="rk">RK3588</td><td>自研 C++ baseline · CPU W4→FP16 + 三 NPU N-shard</td><td>W4 group-32<br>FP16 NPU MatMul</td><td class="num">67,177 ms</td><td class="num">35.0× 慢</td><td class="num">283.728 s</td><td class="good">✅ 正确，87 tokens；三核均启用</td></tr>
+      <tr><td class="rk">RK3588</td><td>自研 C++ LLMC · resident FP16 B + 三 NPU N-shard</td><td>W4 group-32<br>FP16 NPU MatMul</td><td class="num">66,512 ms</td><td class="num">34.6× 慢</td><td class="num">79.596 s</td><td class="good">✅ 与自研 baseline token 完全一致</td></tr>
+      <tr><td class="rk">RK3588</td><td>AOT v3 baseline · 固定 Core0/1/2 worker</td><td>W4 tiled storage<br>FP16 NPU MatMul</td><td class="num">34,930 ms</td><td class="num">18.2× 慢</td><td class="num">161.158 s</td><td class="good">✅ 正确，87 tokens；三核均启用</td></tr>
+      <tr><td class="rk">RK3588</td><td>AOT v3 LLMC · 三 worker + static-head scheduler</td><td>W4 tiled storage<br>FP16 NPU MatMul</td><td class="num">21,796 ms</td><td class="num">11.3× 慢</td><td class="num">42.480 s</td><td class="good">✅ 三次中位数；token 完全一致</td></tr>
+      <tr class="winner"><td class="rk">RK3588</td><td><b>Hybrid · 三 NPU encoder + Mali-G610 packed-W4 decoder</b></td><td><b>W4 group-32<br>GPU 直接读 INT4</b></td><td class="num best">21,717 ms</td><td class="num"><b>11.3× 慢</b></td><td class="num best">26.213 s</td><td class="good">✅ 三次中位数；87-token 完全一致</td></tr>
+
+      <tr class="section"><td colspan="7">新增：RKLLM 1.3.0 decoder W8A8（encoder 仍为 FP16 RKNPU2）</td></tr>
+      <tr class="rkllm"><td class="rk">RK3588</td><td>RKLLM native baseline · host-copy + 单 token prefix <span class="tag new">新增</span></td><td>decoder W8A8<br>3 NPU cores</td><td class="num">9,119 ms</td><td class="num">4.7× 慢</td><td class="num">12.208 s</td><td class="bad">❌ 逗号重复 128×；需 no-RoPE 兼容补丁</td></tr>
+      <tr class="rkllm"><td class="rk">RK3588</td><td><b>RKLLM LLMC native C++ · zero-copy + prefix batch</b> <span class="tag new">新增</span></td><td>decoder W8A8<br>3 NPU cores</td><td class="num">8,989 ms</td><td class="num">4.7× 慢</td><td class="num">12.146 s</td><td class="bad">❌ 同样失败；三核均观测到；不可部署</td></tr>
+
+      <tr class="section"><td colspan="7">追加：Rocket 路径 · PDF 五种量化（baseline 与 LLMC）</td></tr>
+      <tr><td class="rocket">RK3588</td><td>Rocket baseline</td><td>FP16</td><td class="num">17,929 ms</td><td class="num">9.3× 慢</td><td class="num">26.047 s</td><td class="good">✅ 完整；归一化词序列一致</td></tr>
+      <tr class="winner"><td class="rocket">RK3588</td><td><b>Rocket LLMC</b></td><td>FP16</td><td class="num">12,413 ms</td><td class="num">6.5× 慢</td><td class="num best">16.485 s</td><td class="good">✅ 完整；归一化词序列一致</td></tr>
+      <tr><td class="rocket">RK3588</td><td>Rocket baseline</td><td>q8_0</td><td class="num">18,627 ms</td><td class="num">9.7× 慢</td><td class="num">24.899 s</td><td class="good">✅ 完整；归一化词序列一致</td></tr>
+      <tr><td class="rocket">RK3588</td><td>Rocket LLMC</td><td>q8_0</td><td class="num">13,318 ms</td><td class="num">6.9× 慢</td><td class="num">17.222 s</td><td class="good">✅ 完整；归一化词序列一致</td></tr>
+      <tr><td class="rocket">RK3588</td><td>Rocket baseline</td><td>q5_0</td><td class="num">18,127 ms</td><td class="num">9.4× 慢</td><td class="num">23.264 s</td><td class="good">✅ 完整；归一化词序列一致</td></tr>
+      <tr><td class="rocket">RK3588</td><td>Rocket LLMC</td><td>q5_0</td><td class="num">13,521 ms</td><td class="num">7.0× 慢</td><td class="num">18.454 s</td><td class="good">✅ 完整；归一化词序列一致</td></tr>
+      <tr><td class="rocket">RK3588</td><td>Rocket baseline</td><td>q4_K</td><td class="num">17,389 ms</td><td class="num">9.1× 慢</td><td class="num">21.521 s</td><td class="good">✅ 完整；归一化词序列一致</td></tr>
+      <tr><td class="rocket">RK3588</td><td>Rocket LLMC</td><td>q4_K</td><td class="num">13,699 ms</td><td class="num">7.1× 慢</td><td class="num">17.345 s</td><td class="good">✅ 词相同；引号标点不同</td></tr>
+      <tr><td class="rocket">RK3588</td><td>Rocket baseline</td><td>q4_0</td><td class="num">19,113 ms</td><td class="num">9.9× 慢</td><td class="num">24.895 s</td><td class="good">✅ 完整；归一化词序列一致</td></tr>
+      <tr><td class="rocket">RK3588</td><td>Rocket LLMC</td><td>q4_0</td><td class="num">13,886 ms</td><td class="num">7.2× 慢</td><td class="num">18.457 s</td><td class="good">✅ 完整；归一化词序列一致</td></tr>
+
+      <tr class="section"><td colspan="7">追加：Mali-G610 调度实验（均正确，但未采用）与原生 W4A16 能力探针</td></tr>
+      <tr class="experimental"><td class="rk">RK3588</td><td>实验：全部 W4 linear 在 GPU，attention 在 NPU</td><td>W4 group-32</td><td class="num">42,967 ms</td><td class="num">22.4× 慢</td><td class="num">51.118 s</td><td class="warn">✅ 87-token 一致；encoder 太慢，未采用</td></tr>
+      <tr class="experimental"><td class="rk">RK3588</td><td>实验：NPU encoder linear，encoder/decoder attention 均在 GPU</td><td>W4 group-32</td><td class="num">33,044 ms</td><td class="num">17.2× 慢</td><td class="num">41.127 s</td><td class="warn">✅ 87-token 一致；encoder PV 太慢，未采用</td></tr>
+      <tr class="experimental"><td class="rk">RK3588</td><td>实验：Hybrid linear（shape-split 优化前）</td><td>W4 group-32</td><td class="num">21,746 ms</td><td class="num">11.3× 慢</td><td class="num">29.853 s</td><td class="warn">✅ 87-token 一致；被 26.213 s 版本取代</td></tr>
+      <tr><td>RK3588</td><td>专有 RKNPU2 baseline 能力探针</td><td>原生 w4a16<br>group 32</td><td class="num">不支持</td><td class="num">—</td><td class="num">未运行</td><td class="bad">rknn_matmul_create = -5；未发生 NPU dispatch</td></tr>
+      <tr><td>RK3588</td><td>专有 RKNPU2 LLMC native C++ 能力探针</td><td>原生 w4a16<br>group 32</td><td class="num">不支持</td><td class="num">—</td><td class="num">未运行</td><td class="bad">同一平台拒绝；NPU Core0/1/2 = 0/0/0%</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="foot"><b>口径：</b> encoder 为 Whisper 固定 30 秒窗口；端到端数据使用同一段 27.27 秒 <b>std30.wav</b>，不含模型加载。原图五行的 encoder、相对倍数与识别结论保持原样，原图未提供的端到端仍以“—”表示。不同 runtime/量化路径不冒充同一算子实现；失败或不支持的路径只报告实测失败边界，不伪造可用成绩。</div>
+</main>
+</body>
+</html>

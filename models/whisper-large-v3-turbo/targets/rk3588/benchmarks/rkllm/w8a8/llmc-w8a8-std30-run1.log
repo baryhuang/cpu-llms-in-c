@@ -1,0 +1,69 @@
+benchmark_run: 1
+runtime_sha256: 6524cf2b2196433aef7b42c891d0f4224986a22c9467882956619ec1d863d4e8
+I rkllm: rkllm-runtime version: 1.3.0, rknpu driver version: 0.9.8, platform: RK3588
+I rkllm: loading rkllm model from decoder-w8a8-3core.rkllm
+I rkllm: rkllm-toolkit version: 1.3.0, max_context_limit: 2048, npu_core_num: 3, target_platform: RK3588, model_dtype: W8A8
+I rkllm: Model has no tokenizer, but tokenizer_callback is provided, so it will be used for tokenization.
+I rkllm: Enabled cpus: [4, 5, 6, 7]
+I rkllm: Enabled cpus num: 4
+implementation: llmc-native-cpp
+quantization: w8a8
+rkllm_npu_cores: 3
+rkllm_runtime_compatibility: skip-unused-no-rope-position-copy
+audio_seconds: 27.270
+generated_tokens: 128
+unique_generated_tokens: 1
+recognition_status: failed-degenerate-output
+model_init_ms: 1985.41
+preprocess_ms: 80.07
+encoder_ms: 9059.55
+decoder_ms: 2644.97
+decoder_calls: 129
+avg_decoder_call_ms: 20.50
+end_to_end_ms: 12145.65
+cross_cache_elements: 15360000
+position_embedding: native-callback
+decode_mode: get-logits-greedy
+npu_load_source: /sys/kernel/debug/rknpu/load
+npu_load_sample_interval_ms: 10
+npu_load_status: sampled
+npu_encoder_load_samples: 883
+npu_encoder_core0_avg_load_pct: 87.41
+npu_encoder_core0_max_load_pct: 99
+npu_encoder_core1_avg_load_pct: 21.92
+npu_encoder_core1_max_load_pct: 28
+npu_encoder_core2_avg_load_pct: 21.92
+npu_encoder_core2_max_load_pct: 28
+npu_decoder_load_samples: 295
+npu_decoder_core0_avg_load_pct: 43.33
+npu_decoder_core0_max_load_pct: 85
+npu_decoder_core1_avg_load_pct: 24.16
+npu_decoder_core1_max_load_pct: 28
+npu_decoder_core2_avg_load_pct: 24.50
+npu_decoder_core2_max_load_pct: 28
+npu_observed_active_cores: 3
+text:
+, , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , , ,
+	Command being timed: "./whisper_rkllm_llmc /root/whisper-rknpu2/turbo-rknn2/encoder_with_kv.rknn decoder-w8a8-3core.rkllm runtime_aux.bin /root/whisper-rknpu2/turbo-rknn2/vocab.json /root/whisper-rknpu2/turbo-rknn2/std30.wav"
+	User time (seconds): 9.85
+	System time (seconds): 3.34
+	Percent of CPU this job got: 77%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:17.00
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2054224
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 2
+	Minor (reclaiming a frame) page faults: 118757
+	Voluntary context switches: 12529
+	Involuntary context switches: 272
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

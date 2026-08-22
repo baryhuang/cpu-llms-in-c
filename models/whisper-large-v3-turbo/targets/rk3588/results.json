@@ -27,6 +27,14 @@
     },
     "rknn_model_zoo": {
       "revision": "bad6c7334531becaf90a561988519b7bec34d0ab"
+    },
+    "rkllm": {
+      "version": "1.3.0",
+      "repository": "airockchip/rknn-llm",
+      "revision": "878f9361",
+      "quantization": "W8A8",
+      "npu_cores": 3,
+      "runtime_sha256": "6a9e4fc5324c68921c3a900340361e107af7599fe34dc8fa7759b2c5ae22a6e6"
     }
   },
   "audio": {
@@ -50,6 +58,17 @@
       "sha256": "663b2200922115a4a94a3f582a14b6b920af229d20075fa006e6c67dd76082e6",
       "self_kv": "2 x float16 [1,4,20,448,64]",
       "logits": "float16 [1,1,51866]"
+    },
+    "rkllm_decoder_w8a8": {
+      "file": "decoder-w8a8-3core.rkllm",
+      "bytes": 297423548,
+      "sha256": "2268bb1776a2c9e7d91e3c30db910e7cad8646ccd5081b5f68ef562090444c4c",
+      "toolkit": "RKLLM 1.3.0 custom model",
+      "optimization_level": 1,
+      "npu_cores": 3,
+      "max_context": 2048,
+      "runtime_aux_bytes": 134131332,
+      "runtime_aux_sha256": "fed1d7fcc865734a79e83a35605e7a04ddd917b590381aabf1202a4b008d094b"
     }
   },
   "quantization_matrix": {
@@ -115,6 +134,73 @@
     "repeat_policy": "one baseline; three adjacent best-profile LLMC runs of the same std30.wav; report the LLMC median"
   },
   "runs": {
+    "rkllm_w8a8": {
+      "date": "2026-08-22",
+      "scope": "same std30.wav, same 3-core W8A8 RKLLM model, native C++ in both arms",
+      "export_gate": "official accuracy-priority optimization_level=1 produced the same 297423548-byte SHA-256 2268bb17...44c4c model as the preliminary level-0 export",
+      "official_runtime_gate": {
+        "status": "failed before the first decoder result",
+        "error": "RKLLM_ASSERT(buf != NULL && tensor buffer not set)",
+        "cause": "RKLLM 1.3.0 copies an implicit self-attention position tensor even when every custom decoder layer is declared no-RoPE and the tensor has no allocated buffer",
+        "record": "benchmarks/rkllm/w8a8/official-runtime-failure.log"
+      },
+      "compatibility_patch": {
+        "scope": "replace only the unused position-copy call with one AArch64 NOP; the no-RoPE graph never consumes this tensor",
+        "file_offset": "0x1c96a0",
+        "original_runtime_sha256": "6a9e4fc5324c68921c3a900340361e107af7599fe34dc8fa7759b2c5ae22a6e6",
+        "patched_runtime_sha256": "6524cf2b2196433aef7b42c891d0f4224986a22c9467882956619ec1d863d4e8",
+        "reproducer": "native/rkllm_no_rope_patch.cc"
+      },
+      "baseline_median": {
+        "runner": "native C++ official RKLLM API; host-copy encoder output; one-token prefix calls",
+        "generated_tokens": 128,
+        "unique_generated_tokens": 1,
+        "recognition_status": "failed-degenerate-output",
+        "decoder_calls": 132,
+        "encoder_ms": 9119.16,
+        "decoder_ms": 2635.22,
+        "avg_decoder_call_ms": 19.96,
+        "e2e_ms": 12207.84,
+        "peak_rss_kib": 2151620,
+        "active_npu_cores": 3,
+        "encoder_npu_avg_load_percent": [87.43, 21.07, 21.07],
+        "decoder_npu_avg_load_percent": [40.40, 23.55, 23.55]
+      },
+      "baseline_trials": [
+        {"encoder_ms": 9084.60, "decoder_ms": 2635.22, "e2e_ms": 12161.63, "peak_rss_kib": 2151620},
+        {"encoder_ms": 9240.13, "decoder_ms": 2622.61, "e2e_ms": 12291.53, "peak_rss_kib": 2151604},
+        {"encoder_ms": 9119.16, "decoder_ms": 2659.25, "e2e_ms": 12207.84, "peak_rss_kib": 2151620}
+      ],
+      "llmc_median": {
+        "runner": "native C++ LLMC; zero-copy encoder; persistent buffers; four-prefix-token batch; Cortex-A76 affinity",
+        "generated_tokens": 128,
+        "unique_generated_tokens": 1,
+        "recognition_status": "failed-degenerate-output",
+        "decoder_calls": 129,
+        "encoder_ms": 8988.71,
+        "decoder_ms": 2644.97,
+        "avg_decoder_call_ms": 20.50,
+        "e2e_ms": 12145.65,
+        "peak_rss_kib": 2054232,
+        "active_npu_cores": 3,
+        "encoder_npu_avg_load_percent": [87.41, 21.92, 21.92],
+        "decoder_npu_avg_load_percent": [43.33, 24.16, 24.50]
+      },
+      "llmc_trials": [
+        {"encoder_ms": 9059.55, "decoder_ms": 2644.97, "e2e_ms": 12145.65, "peak_rss_kib": 2054224},
+        {"encoder_ms": 8988.71, "decoder_ms": 2728.61, "e2e_ms": 12183.11, "peak_rss_kib": 2054232},
+        {"encoder_ms": 8973.13, "decoder_ms": 2637.88, "e2e_ms": 12039.91, "peak_rss_kib": 2054232}
+      ],
+      "gains": {
+        "encoder_speedup": 1.0145,
+        "encoder_reduction_percent": 1.4305,
+        "decoder_slowdown_percent": 0.3700,
+        "e2e_speedup": 1.0051,
+        "e2e_reduction_percent": 0.5094,
+        "peak_rss_reduction_percent": 4.5263
+      },
+      "quality": "not deployable: both arms emitted the same comma token 128 times and never reached EOT; timing is retained only as an execution-performance record"
+    },
     "rknpu2_fp16": {
       "baseline": {
         "runner": "Python community runner",
@@ -420,6 +506,11 @@
     "opencl_w4a16_matmul_gates": "benchmarks/opencl/w4a16/final/matmul-shapes.log",
     "opencl_environment": "benchmarks/opencl/w4a16/final/device-environment.log",
     "opencl_rejected_schedules": "benchmarks/opencl/w4a16/experiments/",
+    "rkllm_w8a8_trials": "benchmarks/rkllm/w8a8/*-w8a8-std30-run*.log",
+    "rkllm_w8a8_official_runtime_failure": "benchmarks/rkllm/w8a8/official-runtime-failure.log",
+    "rkllm_w8a8_environment": "benchmarks/rkllm/w8a8/device-environment.log",
+    "rkllm_w8a8_accuracy_priority_export": "benchmarks/rkllm/w8a8/toolkit-export-optimization-level1.log",
+    "rkllm_w8a8_accuracy_priority_validation": "benchmarks/rkllm/w8a8/llmc-w8a8-level1-validation.log",
     "native_source": "native/whisper_rknpu2_llmc.cc",
     "native_tuned_runner": "native/run_std30_tuned.sh"
   }

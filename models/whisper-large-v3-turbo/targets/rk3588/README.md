@@ -32,6 +32,54 @@ The best-profile LLMC end-to-end trials are 17.933, 17.957 and 17.901
 seconds. Their median values are reported above rather than selecting the
 fastest run.
 
+## RKLLM 1.3.0 W8A8 decoder experiment
+
+An appended 2026-08-22 experiment uses the official RKLLM 1.3.0 custom-model
+converter and runtime for the four-layer Whisper decoder. The fixed
+30-second encoder remains the same FP16 RKNPU2 graph; `W8A8` therefore labels
+the RKLLM decoder, not the encoder. Both measured arms are target-side C++ and
+have no Python runtime dependency. They use the same 297,423,548-byte model,
+the same cross-attention cache, all three declared NPU cores and the same
+`std30.wav`.
+
+The final export uses the official accuracy-priority
+`optimization_level=1`. It is byte-identical to the preliminary level-0
+export (297,423,548 bytes, SHA-256 `2268bb17…44c4c`), and a separate level-1
+device validation reproduces the same degenerate output.
+
+| Metric | Native RKLLM baseline median | Native C++ LLMC median | Change |
+|---|---:|---:|---:|
+| Encoder / fixed 30 s | 9.119 s | **8.989 s** | 1.0145× |
+| RKLLM decoder / 128 generated steps | **2.635 s** | 2.645 s | 0.37% slower |
+| End to end | 12.208 s | **12.146 s** | 1.0051× |
+| Peak RSS | 2,151,620 KiB | **2,054,232 KiB** | 4.53% lower |
+| Prefix calls + generated-token calls | 132 | **129** | four prefix tokens batched |
+| Recognition | failed: one comma token repeated 128 times | same failure | not deployable |
+
+The three baseline end-to-end trials are 12.162, 12.292 and 12.208 seconds;
+the LLMC trials are 12.146, 12.183 and 12.040 seconds. Core0/1/2 were all
+observed active. In the median LLMC encoder record their average loads are
+87.41/21.92/21.92%; in the decoder they are 43.33/24.16/24.50%. This confirms
+three-core dispatch, although work remains strongly concentrated on Core0.
+
+The unmodified 1.3.0 runtime cannot execute this valid all-no-RoPE custom
+decoder: its first decoder call asserts while copying an implicit
+`position_ids` tensor whose buffer is intentionally absent. The official
+runtime failure is retained as a separate gate. Formal timing uses a pinned,
+four-byte compatibility patch that replaces only that unused copy call with
+one AArch64 NOP; the original runtime is preserved. The patcher verifies the
+expected instruction before writing a separate library. Original and patched
+runtime SHA-256 values are `6a9e4fc…22a6e6` and `6524cf2b…63d4e8`.
+
+The compatibility patch makes the graph executable but does not repair W8A8
+accuracy. Both paths deterministically emit the same degenerate output, so
+these timings are recorded as a negative capability/performance result and
+must not be presented as a usable Whisper transcription. Raw trials and the
+unmodified-runtime assertion are under [`benchmarks/rkllm/w8a8/`](benchmarks/rkllm/w8a8/).
+The target runner is [`native/whisper_rkllm_w8a8.cc`](native/whisper_rkllm_w8a8.cc),
+and the pinned compatibility utility is
+[`native/rkllm_no_rope_patch.cc`](native/rkllm_no_rope_patch.cc).
+
 ## PDF quantization variants
 
 The requested labels are GGML weight formats. They are not interchangeable
