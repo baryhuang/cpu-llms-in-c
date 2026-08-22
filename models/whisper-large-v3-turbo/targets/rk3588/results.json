@@ -279,6 +279,84 @@
         "e2e_slowdown_versus_fused_fp16": 2.369
       },
       "quality": "baseline and all three LLMC trials produced identical 87-token sequences"
+    },
+    "opencl_w4a16_hybrid": {
+      "status": "current appended GPU result; every earlier NPU and CPU measurement remains unchanged",
+      "scope": {
+        "encoder_linear": "AOT W4 expanded once to resident FP16; RKNPU2 Core0/Core1/Core2",
+        "encoder_attention": "RKNPU2 fixed head round-robin across three cores",
+        "decoder_linear": "Mali-G610 directly reads packed INT4 N32/K32 weights with FP16 activations and FP32 accumulation",
+        "decoder_attention": "Mali-G610 QK, in-place softmax and PV OpenCL kernels",
+        "target_python": false
+      },
+      "opencl_environment": {
+        "platform": "ARM Platform OpenCL 3.0 v1.g24p0-00eac0",
+        "device": "Mali-G610 r0p0",
+        "compute_units": 4,
+        "maximum_clock_hz": 1000000000,
+        "fp16_extension": "cl_khr_fp16",
+        "kernel_ddk": "g25p0-00eac0",
+        "userspace_blob": "libmali Valhall G610 g24p0-00eac0; proprietary and not committed",
+        "userspace_blob_sha256": "07cc993b13d6591161b0a12a270c75e06f25d56437016c6fbff8ea36e47c6614"
+      },
+      "runtime": {
+        "language": "native C++17 plus embedded OpenCL C; no target Python",
+        "linear_scheduler": "static by scope and shape; encoder=NPU, decoder N<=5120=four-way K split, decoder vocab=eight outputs per work-item",
+        "attention_scheduler": "encoder=NPU; decoder=three OpenCL kernels",
+        "shape_plans": 9,
+        "prepared_weights": 243,
+        "resident_weight_bytes": 1402378240,
+        "w4_linear_runs": 3172,
+        "encoder_npu_attention_matmul_runs": 1280,
+        "attention_blocks": 752,
+        "decoder_gpu_attention_blocks": 720
+      },
+      "matmul_gates": [
+        {"shape_mkn": [1, 1280, 1280], "loops": 100, "kernel_mean_ms": 0.440614, "kernel_median_ms": 0.440581, "max_abs_error": 0.00000918, "correctness": "passed"},
+        {"shape_mkn": [1, 1280, 5120], "loops": 100, "kernel_mean_ms": 1.506494, "kernel_median_ms": 1.527666, "max_abs_error": 0.00002345, "correctness": "passed"},
+        {"shape_mkn": [1, 5120, 1280], "loops": 100, "kernel_mean_ms": 1.729201, "kernel_median_ms": 1.727489, "max_abs_error": 0.00002201, "correctness": "passed"},
+        {"shape_mkn": [1, 1280, 51904], "loops": 100, "kernel_mean_ms": 8.445812, "kernel_median_ms": 8.423296, "max_abs_error": 0.00002687, "correctness": "passed"}
+      ],
+      "llmc_median": {
+        "encoder_ms": 21716.948,
+        "decoder_total_ms": 4267.066,
+        "avg_decoder_step_ms": 47.412,
+        "e2e_ms": 26213.291,
+        "decoder_w4_linear_wall_ms": 3093.564,
+        "decoder_attention_wall_ms": 1138.889,
+        "gpu_w4_kernel_ms": 2748.392,
+        "gpu_attention_qk_ms": 386.496,
+        "gpu_attention_softmax_ms": 12.710,
+        "gpu_attention_pv_ms": 336.157,
+        "peak_rss_kib": 2373996,
+        "gpu_decoder_avg_load_percent": 49.83,
+        "gpu_decoder_max_load_percent": 100,
+        "gpu_decoder_max_frequency_hz": 1000000000,
+        "npu_encoder_avg_load_percent": [24.69, 24.36, 23.61],
+        "active_npu_cores": 3,
+        "generated_tokens": 87,
+        "decoder_steps": 90
+      },
+      "llmc_trials": [
+        {"encoder_ms": 21716.948, "decoder_total_ms": 4267.066, "avg_decoder_step_ms": 47.412, "e2e_ms": 26213.291, "peak_rss_kib": 2375680},
+        {"encoder_ms": 21750.715, "decoder_total_ms": 4271.347, "avg_decoder_step_ms": 47.459, "e2e_ms": 26251.938, "peak_rss_kib": 2373088},
+        {"encoder_ms": 21702.329, "decoder_total_ms": 4256.834, "avg_decoder_step_ms": 47.298, "e2e_ms": 26189.167, "peak_rss_kib": 2373996}
+      ],
+      "gains_versus_three_npu_aot_v3": {
+        "encoder_speedup": 1.004,
+        "decoder_speedup": 4.859,
+        "decoder_step_speedup": 4.859,
+        "decoder_linear_speedup": 5.823,
+        "decoder_attention_speedup": 2.357,
+        "e2e_speedup": 1.621,
+        "e2e_reduction_percent": 38.292,
+        "e2e_slowdown_versus_fused_fp16": 1.462
+      },
+      "rejected_schedules": [
+        {"schedule": "all W4 linear on GPU, NPU attention", "encoder_ms": 42967.351, "e2e_ms": 51118.072, "decision": "reject: encoder batched W4 slower than three-NPU AOT"},
+        {"schedule": "NPU encoder linear, GPU attention for encoder and decoder", "encoder_ms": 33043.678, "e2e_ms": 41126.937, "decision": "reject: encoder PV kernel consumed 16149.896 ms"}
+      ],
+      "quality": "all three formal trials and rejected-schedule trials emitted the exact same 87-token sequence as the AOT v3 baseline"
     }
   },
   "tuning": {
@@ -338,6 +416,10 @@
     "w4_aot_v3_thread_stress": "benchmarks/rknpu2/w4a16/aot-v3/matmul-v3-final-thread-stress.log",
     "w4_aot_v3_baseline": "benchmarks/rknpu2/w4a16/aot-v3/std30-w4aot-v3-final-baseline.log",
     "w4_aot_v3_llmc_trials": "benchmarks/rknpu2/w4a16/aot-v3/std30-w4aot-v3-final-llmc*.log",
+    "opencl_w4a16_hybrid_trials": "benchmarks/opencl/w4a16/final/std30-hybrid-run*.log",
+    "opencl_w4a16_matmul_gates": "benchmarks/opencl/w4a16/final/matmul-shapes.log",
+    "opencl_environment": "benchmarks/opencl/w4a16/final/device-environment.log",
+    "opencl_rejected_schedules": "benchmarks/opencl/w4a16/experiments/",
     "native_source": "native/whisper_rknpu2_llmc.cc",
     "native_tuned_runner": "native/run_std30_tuned.sh"
   }

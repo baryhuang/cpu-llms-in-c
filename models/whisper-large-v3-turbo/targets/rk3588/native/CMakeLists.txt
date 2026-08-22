@@ -64,6 +64,49 @@ set_target_properties(w4a16_matmul_smoke PROPERTIES
   INSTALL_RPATH "$ORIGIN/../lib"
 )
 
+find_package(OpenCL QUIET)
+if(OpenCL_FOUND)
+  add_executable(opencl_w4a16_smoke
+    opencl_w4a16_smoke.cc
+    opencl_w4a16.cc
+    w4a16_model.cc
+  )
+  target_compile_options(opencl_w4a16_smoke PRIVATE -O3 -DNDEBUG)
+  target_link_libraries(opencl_w4a16_smoke PRIVATE OpenCL::OpenCL pthread)
+
+  add_executable(whisper_opencl_w4a16
+    whisper_rknpu2_w4a16.cc
+    opencl_attention.cc
+    opencl_w4a16.cc
+    static_npu_scheduler.cc
+    w4a16_matmul.cc
+    w4a16_model.cc
+    pcm16_wav.cc
+  )
+  target_compile_definitions(whisper_opencl_w4a16 PRIVATE
+    LLMC_OPENCL_ENABLED=1
+    LLMC_DEFAULT_HYBRID_LINEAR=1
+    LLMC_DEFAULT_HYBRID_ATTENTION=1
+  )
+  target_include_directories(whisper_opencl_w4a16 PRIVATE
+    "${RKNN_INCLUDE}"
+    "${RKNN_MODEL_ZOO_ROOT}/3rdparty/fftw/include"
+  )
+  target_compile_options(whisper_opencl_w4a16 PRIVATE -O3 -DNDEBUG)
+  target_link_libraries(whisper_opencl_w4a16 PRIVATE
+    OpenCL::OpenCL
+    "${RKNN_LIBRARY}"
+    "${FFTW3F_STATIC_LIBRARY}"
+    m
+    pthread
+    dl
+  )
+  set_target_properties(whisper_opencl_w4a16 PROPERTIES
+    BUILD_RPATH "$ORIGIN/../lib"
+    INSTALL_RPATH "$ORIGIN/../lib"
+  )
+endif()
+
 add_executable(whisper_rknpu2_w4a16
   whisper_rknpu2_w4a16.cc
   static_npu_scheduler.cc

@@ -23,6 +23,10 @@
 #include "pcm16_wav.h"
 #include "w4a16_matmul.h"
 #include "w4a16_model.h"
+#ifdef LLMC_OPENCL_ENABLED
+#include "opencl_attention.h"
+#include "opencl_w4a16.h"
+#endif
 
 namespace {
 
@@ -53,6 +57,15 @@ constexpr float kLayerNormEpsilon = 1.0e-5f;
 constexpr float kAttentionScale = 0.125f; // 1 / sqrt(64)
 
 using Clock = std::chrono::steady_clock;
+
+#ifdef LLMC_OPENCL_ENABLED
+using OpenClContextPointer = llmc::OpenClW4Context *;
+#else
+using OpenClContextPointer = void *;
+#endif
+
+enum class LinearBackend { kNpu, kGpu, kHybrid };
+enum class AttentionBackend { kNpu, kGpu, kHybrid };
 
 double elapsed_ms(Clock::time_point begin, Clock::time_point end) {
   return std::chrono::duration<double, std::milli>(end - begin).count();
@@ -238,6 +251,103 @@ private:
   std::array<Stats, 2> stats_{};
 };
 
+class GpuLoadMonitor {
+public:
+  enum class Stage : int { kIdle, kEncoder, kDecoder };
+
+  ~GpuLoadMonitor() { stop(); }
+
+  void start() {
+    if (running_.exchange(true))
+      return;
+    worker_ = std::thread([this] { loop(); });
+  }
+
+  void stage(Stage stage) {
+    stage_.store(static_cast<int>(stage), std::memory_order_release);
+  }
+
+  void stop() {
+    if (!running_.exchange(false))
+      return;
+    if (worker_.joinable())
+      worker_.join();
+  }
+
+  void print() const {
+    std::printf(
+        "gpu_load_source: "
+        "/sys/devices/platform/fb000000.gpu/devfreq/fb000000.gpu/load\n");
+    std::printf("gpu_load_sample_interval_ms: 5\n");
+    if (!available_) {
+      std::printf("gpu_load_status: unavailable\n");
+      return;
+    }
+    std::printf("gpu_load_status: sampled\n");
+    print_stage("encoder", stats_[0]);
+    print_stage("decoder", stats_[1]);
+  }
+
+private:
+  struct Stats {
+    uint64_t samples = 0;
+    uint64_t load_sum = 0;
+    int maximum_load = 0;
+    uint64_t maximum_frequency = 0;
+  };
+
+  static void print_stage(const char *name, const Stats &stats) {
+    const double average =
+        stats.samples == 0
+            ? 0.0
+            : static_cast<double>(stats.load_sum) / stats.samples;
+    std::printf("gpu_%s_load_samples: %llu\n", name,
+                static_cast<unsigned long long>(stats.samples));
+    std::printf("gpu_%s_avg_load_pct: %.2f\n", name, average);
+    std::printf("gpu_%s_max_load_pct: %d\n", name, stats.maximum_load);
+    std::printf("gpu_%s_max_frequency_hz: %llu\n", name,
+                static_cast<unsigned long long>(stats.maximum_frequency));
+  }
+
+  void loop() {
+    constexpr const char *kRoot =
+        "/sys/devices/platform/fb000000.gpu/devfreq/fb000000.gpu/";
+    while (running_.load(std::memory_order_acquire)) {
+      std::ifstream load_input(std::string(kRoot) + "load");
+      std::string load_text;
+      load_input >> load_text;
+      char *load_end = nullptr;
+      const long load = std::strtol(load_text.c_str(), &load_end, 10);
+      std::ifstream frequency_input(std::string(kRoot) + "cur_freq");
+      uint64_t frequency = 0;
+      frequency_input >> frequency;
+      if (load_end != load_text.c_str() && load >= 0 && load <= 100 &&
+          frequency_input) {
+        available_ = true;
+        const int stage = stage_.load(std::memory_order_acquire);
+        if (stage == static_cast<int>(Stage::kEncoder) ||
+            stage == static_cast<int>(Stage::kDecoder)) {
+          Stats &stats =
+              stats_[stage == static_cast<int>(Stage::kEncoder) ? 0 : 1];
+          ++stats.samples;
+          stats.load_sum += static_cast<uint64_t>(load);
+          stats.maximum_load =
+              std::max(stats.maximum_load, static_cast<int>(load));
+          stats.maximum_frequency =
+              std::max(stats.maximum_frequency, frequency);
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+
+  std::atomic<bool> running_{false};
+  std::atomic<int> stage_{static_cast<int>(Stage::kIdle)};
+  std::thread worker_;
+  bool available_ = false;
+  std::array<Stats, 2> stats_{};
+};
+
 double hz_to_mel(double hz) {
   constexpr double kSpacing = 200.0 / 3.0;
   constexpr double kMinLogHz = 1000.0;
@@ -351,32 +461,92 @@ class LinearExecutor {
 public:
   LinearExecutor(const llmc::W4Model &encoder, const llmc::W4Model &decoder,
                  llmc::W4RunMode mode,
-                 std::vector<rknn_core_mask> core_masks)
+                 std::vector<rknn_core_mask> core_masks,
+                 OpenClContextPointer opencl_context, LinearBackend backend)
       : encoder_(encoder), decoder_(decoder), mode_(mode),
-        core_masks_(std::move(core_masks)) {}
+        core_masks_(std::move(core_masks)), opencl_context_(opencl_context),
+        backend_(backend) {
+    if (backend_ != LinearBackend::kNpu && opencl_context_ == nullptr)
+      throw std::runtime_error("GPU linear backend is unavailable");
+  }
 
   void encoder(const std::string &weight_name, const llmc_float16 *input,
                llmc_float16 *output, int rows,
                const std::string &bias_name = std::string()) {
-    run(encoder_, nullptr, weight_name, input, output, rows, bias_name);
+    run(encoder_, true, weight_name, input, output, rows, bias_name);
   }
 
   void decoder(const std::string &weight_name, const llmc_float16 *input,
                llmc_float16 *output,
                const std::string &bias_name = std::string()) {
-    run(decoder_, nullptr, weight_name, input, output, 1, bias_name);
+    run(decoder_, false, weight_name, input, output, 1, bias_name);
   }
 
   uint64_t runs() const { return runs_; }
   uint64_t baseline_weight_uploads() const { return baseline_weight_uploads_; }
   uint64_t aot_weight_bytes() const { return aot_weight_bytes_; }
-  size_t aot_plan_count() const { return aot_plans_.size(); }
-  size_t aot_weight_count() const { return aot_weights_.size(); }
+  size_t aot_plan_count() const {
+#ifdef LLMC_OPENCL_ENABLED
+    if (backend_ == LinearBackend::kGpu)
+      return gpu_plans_.size();
+    if (backend_ == LinearBackend::kHybrid)
+      return aot_plans_.size() + gpu_plans_.size();
+#endif
+    return aot_plans_.size();
+  }
+  size_t aot_weight_count() const {
+#ifdef LLMC_OPENCL_ENABLED
+    if (backend_ == LinearBackend::kGpu)
+      return gpu_weights_.size();
+    if (backend_ == LinearBackend::kHybrid)
+      return aot_weights_.size() + gpu_weights_.size();
+#endif
+    return aot_weights_.size();
+  }
   double wall_ms() const { return wall_ms_; }
+  bool uses_gpu() const { return backend_ != LinearBackend::kNpu; }
+  double gpu_kernel_ms() const {
+#ifdef LLMC_OPENCL_ENABLED
+    double result = 0.0;
+    for (const auto &pair : gpu_plans_)
+      result += pair.second->metrics().kernel_ms;
+    return result;
+#else
+    return 0.0;
+#endif
+  }
+  double gpu_transfer_ms() const {
+#ifdef LLMC_OPENCL_ENABLED
+    double result = 0.0;
+    for (const auto &pair : gpu_plans_)
+      result += pair.second->metrics().transfer_ms;
+    return result;
+#else
+    return 0.0;
+#endif
+  }
 
   void prepare() {
+    if (backend_ == LinearBackend::kGpu) {
+#ifdef LLMC_OPENCL_ENABLED
+      prepare_gpu_model(encoder_, true);
+      prepare_gpu_model(decoder_, false);
+      return;
+#else
+      throw std::runtime_error("binary was built without OpenCL support");
+#endif
+    }
     if (mode_ != llmc::W4RunMode::kLlmc)
       return;
+    if (backend_ == LinearBackend::kHybrid) {
+      prepare_model(encoder_, true);
+#ifdef LLMC_OPENCL_ENABLED
+      prepare_gpu_model(decoder_, false);
+      return;
+#else
+      throw std::runtime_error("binary was built without OpenCL support");
+#endif
+    }
     prepare_model(encoder_, true);
     prepare_model(decoder_, false);
   }
@@ -406,6 +576,44 @@ private:
     llmc::AotW4LinearPlan *plan = nullptr;
     std::unique_ptr<llmc::AotW4LinearPlan::Weight> weight;
   };
+
+#ifdef LLMC_OPENCL_ENABLED
+  struct PreparedGpuLinear {
+    llmc::OpenClW4LinearPlan *plan = nullptr;
+    std::unique_ptr<llmc::OpenClW4LinearPlan::Weight> weight;
+  };
+
+  void prepare_gpu_model(const llmc::W4Model &model, bool encoder_scope) {
+    for (const auto &pair : model.tensors()) {
+      const auto &tensor = pair.second;
+      if (!llmc::is_w4_encoding(tensor.encoding) ||
+          gpu_weights_.find(pair.first) != gpu_weights_.end()) {
+        continue;
+      }
+      int rows = 1;
+      if (encoder_scope) {
+        rows = pair.first == "model.encoder.conv1.weight" ? kFrames
+                                                           : kEncoderFrames;
+      }
+      const PlanShape shape{rows, static_cast<int>(tensor.shape[1]),
+                            static_cast<int>(tensor.shape[0])};
+      auto plan = gpu_plans_.find(shape);
+      if (plan == gpu_plans_.end()) {
+        plan = gpu_plans_
+                   .emplace(shape,
+                            std::make_unique<llmc::OpenClW4LinearPlan>(
+                                *opencl_context_, shape.rows,
+                                shape.input_columns, shape.output_columns))
+                   .first;
+      }
+      auto weight = plan->second->prepare(tensor);
+      aot_weight_bytes_ += weight->bytes();
+      gpu_weights_.emplace(
+          pair.first,
+          PreparedGpuLinear{plan->second.get(), std::move(weight)});
+    }
+  }
+#endif
 
   void prepare_model(const llmc::W4Model &model, bool encoder_scope) {
     for (const auto &pair : model.tensors()) {
@@ -437,12 +645,28 @@ private:
     }
   }
 
-  void run(const llmc::W4Model &model, void *,
+  void run(const llmc::W4Model &model, bool encoder_scope,
            const std::string &weight_name, const llmc_float16 *input,
            llmc_float16 *output, int rows, const std::string &bias_name) {
     const auto begin = Clock::now();
     int output_columns = 0;
-    if (mode_ == llmc::W4RunMode::kLlmc) {
+    const bool use_gpu = backend_ == LinearBackend::kGpu ||
+                         (backend_ == LinearBackend::kHybrid &&
+                          !encoder_scope);
+    if (use_gpu) {
+#ifdef LLMC_OPENCL_ENABLED
+      const auto found = gpu_weights_.find(weight_name);
+      if (found == gpu_weights_.end())
+        throw std::runtime_error("missing GPU W4 linear: " + weight_name);
+      if (found->second.plan->rows() != static_cast<size_t>(rows))
+        throw std::runtime_error("GPU W4 row mismatch: " + weight_name);
+      found->second.plan->run(*found->second.weight, input, output);
+      output_columns =
+          static_cast<int>(found->second.plan->output_columns());
+#else
+      throw std::runtime_error("binary was built without OpenCL support");
+#endif
+    } else if (mode_ == llmc::W4RunMode::kLlmc) {
       const auto found = aot_weights_.find(weight_name);
       if (found == aot_weights_.end())
         throw std::runtime_error("missing AOT W4 linear: " + weight_name);
@@ -469,12 +693,20 @@ private:
   const llmc::W4Model &decoder_;
   llmc::W4RunMode mode_;
   std::vector<rknn_core_mask> core_masks_;
+  OpenClContextPointer opencl_context_ = nullptr;
+  LinearBackend backend_ = LinearBackend::kNpu;
   // Member destruction is reverse declaration order: weights release their
   // B buffers through the owning plans before the plans destroy A/C contexts.
   std::unordered_map<PlanShape, std::unique_ptr<llmc::AotW4LinearPlan>,
                      PlanShapeHash>
       aot_plans_;
   std::unordered_map<std::string, PreparedLinear> aot_weights_;
+#ifdef LLMC_OPENCL_ENABLED
+  std::unordered_map<PlanShape, std::unique_ptr<llmc::OpenClW4LinearPlan>,
+                     PlanShapeHash>
+      gpu_plans_;
+  std::unordered_map<std::string, PreparedGpuLinear> gpu_weights_;
+#endif
   uint64_t aot_weight_bytes_ = 0;
   uint64_t runs_ = 0;
   uint64_t baseline_weight_uploads_ = 0;
@@ -483,17 +715,38 @@ private:
 
 class AttentionExecutor {
 public:
-  explicit AttentionExecutor(std::vector<rknn_core_mask> core_masks)
+  explicit AttentionExecutor(std::vector<rknn_core_mask> core_masks,
+                             OpenClContextPointer opencl_context,
+                             AttentionBackend backend)
       : scheduler_(llmc::static_npu_scheduler()),
         encoder_qk_(kEncoderFrames, kHead, kEncoderPaddedFrames, core_masks),
         encoder_pv_(kEncoderFrames, kEncoderPaddedFrames, kHead, core_masks),
         decoder_self_qk_(1, kHead, kDecoderPositions, core_masks),
         decoder_self_pv_(1, kDecoderPositions, kHead, core_masks),
         decoder_cross_qk_(1, kHead, kEncoderPaddedFrames, core_masks),
-        decoder_cross_pv_(1, kEncoderPaddedFrames, kHead, core_masks) {}
+        decoder_cross_pv_(1, kEncoderPaddedFrames, kHead, core_masks),
+        backend_(backend) {
+    if (backend_ != AttentionBackend::kNpu) {
+#ifdef LLMC_OPENCL_ENABLED
+      if (opencl_context == nullptr)
+        throw std::runtime_error("GPU attention backend is unavailable");
+      opencl_ = std::make_unique<llmc::OpenClAttention>(*opencl_context);
+#else
+      throw std::runtime_error("binary was built without OpenCL support");
+#endif
+    }
+  }
 
   void encoder(const llmc_float16 *query, const llmc_float16 *key,
                const llmc_float16 *value, llmc_float16 *output) {
+    if (backend_ == AttentionBackend::kGpu) {
+#ifdef LLMC_OPENCL_ENABLED
+      opencl_->run(query, key, value, output, kEncoderFrames, kEncoderFrames,
+                   kEncoderFrames, false);
+      ++dispatches_;
+      return;
+#endif
+    }
     run(query, key, value, output, kEncoderFrames, kEncoderFrames,
         kEncoderPaddedFrames, false, encoder_qk_, encoder_pv_);
   }
@@ -501,19 +754,70 @@ public:
   void decoder_self(const llmc_float16 *query, const llmc_float16 *key,
                     const llmc_float16 *value, int valid_positions,
                     llmc_float16 *output) {
+    if (backend_ != AttentionBackend::kNpu) {
+#ifdef LLMC_OPENCL_ENABLED
+      opencl_->run(query, key, value, output, 1, valid_positions,
+                   kDecoderPositions, false);
+      ++dispatches_;
+      return;
+#endif
+    }
     run(query, key, value, output, 1, valid_positions, kDecoderPositions,
         false, decoder_self_qk_, decoder_self_pv_);
   }
 
   void decoder_cross(const llmc_float16 *query, const llmc_float16 *key,
                      const llmc_float16 *value, llmc_float16 *output) {
+    if (backend_ != AttentionBackend::kNpu) {
+#ifdef LLMC_OPENCL_ENABLED
+      opencl_->run(query, key, value, output, 1, kEncoderFrames,
+                   kEncoderPaddedFrames, true);
+      ++dispatches_;
+      return;
+#endif
+    }
     run(query, key, value, output, 1, kEncoderFrames, kEncoderPaddedFrames,
         true, decoder_cross_qk_, decoder_cross_pv_);
   }
 
   uint64_t runs() const { return runs_; }
   uint64_t dispatches() const { return dispatches_; }
-  double wall_ms() const { return wall_ms_; }
+  double wall_ms() const {
+#ifdef LLMC_OPENCL_ENABLED
+    if (backend_ != AttentionBackend::kNpu)
+      return wall_ms_ + opencl_->metrics().wall_ms;
+#endif
+    return wall_ms_;
+  }
+  bool uses_gpu() const { return backend_ != AttentionBackend::kNpu; }
+  double gpu_qk_ms() const {
+#ifdef LLMC_OPENCL_ENABLED
+    return uses_gpu() ? opencl_->metrics().qk_ms : 0.0;
+#else
+    return 0.0;
+#endif
+  }
+  double gpu_softmax_ms() const {
+#ifdef LLMC_OPENCL_ENABLED
+    return uses_gpu() ? opencl_->metrics().softmax_ms : 0.0;
+#else
+    return 0.0;
+#endif
+  }
+  double gpu_pv_ms() const {
+#ifdef LLMC_OPENCL_ENABLED
+    return uses_gpu() ? opencl_->metrics().pv_ms : 0.0;
+#else
+    return 0.0;
+#endif
+  }
+  double gpu_transfer_ms() const {
+#ifdef LLMC_OPENCL_ENABLED
+    return uses_gpu() ? opencl_->metrics().transfer_ms : 0.0;
+#else
+    return 0.0;
+#endif
+  }
 
 private:
   struct Scratch {
@@ -675,6 +979,10 @@ private:
   llmc::WorkerF16Matmul decoder_self_pv_;
   llmc::WorkerF16Matmul decoder_cross_qk_;
   llmc::WorkerF16Matmul decoder_cross_pv_;
+#ifdef LLMC_OPENCL_ENABLED
+  std::unique_ptr<llmc::OpenClAttention> opencl_;
+#endif
+  AttentionBackend backend_ = AttentionBackend::kNpu;
   std::array<Scratch, llmc::StaticNpuScheduler::kWorkerCount> scratch_;
   uint64_t runs_ = 0;
   uint64_t dispatches_ = 0;
@@ -1239,33 +1547,86 @@ std::vector<std::string> load_vocabulary(const char *path) {
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc < 6 || argc > 8) {
+  if (argc < 6 || (argc - 6) % 2 != 0) {
     std::fprintf(stderr,
                  "usage: %s ENCODER.llmc DECODER.llmc vocab.json AUDIO.wav "
-                 "baseline|llmc [--npu-scheduler parallel3]\n",
+                 "baseline|llmc [--npu-scheduler parallel3] "
+                 "[--linear-backend npu|gpu|hybrid] "
+                 "[--attention-backend npu|gpu|hybrid]\n",
                  argv[0]);
     return 2;
   }
   try {
     const char *scheduler_text = "parallel3";
-    if (argc == 8) {
-      if (std::strcmp(argv[6], "--npu-scheduler") != 0) {
-        throw std::runtime_error("expected --npu-scheduler");
+#ifdef LLMC_DEFAULT_HYBRID_LINEAR
+    const char *linear_backend_text = "hybrid";
+#elif defined(LLMC_DEFAULT_GPU_LINEAR)
+    const char *linear_backend_text = "gpu";
+#else
+    const char *linear_backend_text = "npu";
+#endif
+#ifdef LLMC_DEFAULT_HYBRID_ATTENTION
+    const char *attention_backend_text = "hybrid";
+#else
+    const char *attention_backend_text = "npu";
+#endif
+    for (int index = 6; index < argc; index += 2) {
+      if (std::strcmp(argv[index], "--npu-scheduler") == 0) {
+        scheduler_text = argv[index + 1];
+      } else if (std::strcmp(argv[index], "--linear-backend") == 0) {
+        linear_backend_text = argv[index + 1];
+      } else if (std::strcmp(argv[index], "--attention-backend") == 0) {
+        attention_backend_text = argv[index + 1];
+      } else {
+        throw std::runtime_error(std::string("unknown option: ") +
+                                 argv[index]);
       }
-      scheduler_text = argv[7];
-    } else if (argc == 7) {
-      throw std::runtime_error("--npu-scheduler requires a value");
     }
     if (std::strcmp(scheduler_text, "parallel3") != 0)
       throw std::runtime_error("Whisper runtime requires parallel3 scheduler");
+    LinearBackend linear_backend = LinearBackend::kNpu;
+    if (std::strcmp(linear_backend_text, "gpu") == 0)
+      linear_backend = LinearBackend::kGpu;
+    else if (std::strcmp(linear_backend_text, "hybrid") == 0)
+      linear_backend = LinearBackend::kHybrid;
+    else if (std::strcmp(linear_backend_text, "npu") != 0)
+      throw std::runtime_error("linear backend must be npu, gpu or hybrid");
+    const bool gpu_backend = linear_backend != LinearBackend::kNpu;
+    AttentionBackend attention_backend = AttentionBackend::kNpu;
+    if (std::strcmp(attention_backend_text, "gpu") == 0)
+      attention_backend = AttentionBackend::kGpu;
+    else if (std::strcmp(attention_backend_text, "hybrid") == 0)
+      attention_backend = AttentionBackend::kHybrid;
+    else if (std::strcmp(attention_backend_text, "npu") != 0)
+      throw std::runtime_error(
+          "attention backend must be npu, gpu or hybrid");
+    const bool gpu_attention =
+        attention_backend != AttentionBackend::kNpu;
+    const bool opencl_used = gpu_backend || gpu_attention;
+#ifndef LLMC_OPENCL_ENABLED
+    if (opencl_used)
+      throw std::runtime_error("binary was built without OpenCL support");
+#endif
     const auto mode = llmc::parse_run_mode(argv[5]);
+    if (opencl_used && mode != llmc::W4RunMode::kLlmc)
+      throw std::runtime_error("GPU backends require llmc mode");
     const auto core_masks = llmc::parallel_npu_core_masks();
     const auto init_begin = Clock::now();
     llmc::W4Model encoder_model(argv[1]);
     llmc::W4Model decoder_model(argv[2]);
     const auto vocabulary = load_vocabulary(argv[3]);
-    LinearExecutor linear(encoder_model, decoder_model, mode, core_masks);
-    AttentionExecutor attention(core_masks);
+#ifdef LLMC_OPENCL_ENABLED
+    std::unique_ptr<llmc::OpenClW4Context> opencl_context;
+    if (opencl_used)
+      opencl_context = std::make_unique<llmc::OpenClW4Context>();
+    OpenClContextPointer opencl_pointer = opencl_context.get();
+#else
+    OpenClContextPointer opencl_pointer = nullptr;
+#endif
+    LinearExecutor linear(encoder_model, decoder_model, mode, core_masks,
+                          opencl_pointer, linear_backend);
+    AttentionExecutor attention(core_masks, opencl_pointer,
+                                attention_backend);
     CrossCache cross;
     EncoderWorkspace encoder_workspace;
     Decoder decoder(decoder_model, linear, attention, cross);
@@ -1283,6 +1644,11 @@ int main(int argc, char **argv) {
     NpuLoadMonitor monitor;
     monitor.start();
     monitor.stage(NpuLoadMonitor::Stage::kEncoder);
+    GpuLoadMonitor gpu_monitor;
+    if (opencl_used) {
+      gpu_monitor.start();
+      gpu_monitor.stage(GpuLoadMonitor::Stage::kEncoder);
+    }
     const auto encoder_begin = Clock::now();
     run_encoder(features, encoder_model, linear, attention, cross,
                 encoder_workspace);
@@ -1290,6 +1656,8 @@ int main(int argc, char **argv) {
     const double encoder_linear_wall_ms = linear.wall_ms();
     const double encoder_attention_wall_ms = attention.wall_ms();
     monitor.stage(NpuLoadMonitor::Stage::kDecoder);
+    if (opencl_used)
+      gpu_monitor.stage(GpuLoadMonitor::Stage::kDecoder);
     std::vector<int> tokens = {kSot, kEnglish, kTranscribe, kNoTimestamps};
     tokens.reserve(kMaxNewTokens + 4);
     std::vector<double> decoder_steps;
@@ -1314,6 +1682,10 @@ int main(int argc, char **argv) {
     const auto inference_end = Clock::now();
     monitor.stage(NpuLoadMonitor::Stage::kIdle);
     monitor.stop();
+    if (opencl_used) {
+      gpu_monitor.stage(GpuLoadMonitor::Stage::kIdle);
+      gpu_monitor.stop();
+    }
 
     std::string text;
     for (int token : tokens) {
@@ -1330,8 +1702,30 @@ int main(int argc, char **argv) {
     double decoder_total = 0.0;
     for (double value : decoder_steps)
       decoder_total += value;
-    std::printf("runtime: llmc-native-cpp-aot-w4-rknpu2-fp16-matmul\n");
-    std::printf("quantization: cpu-w4-group32-to-npu-fp16\n");
+    std::printf("runtime: %s\n",
+                gpu_attention && linear_backend == LinearBackend::kHybrid
+                    ? "llmc-native-cpp-npu-encoder-opencl-w4-decoder-attention"
+                : linear_backend == LinearBackend::kGpu
+                    ? "llmc-native-cpp-opencl-packed-w4-linear-rknpu2-attention"
+                : linear_backend == LinearBackend::kHybrid
+                    ? "llmc-native-cpp-npu-encoder-opencl-w4-decoder"
+                    : "llmc-native-cpp-aot-w4-rknpu2-fp16-matmul");
+    std::printf("quantization: %s\n",
+                linear_backend == LinearBackend::kGpu
+                    ? "gpu-packed-w4-group32-fp16-activation"
+                : linear_backend == LinearBackend::kHybrid
+                    ? "npu-expanded-fp16-encoder-gpu-packed-w4-decoder"
+                    : "cpu-w4-group32-to-npu-fp16");
+    std::printf("linear_backend: %s\n", linear_backend_text);
+    std::printf("attention_backend: %s\n", attention_backend_text);
+#ifdef LLMC_OPENCL_ENABLED
+    if (opencl_used) {
+      std::printf("gpu_device: %s\n",
+                  opencl_context->device_name().c_str());
+      std::printf("gpu_compute_units: %u\n",
+                  opencl_context->compute_units());
+    }
+#endif
     std::printf("mode: %s\n", llmc::run_mode_name(mode));
     std::printf("audio_seconds: %.3f\n", audio_seconds);
     std::printf("model_init_ms: %.3f\n", elapsed_ms(init_begin, init_end));
@@ -1360,7 +1754,19 @@ int main(int argc, char **argv) {
     std::printf("aot_resident_weight_bytes: %llu\n",
                 static_cast<unsigned long long>(linear.aot_weight_bytes()));
     std::printf("w4_linear_wall_ms: %.3f\n", linear.wall_ms());
+    if (gpu_backend) {
+      std::printf("gpu_w4_kernel_ms: %.3f\n", linear.gpu_kernel_ms());
+      std::printf("gpu_w4_transfer_ms: %.3f\n", linear.gpu_transfer_ms());
+    }
     std::printf("attention_wall_ms: %.3f\n", attention.wall_ms());
+    if (gpu_attention) {
+      std::printf("gpu_attention_qk_ms: %.3f\n", attention.gpu_qk_ms());
+      std::printf("gpu_attention_softmax_ms: %.3f\n",
+                  attention.gpu_softmax_ms());
+      std::printf("gpu_attention_pv_ms: %.3f\n", attention.gpu_pv_ms());
+      std::printf("gpu_attention_transfer_ms: %.3f\n",
+                  attention.gpu_transfer_ms());
+    }
     std::printf("encoder_w4_linear_wall_ms: %.3f\n",
                 encoder_linear_wall_ms);
     std::printf("decoder_w4_linear_wall_ms: %.3f\n",
@@ -1371,10 +1777,17 @@ int main(int argc, char **argv) {
                 attention.wall_ms() - encoder_attention_wall_ms);
     std::printf("npu_scheduler: %s\n", scheduler_text);
     std::printf("npu_sharding: output-columns-N-aligned32\n");
-    std::printf("attention_scheduler: static-head-round-robin-Core0-Core1-Core2\n");
+    std::printf("attention_scheduler: %s\n",
+                attention_backend == AttentionBackend::kGpu
+                    ? "opencl-qk-softmax-pv-three-kernel"
+                : attention_backend == AttentionBackend::kHybrid
+                    ? "encoder-NPU-static-head-decoder-OpenCL-three-kernel"
+                    : "static-head-round-robin-Core0-Core1-Core2");
     std::printf("npu_worker_model: one-persistent-thread-per-core\n");
     std::printf("npu_configured_cores: 3\n");
     monitor.print();
+    if (opencl_used)
+      gpu_monitor.print();
     std::printf("token_ids:");
     for (int token : tokens)
       std::printf(" %d", token);

@@ -1,0 +1,88 @@
+arm_release_ver: g24p0-00eac0, rk_so_ver: 10
+sample[0]: gpu=-0.00338364 cpu=-0.00338373 abs_error=0.00000010
+sample[1]: gpu=0.02580261 cpu=0.02580992 abs_error=0.00000731
+sample[31]: gpu=-0.00935364 cpu=-0.00935393 abs_error=0.00000030
+sample[32]: gpu=-0.02706909 cpu=-0.02707633 abs_error=0.00000724
+sample[127]: gpu=-0.05911255 cpu=-0.05912172 abs_error=0.00000918
+sample[1279]: gpu=-0.11163330 cpu=-0.11163797 abs_error=0.00000467
+runtime: llmc-native-cpp-opencl-w4a16
+device: Mali-G610 r0p0
+gpu_compute_units: 4
+tensor: model.decoder.layers.0.self_attn.q_proj.weight
+shape: M=1 K=1280 N=1280
+weight_storage: packed-int4-n32-k32 (1024000 bytes)
+loops: 100
+kernel_ms: mean=0.440614 median=0.440581 max=0.446685
+wall_ms: mean=0.835700 median=0.848739 max=1.237816
+transfer_ms_total: 0.588863
+gpu_load_max_raw: 100
+gpu_frequency_max_hz: 1000000000
+max_abs_error: 0.00000918
+max_relative_error: 0.00028311
+correctness: passed
+arm_release_ver: g24p0-00eac0, rk_so_ver: 10
+sample[0]: gpu=0.02381897 cpu=0.02382068 abs_error=0.00000171
+sample[1]: gpu=0.10449219 cpu=0.10451564 abs_error=0.00002345
+sample[31]: gpu=-0.00033855 cpu=-0.00033844 abs_error=0.00000011
+sample[32]: gpu=0.10205078 cpu=0.10204461 abs_error=0.00000617
+sample[127]: gpu=0.03366089 cpu=0.03365717 abs_error=0.00000372
+sample[5119]: gpu=0.09057617 cpu=0.09056522 abs_error=0.00001095
+runtime: llmc-native-cpp-opencl-w4a16
+device: Mali-G610 r0p0
+gpu_compute_units: 4
+tensor: model.decoder.layers.0.fc1.weight
+shape: M=1 K=1280 N=5120
+weight_storage: packed-int4-n32-k32 (4096000 bytes)
+loops: 100
+kernel_ms: mean=1.506494 median=1.527666 max=1.566571
+wall_ms: mean=2.140669 median=2.166471 max=2.505383
+transfer_ms_total: 1.118540
+gpu_load_max_raw: 100
+gpu_frequency_max_hz: 1000000000
+max_abs_error: 0.00002345
+max_relative_error: 0.00032626
+correctness: passed
+arm_release_ver: g24p0-00eac0, rk_so_ver: 10
+sample[0]: gpu=0.09002686 cpu=0.09004458 abs_error=0.00001772
+sample[1]: gpu=0.00431061 cpu=0.00431163 abs_error=0.00000102
+sample[31]: gpu=-0.05599976 cpu=-0.05599878 abs_error=0.00000098
+sample[32]: gpu=-0.01971436 cpu=-0.01971670 abs_error=0.00000235
+sample[127]: gpu=0.00806427 cpu=0.00806208 abs_error=0.00000219
+sample[1279]: gpu=0.06768799 cpu=0.06766598 abs_error=0.00002201
+runtime: llmc-native-cpp-opencl-w4a16
+device: Mali-G610 r0p0
+gpu_compute_units: 4
+tensor: model.decoder.layers.0.fc2.weight
+shape: M=1 K=5120 N=1280
+weight_storage: packed-int4-n32-k32 (4096000 bytes)
+loops: 100
+kernel_ms: mean=1.729201 median=1.727489 max=1.750214
+wall_ms: mean=2.387596 median=2.439176 max=2.741047
+transfer_ms_total: 1.095208
+gpu_load_max_raw: 100
+gpu_frequency_max_hz: 1000000000
+max_abs_error: 0.00002201
+max_relative_error: 0.00032526
+correctness: passed
+arm_release_ver: g24p0-00eac0, rk_so_ver: 10
+sample[0]: gpu=-0.07696533 cpu=-0.07694928 abs_error=0.00001606
+sample[1]: gpu=0.05572510 cpu=0.05572007 abs_error=0.00000503
+sample[31]: gpu=-0.09338379 cpu=-0.09335692 abs_error=0.00002687
+sample[32]: gpu=-0.07312012 cpu=-0.07312309 abs_error=0.00000297
+sample[127]: gpu=-0.10540771 cpu=-0.10541163 abs_error=0.00000391
+sample[51903]: gpu=0.00000000 cpu=0.00000000 abs_error=0.00000000
+runtime: llmc-native-cpp-opencl-w4a16
+device: Mali-G610 r0p0
+gpu_compute_units: 4
+tensor: model.proj_out.weight
+shape: M=1 K=1280 N=51904
+weight_storage: packed-int4-n32-k32 (41523200 bytes)
+loops: 100
+kernel_ms: mean=8.445812 median=8.423296 max=8.603474
+wall_ms: mean=9.211170 median=9.203710 max=9.582872
+transfer_ms_total: 3.539675
+gpu_load_max_raw: 100
+gpu_frequency_max_hz: 1000000000
+max_abs_error: 0.00002687
+max_relative_error: 0.00028779
+correctness: passed

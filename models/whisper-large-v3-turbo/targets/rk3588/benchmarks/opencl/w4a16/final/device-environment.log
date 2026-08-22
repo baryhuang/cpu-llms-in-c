@@ -1,0 +1,97 @@
+Linux caremojo-hub-84f8f312 6.1.115-vendor-rk35xx #1 SMP Wed Jul 15 20:32:36 UTC 2026 aarch64 GNU/Linux
+rknpu_driver=RKNPU driver: v0.9.8
+[   17.125459] mali fb000000.gpu: Kernel DDK version g25p0-00eac0
+mali_driver=../../../bus/platform/drivers/mali
+07cc993b13d6591161b0a12a270c75e06f25d56437016c6fbff8ea36e47c6614  /root/whisper-gpu-test/lib/libmali.so
+arm_release_ver: g24p0-00eac0, rk_so_ver: 10
+Platform #0: ARM Platform
+ `-- Device #0: Mali-G610 r0p0
+  Platform Name                                   ARM Platform
+  Platform Vendor                                 ARM
+  Platform Version                                OpenCL 3.0 v1.g24p0-00eac0.4cf0d9a201426e6528cb6858fb807aa7
+  Platform Profile                                FULL_PROFILE
+  Platform Extensions                             cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_byte_addressable_store cl_khr_3d_image_writes cl_khr_int64_base_atomics cl_khr_int64_extended_atomics cl_khr_fp16 cl_khr_icd cl_khr_egl_image cl_khr_image2d_from_buffer cl_khr_depth_images cl_khr_subgroups cl_khr_subgroup_extended_types cl_khr_subgroup_non_uniform_vote cl_khr_subgroup_ballot cl_khr_subgroup_non_uniform_arithmetic cl_khr_subgroup_shuffle cl_khr_subgroup_shuffle_relative cl_khr_subgroup_clustered_reduce cl_khr_subgroup_rotate cl_khr_il_program cl_khr_priority_hints cl_khr_create_command_queue cl_khr_spirv_no_integer_wrap_decoration cl_khr_extended_versioning cl_khr_device_uuid cl_khr_suggested_local_work_size cl_khr_extended_bit_ops cl_khr_integer_dot_product cl_khr_semaphore cl_khr_external_semaphore cl_khr_external_semaphore_sync_fd cl_khr_external_memory cl_khr_external_memory_dma_buf cl_khr_command_buffer cl_khr_command_buffer_mutable_dispatch cl_arm_core_id cl_arm_printf cl_arm_non_uniform_work_group_size cl_arm_import_memory cl_arm_import_memory_dma_buf cl_arm_import_memory_host cl_arm_integer_dot_product_int8 cl_arm_integer_dot_product_accumulate_int8 cl_arm_integer_dot_product_accumulate_saturate_int8 cl_arm_scheduling_controls cl_arm_controlled_kernel_termination cl_ext_cxx_for_opencl cl_ext_image_tiling_control cl_ext_image_requirements_info cl_ext_image_from_buffer cl_ext_yuv_images cl_ext_image_raw10_raw12 cl_ext_image_drm_format_modifier
+  Platform Extensions with Version                cl_khr_global_int32_base_atomics                                 0x400000 (1.0.0)
+                                                  cl_khr_global_int32_extended_atomics                             0x400000 (1.0.0)
+                                                  cl_khr_local_int32_base_atomics                                  0x400000 (1.0.0)
+                                                  cl_khr_local_int32_extended_atomics                              0x400000 (1.0.0)
+                                                  cl_khr_byte_addressable_store                                    0x400000 (1.0.0)
+                                                  cl_khr_3d_image_writes                                           0x400000 (1.0.0)
+--
+  Platform Name                                   ARM Platform
+Number of devices                                 1
+  Device Name                                     Mali-G610 r0p0
+  Device Vendor                                   ARM
+  Device Vendor ID                                0x13b5
+  Device Version                                  OpenCL 3.0 v1.g24p0-00eac0.4cf0d9a201426e6528cb6858fb807aa7
+  Device UUID                                     000067a8-0100-0000-0000-000000000000
+  Driver UUID                                     f1d726b6-9fab-35d5-6e6e-bfd860c6f67d
+  Valid Device LUID                               No
+  Device LUID                                     0000-000000000000
+  Device Node Mask                                0
+  Device Numeric Version                          0xc00000 (3.0.0)
+  Driver Version                                  3.0
+  Device OpenCL C Version                         OpenCL C 3.0 v1.g24p0-00eac0.4cf0d9a201426e6528cb6858fb807aa7
+  Device OpenCL C Numeric Version                 0xc00000 (3.0.0)
+  Device OpenCL C all versions                    OpenCL C                                                         0x400000 (1.0.0)
+                                                  OpenCL C                                                         0x401000 (1.1.0)
+                                                  OpenCL C                                                         0x402000 (1.2.0)
+                                                  OpenCL C                                                         0x800000 (2.0.0)
+                                                  OpenCL C                                                         0xc00000 (3.0.0)
+  Device OpenCL C features                        __opencl_c_images                                                0x400000 (1.0.0)
+--
+  Max compute units                               4
+  Available core IDs (ARM)                        0, 2, 16, 18
+  Max clock frequency                             1000MHz
+  Device Partition                                (core)
+    Max number of sub-devices                     0
+    Supported partition types                     None
+    Supported affinity domains                    (n/a)
+  Max work item dimensions                        3
+  Max work item sizes                             1024x1024x1024
+  Max work group size                             1024
+  Preferred work group size multiple (device)     16
+--
+  Preferred / native vector sizes
+    char                                                16 / 4
+    short                                                8 / 2
+    int                                                  4 / 1
+    long                                                 2 / 1
+    half                                                 8 / 2        (cl_khr_fp16)
+    float                                                4 / 1
+    double                                               0 / 0        (n/a)
+  Half-precision Floating-point support           (cl_khr_fp16)
+    Denormals                                     Yes
+    Infinity and NANs                             Yes
+    Round to nearest                              Yes
+    Round to zero                                 Yes
+    Round to infinity                             Yes
+--
+    Platform Name                                 ARM Platform
+    Device Name                                   Mali-G610 r0p0
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_CPU)  No devices found in platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_GPU)  Success (1)
+    Platform Name                                 ARM Platform
+    Device Name                                   Mali-G610 r0p0
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_ACCELERATOR)  No devices found in platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_CUSTOM)  No devices found in platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_ALL)  Success (1)
+    Platform Name                                 ARM Platform
+    Device Name                                   Mali-G610 r0p0
+
+ICD loader properties
+  ICD loader Name                                 OpenCL ICD Loader
+  ICD loader Vendor                               OCL Icd free software
+  ICD loader Version                              2.3.3
+  ICD loader Profile                              OpenCL 3.0
+	linux-vdso.so.1 (0x0000ffff83811000)
+	librknnrt.so => /root/whisper-w4aot-v3/lib/librknnrt.so (0x0000ffff83010000)
+	libOpenCL.so.1 => /lib/aarch64-linux-gnu/libOpenCL.so.1 (0x0000ffff82fd0000)
+	libfftw3f.so.3 => /lib/aarch64-linux-gnu/libfftw3f.so.3 (0x0000ffff82e80000)
+	libstdc++.so.6 => /lib/aarch64-linux-gnu/libstdc++.so.6 (0x0000ffff82c10000)
+	libm.so.6 => /lib/aarch64-linux-gnu/libm.so.6 (0x0000ffff82b60000)
+	libgcc_s.so.1 => /lib/aarch64-linux-gnu/libgcc_s.so.1 (0x0000ffff82b20000)
+	libc.so.6 => /lib/aarch64-linux-gnu/libc.so.6 (0x0000ffff82960000)
+	libpthread.so.0 => /lib/aarch64-linux-gnu/libpthread.so.0 (0x0000ffff82930000)
+	libdl.so.2 => /lib/aarch64-linux-gnu/libdl.so.2 (0x0000ffff82900000)
+	/lib/ld-linux-aarch64.so.1 (0x0000ffff837d4000)

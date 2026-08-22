@@ -177,6 +177,69 @@ fused FP16 graph because RK3588 cannot fuse runtime W4 weights into that graph.
 Raw records are under
 [`benchmarks/rknpu2/w4a16/aot-v3/`](benchmarks/rknpu2/w4a16/aot-v3/).
 
+### Mali-G610 packed-W4 decoder hybrid
+
+The appended GPU path is native C++/OpenCL and directly consumes the same v3
+N32/K32 packed INT4 records; decoder weights are not expanded on the CPU or
+presented to the GPU as FP16. Static scope selection keeps the measured winner
+for each stage:
+
+- encoder W4 linear and attention stay on the three RKNPU2 cores;
+- decoder W4 linear runs on all four Mali-G610 compute units;
+- decoder attention is three fixed OpenCL kernels: QK, in-place softmax and PV;
+- `M=1,N<=5120` uses a four-way K-split reduction, while the 51,904-column
+  vocabulary projection uses an eight-output work-item;
+- nine shape plans share A/C buffers. Encoder expanded FP16 NPU weights plus
+  decoder packed GPU weights occupy 1,402,378,240 resident bytes.
+
+The three adjacent `std30.wav` trials all emitted the exact same 87-token
+sequence as the AOT v3 baseline and NPU-only LLMC path.
+
+| Metric | Three-NPU AOT v3 | NPU/GPU hybrid median | Gain |
+|---|---:|---:|---:|
+| Encoder / fixed 30 s | 21.796 s | **21.717 s** | 1.004x |
+| Decoder / 90 steps | 20.733 s | **4.267 s** | **4.859x** |
+| Decoder step | 230.37 ms | **47.41 ms** | **4.859x** |
+| End to end | 42.480 s | **26.213 s** | **1.621x** |
+
+The hybrid trials are 26.213, 26.252 and 26.189 seconds. In the median trial,
+decoder W4 linear wall time is 3.094 seconds versus 18.014 seconds in the
+NPU-only median, a 5.823x gain. Decoder GPU load averages 49.83%, reaches 100%
+and runs at 1 GHz. The result remains 1.462x slower than the separately fused
+17.933-second FP16 graph.
+
+Final 100-loop GPU gates at 1 GHz are:
+
+| Shape `(M,K,N)` | Kernel mean | Maximum sampled absolute error |
+|---|---:|---:|
+| `(1,1280,1280)` | 0.441 ms | 0.00000918 |
+| `(1,1280,5120)` | 1.506 ms | 0.00002345 |
+| `(1,5120,1280)` | 1.729 ms | 0.00002201 |
+| `(1,1280,51904)` | 8.446 ms | 0.00002687 |
+
+Two broad GPU schedules were measured and rejected: moving every W4 linear to
+the GPU took 51.118 seconds because the batched encoder was slower, while
+moving encoder attention to the GPU took 41.127 seconds because its PV kernel
+alone consumed 16.150 seconds. These measurements led to the fixed per-stage
+hybrid rather than a dynamic scheduler.
+
+The tested board exposes a proprietary Arm OpenCL 3.0 platform on Mali-G610
+r0p0 with four compute units and `cl_khr_fp16`. Its kernel DDK is
+`g25p0-00eac0`; the privately deployed `g24p0-00eac0` userspace blob has
+SHA-256 `07cc993b13d6591161b0a12a270c75e06f25d56437016c6fbff8ea36e47c6614`.
+That proprietary blob is subject to its vendor EULA and is deliberately not
+committed. The implementation links the normal OpenCL ICD loader and requires
+the operator to provide an appropriately licensed Mali ICD.
+
+The target runtime is [`native/whisper_rknpu2_w4a16.cc`](native/whisper_rknpu2_w4a16.cc),
+the packed-W4 kernels and shape plans are in
+[`native/opencl_w4a16.cc`](native/opencl_w4a16.cc), decoder attention is in
+[`native/opencl_attention.cc`](native/opencl_attention.cc), and the reversible
+performance-profile runner is
+[`native/run_opencl_w4a16_std30.sh`](native/run_opencl_w4a16_std30.sh).
+Raw records are under
+[`benchmarks/opencl/w4a16/`](benchmarks/opencl/w4a16/).
+
 Build the two packages on the host (Python is build-time only):
 
 ```sh
