@@ -1,0 +1,17 @@
+[Unit]
+Description=ThreeHub native MiniMind-O speech-to-speech
+After=sound.target
+Conflicts=threehub-voice-assistant.service
+
+[Service]
+Type=simple
+Environment=OMP_NUM_THREADS=4
+Environment=OMP_WAIT_POLICY=PASSIVE
+ExecStart=/dev/shm/minimindo-o-native-v1/minimindo-speech-a113x /dev/shm/minimindo-o-native-v1/minimindo-thinker-q8-v1.mmo /dev/shm/minimindo-o-native-v1/minimindo-talker-q8-v1.mmo /dev/shm/minimindo-o-native-v1/minimindo-tokenizer-v1.mmotok /dev/shm/minimindo-o-native-v1/minimindo-mimi-q8-v1.mmo --live --audio-encoder /dev/shm/minimindo-o-native-v1/minimindo-sensevoice-q8-v1.mmo --capture-device plughw:0,0 --playback-device plughw:0,0 --max-tokens 48 --seed 20260821
+Restart=always
+RestartSec=2
+Nice=-5
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target

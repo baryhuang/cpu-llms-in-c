@@ -1,0 +1,104 @@
+{
+  "date": "2026-08-21",
+  "target": {
+    "board": "ThirdReality TRHub-V3",
+    "soc_reported": "Amlogic A113D / meson-axg",
+    "cpu": "4x Arm Cortex-A53",
+    "memory_bytes": 2059239424,
+    "kernel": "6.6.120-current-meson64"
+  },
+  "build": {
+    "language": "C11",
+    "compiler": "GCC 12.2, Debian 12 Linux/AArch64",
+    "flags": "-O3 -mcpu=cortex-a53 -mtune=cortex-a53 -ffast-math -fopenmp -pthread",
+    "python_on_target": false
+  },
+  "cpu_scaling": {
+    "workload": "16 generation steps, 8 Mimi frames, fixed input and seed 77",
+    "one_thread": {
+      "wall_seconds": 40.58,
+      "user_seconds": 39.33,
+      "system_seconds": 0.50,
+      "cpu_percent": 98,
+      "peak_rss_kib": 391448
+    },
+    "four_threads": {
+      "wall_seconds": 13.64,
+      "user_seconds": 38.87,
+      "system_seconds": 3.06,
+      "cpu_percent": 307,
+      "peak_rss_kib": 391080
+    },
+    "speedup": 2.975,
+    "same_text_and_frame_count": true
+  },
+  "mimi_eight_frame": {
+    "audio_seconds": 0.64,
+    "samples": 15360,
+    "sample_rate": 24000,
+    "baseline_whole": {
+      "wall_seconds": 7.80,
+      "cpu_percent": 347,
+      "peak_rss_kib": 59056
+    },
+    "optimized_whole": {
+      "wall_seconds": 1.89,
+      "cpu_percent": 347,
+      "peak_rss_kib": 70300,
+      "rms": 0.0925718303,
+      "peak": 0.710567653,
+      "different_pcm_bytes_vs_baseline": 6
+    },
+    "optimized_stream_one_frame": {
+      "wall_seconds": 1.93,
+      "cpu_percent": 347,
+      "peak_rss_kib": 48700,
+      "rms": 0.0925718283,
+      "peak": 0.710567594,
+      "different_pcm_bytes_vs_optimized_whole": 9
+    },
+    "whole_decode_speedup": 4.127,
+    "optimized_decode_realtime_factor": 0.339
+  },
+  "optimized_mimi_profile_ms": {
+    "codebooks": 6.783,
+    "upsampler_and_transformer": 268.359,
+    "initial_conv": 27.689,
+    "stage_1": 147.704,
+    "stage_2": 310.648,
+    "stage_3": 549.765,
+    "stage_4": 521.444,
+    "final_conv": 44.715,
+    "total": 1877.109
+  },
+  "optimized_live_turns": [
+    {
+      "input_audio_ms": 864,
+      "steps": 48,
+      "audio_frames": 40,
+      "audio_encode_ms": 1646,
+      "prefill_ms": 1991,
+      "generate_ms": 6535,
+      "mimi_drain_ms": 8735,
+      "inference_ms": 18916,
+      "playback_result": 0
+    },
+    {
+      "input_audio_ms": 1312,
+      "steps": 48,
+      "audio_frames": 40,
+      "audio_encode_ms": 2649,
+      "prefill_ms": 2577,
+      "generate_ms": 5499,
+      "mimi_drain_ms": 10670,
+      "inference_ms": 21405,
+      "playback_result": 0
+    }
+  ],
+  "production_policy": {
+    "stateful_stream_decode": true,
+    "decode_overlapped_with_generation": true,
+    "eager_pcm_playback": false,
+    "reason": "decoder production rate remains below the 12.5 Mimi frames/s playback consumption rate"
+  }
+}

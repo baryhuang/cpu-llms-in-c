@@ -1,0 +1,238 @@
+#define _POSIX_C_SOURCE 200809L
+
+#include "minimindo_audio_encoder.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <math.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
+enum { HEADER_BYTES=4096, F32=1, Q8=2, FFT_SIZE=512, MEL_BINS=80 };
+
+typedef struct {
+    unsigned char magic[8];
+    uint32_t version, header_bytes, layers, base_layers, tp_layers;
+    uint32_t input, hidden, heads, intermediate, fsmn_kernel;
+    uint32_t mel_bins, fft_bins, lfr_m, lfr_n, tensor_count, reserved;
+    float norm_epsilon, position_theta;
+    uint64_t tensors_offset, file_bytes;
+    char sense_sha256[64], minimind_sha256[64];
+} audio_header;
+
+typedef struct { uint32_t type, rows, cols, reserved; uint64_t data_bytes; } tensor_header;
+typedef struct { const tensor_header *header; const unsigned char *data; } tensor;
+
+typedef struct {
+    tensor norm1_weight, norm1_bias;
+    tensor q_weight, q_bias, k_weight, k_bias, v_weight, v_bias;
+    tensor fsmn, out_weight, out_bias;
+    tensor norm2_weight, norm2_bias, fc1_weight, fc1_bias, fc2_weight, fc2_bias;
+} encoder_layer;
+
+struct minimindo_audio_encoder {
+    int file; const unsigned char *mapping; size_t mapped_bytes;
+    const audio_header *header;
+    tensor mel_filters, cmvn_mean, cmvn_scale, embeddings;
+    encoder_layer *layers;
+    tensor after_weight, after_bias, tp_weight, tp_bias;
+    tensor projector_norm_weight, projector_norm_bias;
+    tensor projector_first_weight, projector_first_bias;
+    tensor projector_second_weight, projector_second_bias;
+};
+
+typedef struct { double real, imaginary; } complex_value;
+
+_Static_assert(sizeof(audio_header)==224,"MiniMind-O audio image ABI");
+_Static_assert(sizeof(tensor_header)==24,"MiniMind-O tensor ABI");
+
+static void set_error(char *error,size_t capacity,const char *format,...)
+{ if(!error||!capacity)return;va_list args;va_start(args,format);vsnprintf(error,capacity,format,args);va_end(args); }
+static uint64_t align64(uint64_t x){return(x+63U)&~UINT64_C(63);}
+static int range_ok(uint64_t o,uint64_t n,uint64_t total){return o<=total&&n<=total-o;}
+static int take(const unsigned char *mapping,uint64_t bytes,uint64_t *cursor,
+                uint32_t type,uint32_t rows,uint32_t cols,tensor *out)
+{
+    if(!range_ok(*cursor,sizeof(tensor_header),bytes))return -1;
+    const tensor_header *h=(const tensor_header *)(mapping+*cursor);
+    uint64_t expected=type==F32?(uint64_t)rows*cols*4:(uint64_t)rows*(4+cols);
+    if(h->type!=type||h->rows!=rows||h->cols!=cols||h->reserved||h->data_bytes!=expected)return -1;
+    uint64_t data=*cursor+sizeof(*h);if(!range_ok(data,expected,bytes))return -1;
+    out->header=h;out->data=mapping+data;*cursor=align64(data+expected);return *cursor<=bytes?0:-1;
+}
+static const float *f32(const tensor *t){return(const float *)t->data;}
+
+static float q8_dot(const int8_t *w,const float *x,uint32_t count)
+{
+#if defined(__aarch64__)
+    float32x4_t a=vdupq_n_f32(0),b=a,c=a,d=a;uint32_t i=0;
+    for(;i+16<=count;i+=16){int8x16_t p=vld1q_s8(w+i);int16x8_t lo=vmovl_s8(vget_low_s8(p)),hi=vmovl_s8(vget_high_s8(p));
+        a=vfmaq_f32(a,vld1q_f32(x+i),vcvtq_f32_s32(vmovl_s16(vget_low_s16(lo))));
+        b=vfmaq_f32(b,vld1q_f32(x+i+4),vcvtq_f32_s32(vmovl_s16(vget_high_s16(lo))));
+        c=vfmaq_f32(c,vld1q_f32(x+i+8),vcvtq_f32_s32(vmovl_s16(vget_low_s16(hi))));
+        d=vfmaq_f32(d,vld1q_f32(x+i+12),vcvtq_f32_s32(vmovl_s16(vget_high_s16(hi))));}
+    float sum=vaddvq_f32(vaddq_f32(vaddq_f32(a,b),vaddq_f32(c,d)));for(;i<count;++i)sum+=w[i]*x[i];return sum;
+#else
+    double sum=0;for(uint32_t i=0;i<count;++i)sum+=(double)w[i]*x[i];return(float)sum;
+#endif
+}
+static void row(const tensor *t,uint32_t r,const int8_t **w,float *scale)
+{const unsigned char *p=t->data+(size_t)r*(4+t->header->cols);memcpy(scale,p,4);*w=(const int8_t *)(p+4);}
+
+static void matrix_sequence(const tensor *matrix,const float *input,uint32_t length,
+                            uint32_t input_width,float *output,const float *bias)
+{
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for(uint32_t out=0;out<matrix->header->rows;++out){const int8_t *w;float scale;row(matrix,out,&w,&scale);
+        for(uint32_t p=0;p<length;++p)output[(size_t)p*matrix->header->rows+out]=q8_dot(w,input+(size_t)p*input_width,input_width)*scale+(bias?bias[out]:0);}
+}
+
+static void layer_norm_sequence(const float *input,float *output,uint32_t length,uint32_t width,
+                                const float *weight,const float *bias,float epsilon)
+{
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for(uint32_t p=0;p<length;++p){const float *x=input+(size_t)p*width;float *y=output+(size_t)p*width;double mean=0,sq=0;
+        for(uint32_t i=0;i<width;++i){mean+=x[i];sq+=(double)x[i]*x[i];}mean/=width;double scale=1.0/sqrt(sq/width-mean*mean+epsilon);
+        for(uint32_t i=0;i<width;++i)y[i]=(float)((x[i]-mean)*scale*weight[i]+bias[i]);}
+}
+
+static void fft512(complex_value *values)
+{
+    for(uint32_t i=1,j=0;i<FFT_SIZE;++i){uint32_t bit=FFT_SIZE>>1;for(;j&bit;bit>>=1)j^=bit;j^=bit;if(i<j){complex_value t=values[i];values[i]=values[j];values[j]=t;}}
+    for(uint32_t length=2;length<=FFT_SIZE;length<<=1){double angle=-2.0*3.14159265358979323846/length;complex_value step={cos(angle),sin(angle)};
+        for(uint32_t start=0;start<FFT_SIZE;start+=length){complex_value w={1,0};for(uint32_t j=0;j<length/2;++j){complex_value u=values[start+j],v=values[start+j+length/2];
+            double vr=v.real*w.real-v.imaginary*w.imaginary,vi=v.real*w.imaginary+v.imaginary*w.real;
+            values[start+j]=(complex_value){u.real+vr,u.imaginary+vi};values[start+j+length/2]=(complex_value){u.real-vr,u.imaginary-vi};
+            w=(complex_value){w.real*step.real-w.imaginary*step.imaginary,w.real*step.imaginary+w.imaginary*step.real};}}}
+}
+
+size_t minimindo_audio_encoder_frames(size_t samples)
+{
+    if(samples<400)return 0;
+    size_t fbank=1+(samples-400)/160;
+    return(fbank+5)/6;
+}
+
+static float *frontend(const minimindo_audio_encoder *model,const int16_t *samples,
+                       size_t sample_count,uint32_t *out_frames)
+{
+    if(sample_count<400)return NULL;
+    uint32_t frames=1+(uint32_t)((sample_count-400)/160);
+    float *mel=malloc((size_t)frames*80*sizeof(float));if(!mel)return NULL;
+    const float *filters=f32(&model->mel_filters);
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for(uint32_t frame=0;frame<frames;++frame){complex_value values[FFT_SIZE];double mean=0;
+        for(uint32_t i=0;i<400;++i)
+            mean+=samples[(size_t)frame*160+i];
+        mean/=400;
+        double previous=samples[(size_t)frame*160]-mean;
+        for(uint32_t i=0;i<400;++i){double current=samples[(size_t)frame*160+i]-mean;double emphasized=i?current-0.97*previous:current-0.97*current;previous=current;
+            values[i].real=emphasized*(0.54-0.46*cos(2.0*3.14159265358979323846*i/400.0));values[i].imaginary=0;}
+        for(uint32_t i=400;i<FFT_SIZE;++i)
+            values[i]=(complex_value){0,0};
+        fft512(values);double power[256];
+        for(uint32_t k=0;k<256;++k)power[k]=values[k].real*values[k].real+values[k].imaginary*values[k].imaginary;
+        for(uint32_t m=0;m<80;++m){double sum=0;for(uint32_t k=0;k<256;++k)sum+=power[k]*filters[(size_t)m*256+k];
+            mel[(size_t)frame*80+m]=(float)log(sum>1.19e-7?sum:1.19e-7);}}
+    uint32_t lfr=(frames+5)/6;float *features=malloc((size_t)lfr*560*sizeof(float));if(!features){free(mel);return NULL;}
+    const float *mean=f32(&model->cmvn_mean),*scale=f32(&model->cmvn_scale);
+    for(uint32_t t=0;t<lfr;++t)for(uint32_t j=0;j<7;++j){int64_t source=(int64_t)t*6-3+j;if(source<0)source=0;if(source>=(int64_t)frames)source=frames-1;
+        for(uint32_t m=0;m<80;++m){uint32_t col=j*80+m;features[(size_t)t*560+col]=(mel[(size_t)source*80+m]+mean[col])*scale[col];}}
+    free(mel);*out_frames=lfr;return features;
+}
+
+minimindo_audio_encoder *minimindo_audio_encoder_open(const char *path,char *error,size_t capacity)
+{
+    minimindo_audio_encoder *m=calloc(1,sizeof(*m));if(!m)return NULL;m->file=-1;m->file=open(path,O_RDONLY);struct stat st;
+    if(m->file<0||fstat(m->file,&st)||st.st_size<HEADER_BYTES){set_error(error,capacity,"cannot open audio image: %s",strerror(errno));goto bad;}
+    m->mapped_bytes=(size_t)st.st_size;m->mapping=mmap(NULL,m->mapped_bytes,PROT_READ,MAP_PRIVATE,m->file,0);if(m->mapping==MAP_FAILED){m->mapping=NULL;goto bad;}
+    m->header=(const audio_header *)m->mapping;static const unsigned char magic[8]={'M','M','O','S','E','N','S','1'};
+    if(memcmp(m->header->magic,magic,8)||m->header->version!=1||m->header->header_bytes!=HEADER_BYTES||m->header->file_bytes!=m->mapped_bytes||
+       m->header->layers!=70||m->header->base_layers!=50||m->header->tp_layers!=20||m->header->input!=560||m->header->hidden!=512||m->header->tensor_count!=1204){set_error(error,capacity,"invalid audio image header");goto bad;}
+    m->layers=calloc(m->header->layers,sizeof(*m->layers));if(!m->layers)goto bad;uint64_t c=m->header->tensors_offset;
+#define TAKE(x,type,rows,cols) if(take(m->mapping,m->mapped_bytes,&c,type,rows,cols,x))goto tensors
+    TAKE(&m->mel_filters,F32,80,256);TAKE(&m->cmvn_mean,F32,1,560);TAKE(&m->cmvn_scale,F32,1,560);TAKE(&m->embeddings,F32,16,560);
+    for(uint32_t li=0;li<70;++li){encoder_layer *l=&m->layers[li];uint32_t in=li?512:560;
+        TAKE(&l->norm1_weight,F32,1,in);TAKE(&l->norm1_bias,F32,1,in);
+        TAKE(&l->q_weight,Q8,512,in);TAKE(&l->q_bias,F32,1,512);TAKE(&l->k_weight,Q8,512,in);TAKE(&l->k_bias,F32,1,512);TAKE(&l->v_weight,Q8,512,in);TAKE(&l->v_bias,F32,1,512);
+        TAKE(&l->fsmn,F32,512,11);TAKE(&l->out_weight,Q8,512,512);TAKE(&l->out_bias,F32,1,512);
+        TAKE(&l->norm2_weight,F32,1,512);TAKE(&l->norm2_bias,F32,1,512);TAKE(&l->fc1_weight,Q8,2048,512);TAKE(&l->fc1_bias,F32,1,2048);TAKE(&l->fc2_weight,Q8,512,2048);TAKE(&l->fc2_bias,F32,1,512);}
+    TAKE(&m->after_weight,F32,1,512);TAKE(&m->after_bias,F32,1,512);TAKE(&m->tp_weight,F32,1,512);TAKE(&m->tp_bias,F32,1,512);
+    TAKE(&m->projector_norm_weight,F32,1,512);TAKE(&m->projector_norm_bias,F32,1,512);TAKE(&m->projector_first_weight,Q8,768,512);TAKE(&m->projector_first_bias,F32,1,768);TAKE(&m->projector_second_weight,Q8,768,768);TAKE(&m->projector_second_bias,F32,1,768);
+#undef TAKE
+    if(c!=m->mapped_bytes)goto tensors;
+    return m;
+tensors:set_error(error,capacity,"invalid audio image tensors");
+bad:minimindo_audio_encoder_close(m);return NULL;
+}
+
+void minimindo_audio_encoder_close(minimindo_audio_encoder *m)
+{if(!m)return;free(m->layers);if(m->mapping)munmap((void *)m->mapping,m->mapped_bytes);if(m->file>=0)close(m->file);free(m);}
+
+static int encoder_forward(minimindo_audio_encoder *model,float *sequence,uint32_t length)
+{
+    const uint32_t h=512,heads=4,d=128;float *norm=malloc((size_t)length*560*4),*q=malloc((size_t)length*h*4),*k=malloc((size_t)length*h*4),*v=malloc((size_t)length*h*4);
+    float *memory=malloc((size_t)length*h*4),*attention=malloc((size_t)length*h*4),*projected=malloc((size_t)length*h*4),*ff=malloc((size_t)length*2048*4);
+    if(!norm||!q||!k||!v||!memory||!attention||!projected||!ff)return -1;
+    for(uint32_t li=0;li<70;++li){encoder_layer *l=&model->layers[li];uint32_t in=li?512:560;
+        layer_norm_sequence(sequence,norm,length,in,f32(&l->norm1_weight),f32(&l->norm1_bias),model->header->norm_epsilon);
+        matrix_sequence(&l->q_weight,norm,length,in,q,f32(&l->q_bias));matrix_sequence(&l->k_weight,norm,length,in,k,f32(&l->k_bias));matrix_sequence(&l->v_weight,norm,length,in,v,f32(&l->v_bias));
+        const float *fw=f32(&l->fsmn);for(uint32_t p=0;p<length;++p)for(uint32_t i=0;i<h;++i){double sum=v[(size_t)p*h+i];for(uint32_t kernel=0;kernel<11;++kernel){int64_t source=(int64_t)p-5+kernel;if(source>=0&&source<length)sum+=v[(size_t)source*h+i]*fw[(size_t)i*11+kernel];}memory[(size_t)p*h+i]=(float)sum;}
+        for(uint32_t query=0;query<length;++query)for(uint32_t head=0;head<heads;++head){double maximum=-INFINITY;double scores[length];
+            for(uint32_t source=0;source<length;++source){double score=0;for(uint32_t j=0;j<d;++j)score+=(double)q[(size_t)query*h+head*d+j]*k[(size_t)source*h+head*d+j];scores[source]=score/sqrt((double)d);if(scores[source]>maximum)maximum=scores[source];}
+            double denominator=0;for(uint32_t source=0;source<length;++source){scores[source]=exp(scores[source]-maximum);denominator+=scores[source];}
+            for(uint32_t j=0;j<d;++j){double sum=0;for(uint32_t source=0;source<length;++source)sum+=scores[source]*v[(size_t)source*h+head*d+j];attention[(size_t)query*h+head*d+j]=(float)(sum/denominator);}}
+        matrix_sequence(&l->out_weight,attention,length,h,projected,f32(&l->out_bias));
+        for(size_t i=0;i<(size_t)length*h;++i)projected[i]+=memory[i]+(li?sequence[i]:0);
+        layer_norm_sequence(projected,norm,length,h,f32(&l->norm2_weight),f32(&l->norm2_bias),model->header->norm_epsilon);
+        matrix_sequence(&l->fc1_weight,norm,length,h,ff,f32(&l->fc1_bias));for(size_t i=0;i<(size_t)length*2048;++i)if(ff[i]<0)ff[i]=0;
+        matrix_sequence(&l->fc2_weight,ff,length,2048,attention,f32(&l->fc2_bias));for(size_t i=0;i<(size_t)length*h;++i)attention[i]+=projected[i];
+        if(li==49)layer_norm_sequence(attention,projected,length,h,f32(&model->after_weight),f32(&model->after_bias),model->header->norm_epsilon);else memcpy(projected,attention,(size_t)length*h*4);
+        memcpy(sequence,projected,(size_t)length*h*4);
+    }
+    layer_norm_sequence(sequence,projected,length,h,f32(&model->tp_weight),f32(&model->tp_bias),model->header->norm_epsilon);memcpy(sequence,projected,(size_t)length*h*4);
+    free(norm);free(q);free(k);free(v);free(memory);free(attention);free(projected);free(ff);return 0;
+}
+
+int minimindo_audio_encoder_encode_pcm16(minimindo_audio_encoder *model,const int16_t *samples,size_t sample_count,
+                                         float *output,size_t output_count,size_t *output_frames,char *error,size_t capacity)
+{
+    if(!model||!samples||!output){set_error(error,capacity,"invalid audio encode arguments");return -1;}uint32_t frames=0;float *features=frontend(model,samples,sample_count,&frames);
+    if(!features||output_count<(size_t)frames*768){free(features);set_error(error,capacity,"audio buffer too small");return -1;}
+    /* MiniMind-O freezes and calls SenseVoice's encoder submodule directly.
+       Language/task embeddings belong to the ASR wrapper and are not part of
+       this embedding path. */
+    uint32_t length=frames;float *sequence=malloc((size_t)length*560*4);if(!sequence){free(features);return -1;}float root=sqrtf(512);
+    for(uint32_t p=0;p<frames;++p)
+        for(uint32_t i=0;i<560;++i)
+            sequence[(size_t)p*560+i]=features[(size_t)p*560+i]*root;
+    free(features);
+    for(uint32_t p=0;p<length;++p)for(uint32_t i=0;i<280;++i){sequence[(size_t)p*560+i]+=sinf((p+1)*pow(10000.0,-2.0*i/560));sequence[(size_t)p*560+i+280]+=cosf((p+1)*pow(10000.0,-2.0*i/560));}
+    if(encoder_forward(model,sequence,length)){free(sequence);set_error(error,capacity,"SenseVoice encoder failed");return -1;}
+    float first[768],second[768],normalized[512];const float *nw=f32(&model->projector_norm_weight),*nb=f32(&model->projector_norm_bias);
+    for(uint32_t p=0;p<frames;++p){const float *x=sequence+(size_t)p*512;double mean=0,sq=0;for(uint32_t i=0;i<512;++i){mean+=x[i];sq+=(double)x[i]*x[i];}mean/=512;double inv=1.0/sqrt(sq/512-mean*mean+1e-5);
+        for(uint32_t i=0;i<512;++i)
+            normalized[i]=(float)((x[i]-mean)*inv*nw[i]+nb[i]);
+        matrix_sequence(&model->projector_first_weight,normalized,1,512,first,f32(&model->projector_first_bias));
+        for(uint32_t i=0;i<768;++i)
+            first[i]=0.5f*first[i]*(1+erff(first[i]*0.7071067811865475f));
+        matrix_sequence(&model->projector_second_weight,first,1,768,second,f32(&model->projector_second_bias));
+        memcpy(output+(size_t)p*768,second,768*4);}
+    free(sequence);if(output_frames)*output_frames=frames;return 0;
+}

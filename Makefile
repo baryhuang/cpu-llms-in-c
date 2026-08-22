@@ -34,6 +34,15 @@ WHISPER_SMALL_DECODER_CHECK := $(BUILD_DIR)/whisper-small-decoder-check
 WHISPER_SMALL_A113X_DECODER_CHECK := $(BUILD_DIR)/whisper-small-decoder-check-a113x
 WHISPER_SMALL_TRANSCRIBE := $(BUILD_DIR)/whisper-small-transcribe
 WHISPER_SMALL_A113X_TRANSCRIBE := $(BUILD_DIR)/whisper-small-transcribe-a113x
+MINIMINDO_GENERIC := models/minimind-o/targets/generic
+MINIMINDO_LAYER_TEST := $(BUILD_DIR)/minimindo-layer-test
+MINIMINDO_LAYER_FIXTURE := tests/fixtures/minimindo_layer_v1.bin
+MINIMINDO_THINKER := $(BUILD_DIR)/minimindo-thinker
+MINIMINDO_CHAT := $(BUILD_DIR)/minimindo-chat
+MINIMINDO_OMNI_FORWARD := $(BUILD_DIR)/minimindo-omni-forward
+MINIMINDO_MIMI := $(BUILD_DIR)/minimindo-mimi
+MINIMINDO_SPEECH := $(BUILD_DIR)/minimindo-speech
+MINIMINDO_AUDIO_ENCODER := $(BUILD_DIR)/minimindo-audio-encoder
 QWEN38_M3 := models/qwen3.8-27b/targets/apple-m3-pro
 QWEN38_COMPILER := compiler/qwen3.8-27b/apple-m3-pro
 QWEN38_M3_AIR := $(BUILD_DIR)/qwen38-m3-q4.air
@@ -117,7 +126,7 @@ MINIMAX_H3_M3_E2E_OBJECT := $(BUILD_DIR)/minimax-h3-m3-e2e.o
 MINIMAX_H3_M3_E2E_CLI_OBJECT := $(BUILD_DIR)/minimax-h3-m3-e2e-cli.o
 MINIMAX_H3_M3_E2E := $(BUILD_DIR)/minimax-h3-m3-e2e
 
-.PHONY: all a113x clean fixture linux-tools minimax-h3-m3-attention-bench minimax-h3-m3-dense-attention-bench minimax-h3-m3-rope-bench minimax-h3-m3-vae-gemm-bench minimax-h3-m3-vae-attention-bench minimax-h3-m3-gemm-bench minimax-h3-m3-q8-gemm-bench minimax-h3-m3-pipeline-archive minimax-h3-m3-e2e minimax-h3-tools qwen38-m3-bench qwen38-m3-deltanet-bench qwen38-m3-layer-bench qwen38-m3-attention-bench qwen38-m3-decode qwen38-m3-generate qwen38-m3-chat qwen38-m3-api-state-test qwen38-m3-prefill-parity-test qwen38-tools test whisper-small-tools
+.PHONY: all a113x clean fixture linux-tools minimindo-tools minimax-h3-m3-attention-bench minimax-h3-m3-dense-attention-bench minimax-h3-m3-rope-bench minimax-h3-m3-vae-gemm-bench minimax-h3-m3-vae-attention-bench minimax-h3-m3-gemm-bench minimax-h3-m3-q8-gemm-bench minimax-h3-m3-pipeline-archive minimax-h3-m3-e2e minimax-h3-tools qwen38-m3-bench qwen38-m3-deltanet-bench qwen38-m3-layer-bench qwen38-m3-attention-bench qwen38-m3-decode qwen38-m3-generate qwen38-m3-chat qwen38-m3-api-state-test qwen38-m3-prefill-parity-test qwen38-tools test whisper-small-tools
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
@@ -129,6 +138,13 @@ a113x: $(QWEN35_A113X_TASK) $(WHISPER_SMALL_A113X_BENCH) \
 
 whisper-small-tools: $(WHISPER_SMALL_ENCODER_CHECK) $(WHISPER_SMALL_ENCODER_BENCH) \
 	$(WHISPER_SMALL_DECODER_CHECK) $(WHISPER_SMALL_TRANSCRIBE)
+
+minimindo-tools: $(MINIMINDO_LAYER_TEST) $(MINIMINDO_THINKER) $(MINIMINDO_CHAT) \
+	$(MINIMINDO_OMNI_FORWARD) $(MINIMINDO_MIMI)
+
+minimindo-speech: $(MINIMINDO_SPEECH)
+
+minimindo-audio-encoder: $(MINIMINDO_AUDIO_ENCODER)
 
 qwen38-m3-bench: $(QWEN38_M3_BENCH) $(QWEN38_M3_METALLIB)
 	$(QWEN38_M3_BENCH) $(QWEN38_M3_METALLIB)
@@ -208,6 +224,7 @@ test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35
 	$(WHISPER_SMALL_LOG_MEL_TEST) $(WHISPER_SMALL_LOG_MEL_FIXTURE) \
 	$(WHISPER_ENCODER_STEM_TEST) $(WHISPER_ENCODER_STEM_FIXTURE) \
 	$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_ENCODER_BLOCK_FIXTURE) \
+	$(MINIMINDO_LAYER_TEST) $(MINIMINDO_LAYER_FIXTURE) \
 	$(QWEN38_SAFETENSORS_TEST) $(QWEN38_SHA256_TEST) \
 	$(QWEN38_SAMPLER_TEST) $(MINIMAX_H3_TEST) $(MINIMAX_H3_M3_AOT_TEST) \
 	$(MINIMAX_H3_M3_TREE_TEST) $(MINIMAX_H3_M3_CACHE_TEST) \
@@ -218,6 +235,7 @@ test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35
 	$(WHISPER_SMALL_LOG_MEL_TEST) $(WHISPER_SMALL_LOG_MEL_FIXTURE)
 	$(WHISPER_ENCODER_STEM_TEST) $(WHISPER_ENCODER_STEM_FIXTURE)
 	$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_ENCODER_BLOCK_FIXTURE)
+	$(MINIMINDO_LAYER_TEST) $(MINIMINDO_LAYER_FIXTURE)
 	$(QWEN38_SAFETENSORS_TEST)
 	$(QWEN38_SHA256_TEST)
 	$(QWEN38_SAMPLER_TEST)
@@ -227,6 +245,86 @@ test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35
 	$(MINIMAX_H3_M3_CACHE_TEST)
 	$(MINIMAX_H3_M3_SPARSE_TEST)
 	$(MINIMAX_H3_M3_SELECTOR_TEST)
+
+$(MINIMINDO_LAYER_TEST): tests/minimindo_layer_test.c \
+	$(MINIMINDO_GENERIC)/minimindo_layer.c \
+	$(MINIMINDO_GENERIC)/minimindo_layer.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
+		tests/minimindo_layer_test.c $(MINIMINDO_GENERIC)/minimindo_layer.c \
+		-o $@ $(LDFLAGS) -lm
+
+$(MINIMINDO_LAYER_FIXTURE): compiler/generate_minimindo_layer_fixture.py
+	mkdir -p $(dir $@)
+	python3 $< $@
+
+$(MINIMINDO_THINKER): $(MINIMINDO_GENERIC)/minimindo_thinker_cli.c \
+	$(MINIMINDO_GENERIC)/minimindo_thinker.c \
+	$(MINIMINDO_GENERIC)/minimindo_thinker.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
+		$(MINIMINDO_GENERIC)/minimindo_thinker_cli.c \
+		$(MINIMINDO_GENERIC)/minimindo_thinker.c \
+		-o $@ $(LDFLAGS) -lm
+
+$(MINIMINDO_CHAT): $(MINIMINDO_GENERIC)/minimindo_chat.c \
+	$(MINIMINDO_GENERIC)/minimindo_thinker.c \
+	$(MINIMINDO_GENERIC)/minimindo_thinker.h \
+	$(MINIMINDO_GENERIC)/minimindo_tokenizer.c \
+	$(MINIMINDO_GENERIC)/minimindo_tokenizer.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+		$(MINIMINDO_GENERIC)/minimindo_chat.c \
+		$(MINIMINDO_GENERIC)/minimindo_thinker.c \
+		$(MINIMINDO_GENERIC)/minimindo_tokenizer.c \
+		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
+$(MINIMINDO_OMNI_FORWARD): \
+	$(MINIMINDO_GENERIC)/minimindo_omni_forward.c \
+	$(MINIMINDO_GENERIC)/minimindo_thinker.c \
+	$(MINIMINDO_GENERIC)/minimindo_thinker.h \
+	$(MINIMINDO_GENERIC)/minimindo_talker.c \
+	$(MINIMINDO_GENERIC)/minimindo_talker.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+		$(MINIMINDO_GENERIC)/minimindo_omni_forward.c \
+		$(MINIMINDO_GENERIC)/minimindo_thinker.c \
+		$(MINIMINDO_GENERIC)/minimindo_talker.c \
+		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
+$(MINIMINDO_MIMI): $(MINIMINDO_GENERIC)/minimindo_mimi_cli.c \
+	$(MINIMINDO_GENERIC)/minimindo_mimi.c \
+	$(MINIMINDO_GENERIC)/minimindo_mimi.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+		$(MINIMINDO_GENERIC)/minimindo_mimi_cli.c \
+		$(MINIMINDO_GENERIC)/minimindo_mimi.c \
+		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
+$(MINIMINDO_SPEECH): $(MINIMINDO_GENERIC)/minimindo_speech.c \
+	$(MINIMINDO_GENERIC)/minimindo_thinker.c $(MINIMINDO_GENERIC)/minimindo_thinker.h \
+	$(MINIMINDO_GENERIC)/minimindo_talker.c $(MINIMINDO_GENERIC)/minimindo_talker.h \
+	$(MINIMINDO_GENERIC)/minimindo_tokenizer.c $(MINIMINDO_GENERIC)/minimindo_tokenizer.h \
+	$(MINIMINDO_GENERIC)/minimindo_mimi.c $(MINIMINDO_GENERIC)/minimindo_mimi.h \
+	$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c $(MINIMINDO_GENERIC)/minimindo_audio_encoder.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+		$(MINIMINDO_GENERIC)/minimindo_speech.c \
+		$(MINIMINDO_GENERIC)/minimindo_thinker.c \
+		$(MINIMINDO_GENERIC)/minimindo_talker.c \
+		$(MINIMINDO_GENERIC)/minimindo_tokenizer.c \
+		$(MINIMINDO_GENERIC)/minimindo_mimi.c \
+		$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c \
+		-o $@ $(LDFLAGS) $(OMPFLAGS) $(LDLIBS) -lm
+
+$(MINIMINDO_AUDIO_ENCODER): $(MINIMINDO_GENERIC)/minimindo_audio_encoder_cli.c \
+	$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c \
+	$(MINIMINDO_GENERIC)/minimindo_audio_encoder.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+		$(MINIMINDO_GENERIC)/minimindo_audio_encoder_cli.c \
+		$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c \
+		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
 $(MINIMAX_H3_TEST): tests/minimax_h3_test.c \
 	$(MINIMAX_H3_GENERIC)/minimax_h3.c $(MINIMAX_H3_GENERIC)/minimax_h3.h
