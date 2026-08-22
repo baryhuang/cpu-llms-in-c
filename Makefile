@@ -627,7 +627,8 @@ $(MINIMAX_H3_M3_E2E): $(MINIMAX_H3_M3_E2E_OBJECT) \
 		$(MINIMAX_H3_M3)/minimax_h3_m3_tree.c \
 		$(MINIMAX_H3_GENERIC)/minimax_h3.c \
 		-o $@ -framework Foundation -framework Metal \
-		-framework CoreFoundation -licucore -lm
+		-framework MetalPerformanceShaders -framework ImageIO \
+		-framework CoreGraphics -framework CoreFoundation -licucore -lm
 
 $(TARGET_PROBE): tools/target_probe.c
 	mkdir -p $(BUILD_DIR)

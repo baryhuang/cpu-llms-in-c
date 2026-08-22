@@ -10,6 +10,8 @@ typedef struct {
     uint32_t frames;
     uint64_t seed;
     const char *prompt;
+    const char *first_image_path;
+    const char *last_image_path;
     const char *tokenizer_image_path;
     const char *metallib_path;
     const char *output_directory;
@@ -22,6 +24,7 @@ typedef struct {
     double metal_setup_seconds;
     double text_download_seconds;
     double text_encode_seconds;
+    double image_encode_seconds;
     double transformer_download_seconds;
     double turbo_compile_seconds;
     double rope_precompute_seconds;
@@ -39,6 +42,7 @@ typedef struct {
     int pipeline_archive_hit;
     uint32_t sampling_steps;
     int turbo_adapter_enabled;
+    uint32_t condition_images;
     char video_path[1024];
     char audio_path[1024];
     char output_path[1024];
@@ -60,6 +64,13 @@ int minimax_h3_m3_run_downstream_smoke(
 /* Deterministic real-weight Video VAE benchmark.  This bypasses the text
  * encoder and denoiser and must not be reported as prompt-to-media E2E. */
 int minimax_h3_m3_run_video_vae_smoke(
+    const minimax_h3_m3_e2e_options *options,
+    minimax_h3_m3_e2e_result *result,
+    char *error,
+    size_t error_capacity);
+
+/* Native ImageIO + MPS validation of the FL2VA Video VAE encoder. */
+int minimax_h3_m3_run_image_vae_smoke(
     const minimax_h3_m3_e2e_options *options,
     minimax_h3_m3_e2e_result *result,
     char *error,

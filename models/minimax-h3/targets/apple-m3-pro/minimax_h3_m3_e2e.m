@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
 #import <Metal/Metal.h>
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
 #include "minimax_h3_m3_e2e.h"
 #include "minimax_h3.h"
@@ -152,6 +154,8 @@ typedef struct {
     __strong id<MTLComputePipelineState> dense_bf16_f16_to_bf16;
     __strong id<MTLComputePipelineState> dense_bf16_activation;
     __strong id<MTLComputePipelineState> dense_bf16_activation_add;
+    __strong id<MTLComputePipelineState> dense_bf16_mma;
+    __strong id<MTLComputePipelineState> dense_bf16_mma_add;
     __strong id<MTLComputePipelineState> dense_f32;
     __strong id<MTLComputePipelineState> dense_f32_f16_to_bf16;
     __strong id<MTLComputePipelineState> dense_f32_f32_to_bf16;
@@ -196,6 +200,8 @@ typedef struct {
     __strong id<MTLComputePipelineState> audio_alias;
     __strong id<MTLComputePipelineState> audio_residual;
     __strong id<MTLComputePipelineState> audio_average3;
+    __strong id<MTLComputePipelineState> image_silu;
+    __strong id<MTLComputePipelineState> image_add;
     int reference_vae_gemm;
     int reference_vae_attention;
     int pipeline_archive_hit;
@@ -230,6 +236,47 @@ typedef struct {
     __strong id<MTLBuffer> summary_value;
     __strong id<MTLBuffer> lse;
 } h3_tree_runtime;
+
+@interface H3MPSConvolutionDataSource : NSObject <MPSCNNConvolutionDataSource>
+@property(nonatomic, strong) MPSCNNConvolutionDescriptor *convDescriptor;
+@property(nonatomic, strong) NSData *weightStorage;
+@property(nonatomic, strong) NSMutableData *biasStorage;
+@property(nonatomic, copy) NSString *sourceLabel;
+@end
+
+@implementation H3MPSConvolutionDataSource
+- (MPSDataType)dataType { return MPSDataTypeFloat16; }
+- (MPSCNNConvolutionDescriptor *)descriptor { return self.convDescriptor; }
+- (void *)weights { return (void *)self.weightStorage.bytes; }
+- (float *)biasTerms { return (float *)self.biasStorage.mutableBytes; }
+- (BOOL)load { return YES; }
+- (void)purge {}
+- (NSString *)label { return self.sourceLabel; }
+- (id)copyWithZone:(NSZone *)zone {
+    (void)zone;
+    return self;
+}
+@end
+
+@interface H3MPSGroupNormDataSource : NSObject <MPSCNNGroupNormalizationDataSource>
+@property(nonatomic, strong) NSMutableData *gammaStorage;
+@property(nonatomic, strong) NSMutableData *betaStorage;
+@property(nonatomic) NSUInteger channelCount;
+@property(nonatomic) NSUInteger numberOfGroups;
+@property(nonatomic, copy) NSString *sourceLabel;
+@end
+
+@implementation H3MPSGroupNormDataSource
+- (float *)gamma { return (float *)self.gammaStorage.mutableBytes; }
+- (float *)beta { return (float *)self.betaStorage.mutableBytes; }
+- (NSUInteger)numberOfFeatureChannels { return self.channelCount; }
+- (NSString *)label { return self.sourceLabel; }
+- (float)epsilon { return 1e-6f; }
+- (id)copyWithZone:(NSZone *)zone {
+    (void)zone;
+    return self;
+}
+@end
 
 static void e2e_error(char *error, size_t capacity, const char *format, ...) {
     va_list arguments;
@@ -430,6 +477,8 @@ static int h3_metal_open(const char *path,
             "minimax_h3_dense_bf16_activation");
     H3_PIPE(dense_bf16_activation_add,
             "minimax_h3_dense_bf16_activation_add");
+    H3_PIPE(dense_bf16_mma, "minimax_h3_dense_bf16_mma");
+    H3_PIPE(dense_bf16_mma_add, "minimax_h3_dense_bf16_mma_add");
     H3_PIPE(dense_f32, "minimax_h3_dense_f32");
     H3_PIPE(dense_f32_f16_to_bf16,
             "minimax_h3_dense_f32_f16_to_bf16");
@@ -488,6 +537,8 @@ static int h3_metal_open(const char *path,
     H3_PIPE(audio_alias, "minimax_h3_audio_alias_snake_f32");
     H3_PIPE(audio_residual, "minimax_h3_audio_residual_f32");
     H3_PIPE(audio_average3, "minimax_h3_audio_average3_f32");
+    H3_PIPE(image_silu, "minimax_h3_mps_image_silu");
+    H3_PIPE(image_add, "minimax_h3_mps_image_add");
 #undef H3_PIPE
     if (result.device == nil || result.library == nil || result.queue == nil ||
         result.q4 == nil || result.q4_bf16 == nil || result.q8 == nil ||
@@ -495,6 +546,7 @@ static int h3_metal_open(const char *path,
         result.dense_bf16_f16_to_bf16 == nil ||
         result.dense_bf16_activation == nil ||
         result.dense_bf16_activation_add == nil ||
+        result.dense_bf16_mma == nil || result.dense_bf16_mma_add == nil ||
         result.dense_f32 == nil || result.dense_f32_f16_to_bf16 == nil ||
         result.dense_f32_f32_to_bf16 == nil ||
         result.dense_f32_bf16_to_f32 == nil ||
@@ -524,7 +576,8 @@ static int h3_metal_open(const char *path,
         result.video_attention_tiled == nil ||
         result.audio_conv == nil || result.audio_conv_transpose == nil ||
         result.audio_alias == nil || result.audio_residual == nil ||
-        result.audio_average3 == nil) {
+        result.audio_average3 == nil || result.image_silu == nil ||
+        result.image_add == nil) {
         const char *description = error.localizedDescription.UTF8String;
         e2e_error(error_message, error_capacity, "Metal setup failed: %s",
                   description != NULL ? description : "missing pipeline");
@@ -538,10 +591,9 @@ static int h3_metal_open(const char *path,
     return 0;
 }
 
-static int h3_wait(id<MTLCommandBuffer> command,
-                   char *error,
-                   size_t error_capacity) {
-    [command commit];
+static int h3_wait_committed(id<MTLCommandBuffer> command,
+                             char *error,
+                             size_t error_capacity) {
     [command waitUntilCompleted];
     if (command.status == MTLCommandBufferStatusError) {
         e2e_error(error, error_capacity, "Metal command failed: %s",
@@ -549,6 +601,13 @@ static int h3_wait(id<MTLCommandBuffer> command,
         return 1;
     }
     return 0;
+}
+
+static int h3_wait(id<MTLCommandBuffer> command,
+                   char *error,
+                   size_t error_capacity) {
+    [command commit];
+    return h3_wait_committed(command, error, error_capacity);
 }
 
 static int h3_bind_tensor(h3_remote_image *image,
@@ -924,8 +983,15 @@ static int h3_q4_linear_lora(h3_remote_image *image,
         .batch = batch,
         .input_stride = (uint32_t)down.tensor.shape[1],
     };
+    const char *lora_mma_text = getenv("MINIMAX_H3_LORA_MMA");
+    const int use_lora_mma =
+        (lora_mma_text == NULL || strcmp(lora_mma_text, "0") != 0) &&
+        down.tensor.shape[0] % 64u == 0u &&
+        down.tensor.shape[1] % 8u == 0u &&
+        up.tensor.shape[0] % 64u == 0u && up.tensor.shape[1] % 8u == 0u;
     uint32_t has_bias = 0u;
-    [encoder setComputePipelineState:metal->dense_bf16_activation];
+    [encoder setComputePipelineState:use_lora_mma
+        ? metal->dense_bf16_mma : metal->dense_bf16_activation];
     [encoder setBuffer:input offset:0 atIndex:0];
     h3_set(encoder, down, 1);
     h3_set(encoder, down, 2);
@@ -933,20 +999,35 @@ static int h3_q4_linear_lora(h3_remote_image *image,
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4];
     [encoder setBytes:&has_bias length:sizeof(has_bias) atIndex:5];
     uint32_t groups = batch * parameters.rows;
-    [encoder dispatchThreadgroups:MTLSizeMake((groups + 3u) / 4u, 1u, 1u)
-                threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
+    if (use_lora_mma) {
+        [encoder dispatchThreadgroups:
+            MTLSizeMake((parameters.rows + 63u) / 64u,
+                        (batch + 31u) / 32u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
+    } else {
+        [encoder dispatchThreadgroups:MTLSizeMake((groups + 3u) / 4u, 1u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
+    }
 
     parameters.rows = (uint32_t)up.tensor.shape[0];
     parameters.columns = (uint32_t)up.tensor.shape[1];
     parameters.input_stride = parameters.columns;
-    [encoder setComputePipelineState:metal->dense_bf16_activation_add];
+    [encoder setComputePipelineState:use_lora_mma
+        ? metal->dense_bf16_mma_add : metal->dense_bf16_activation_add];
     [encoder setBuffer:lora_scratch offset:0 atIndex:0];
     h3_set(encoder, up, 1);
     [encoder setBuffer:output offset:0 atIndex:2];
     [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3];
     groups = batch * parameters.rows;
-    [encoder dispatchThreadgroups:MTLSizeMake((groups + 3u) / 4u, 1u, 1u)
-                threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
+    if (use_lora_mma) {
+        [encoder dispatchThreadgroups:
+            MTLSizeMake((parameters.rows + 63u) / 64u,
+                        (batch + 31u) / 32u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
+    } else {
+        [encoder dispatchThreadgroups:MTLSizeMake((groups + 3u) / 4u, 1u, 1u)
+                    threadsPerThreadgroup:MTLSizeMake(128u, 1u, 1u)];
+    }
     return 0;
 }
 
@@ -2816,6 +2897,8 @@ static int h3_turbo_cache_build(h3_remote_image *source_cache,
 static int h3_transformer_run(const uint16_t *text_states,
                               size_t text_rows,
                               const minimax_h3_m3_e2e_options *options,
+                              const float *first_condition,
+                              const float *last_condition,
                               h3_metal *metal,
                               h3_latents *latents,
                               double *download_seconds,
@@ -2833,6 +2916,7 @@ static int h3_transformer_run(const uint16_t *text_states,
     *turbo_compile_seconds = 0.0;
     *rope_precompute_seconds = 0.0;
     int status = 1;
+    float *condition_video = NULL;
     uint32_t latent_height = options->height / 16u;
     uint32_t latent_width = options->width / 16u;
     if (options->frames % 17u != 5u || options->width % 32u != 0u ||
@@ -2845,13 +2929,26 @@ static int h3_transformer_run(const uint16_t *text_states,
     uint32_t video_frames = ((options->frames - 5u) / 17u) * 5u + 2u;
     uint32_t audio_frames = (uint32_t)llround(
         (double)options->frames / 24.0 * 40.0);
-    uint32_t video_rows = video_frames * (latent_height / 2u) *
-                          (latent_width / 2u);
+    uint32_t rows_per_video_frame = (latent_height / 2u) *
+                                    (latent_width / 2u);
+    uint32_t condition_images = (first_condition != NULL ? 1u : 0u) +
+                                (last_condition != NULL ? 1u : 0u);
+    uint32_t condition_rows = condition_images * rows_per_video_frame;
+    uint32_t target_video_rows = video_frames * rows_per_video_frame;
+    uint32_t video_rows = condition_rows + target_video_rows;
     uint32_t audio_rows = audio_frames * 2u;
-    uint32_t rows = (uint32_t)text_rows + audio_rows + video_rows;
+    uint32_t rows = (uint32_t)text_rows + condition_rows + audio_rows +
+                    target_video_rows;
     uint32_t padded = (rows + 31u) & ~31u;
     if (rows == 0u || rows > UINT32_MAX / 5376u) {
         e2e_error(error, error_capacity, "invalid packed H3 row count");
+        return 2;
+    }
+    const char *tree_mode = getenv("MINIMAX_H3_TREE_ATTENTION");
+    if (condition_images != 0u && tree_mode != NULL &&
+        tree_mode[0] != '\0' && strcmp(tree_mode, "0") != 0) {
+        e2e_error(error, error_capacity,
+                  "tree attention is not available for FL2VA conditioning");
         return 2;
     }
     if (h3_tree_runtime_build(options, text_rows, metal, &tree_runtime,
@@ -3018,9 +3115,36 @@ static int h3_transformer_run(const uint16_t *text_states,
     double audio_left = width_left * 32.0;
     double audio_right = (width_left +
         (double)(width_count - 1u) * width_ratio / width_count) * 32.0;
+    uint32_t condition_index = 0u;
+    const double span[5] = {1.0, 4.0, 4.0, 4.0, 4.0};
+    double final_temporal = origin;
+    for (uint32_t frame = 1u; frame < video_frames; ++frame)
+        final_temporal += (5.0 / 3.0) * span[(frame - 1u) % 5u];
+    for (uint32_t anchor = 0u; anchor < 2u; ++anchor) {
+        const float *condition = anchor == 0u ? first_condition
+                                              : last_condition;
+        if (condition == NULL) continue;
+        double anchor_time = anchor == 0u ? origin : final_temporal;
+        for (uint32_t spatial = 0u; spatial < rows_per_video_frame;
+             ++spatial) {
+            uint32_t row = (uint32_t)text_rows +
+                           condition_index * rows_per_video_frame + spatial;
+            uint32_t spatial_y = spatial / width_count;
+            uint32_t spatial_x = spatial % width_count;
+            position_values[row * 3u] = (float)anchor_time;
+            position_values[row * 3u + 1u] = (float)((height_left +
+                (double)spatial_y * height_ratio / height_count) * 32.0);
+            position_values[row * 3u + 2u] = (float)((width_left +
+                (double)spatial_x * width_ratio / width_count) * 32.0);
+            indices[row] = 6u;
+            final_index_values[row] = 2u;
+        }
+        ++condition_index;
+    }
     for (uint32_t channel = 0u; channel < 2u; ++channel) {
         for (uint32_t frame = 0u; frame < audio_frames; ++frame) {
-            uint32_t row = (uint32_t)text_rows + channel * audio_frames + frame;
+            uint32_t row = (uint32_t)text_rows + condition_rows +
+                           channel * audio_frames + frame;
             position_values[row * 3u] = (float)(origin + frame);
             position_values[row * 3u + 1u] = 0.0f;
             position_values[row * 3u + 2u] =
@@ -3029,13 +3153,11 @@ static int h3_transformer_run(const uint16_t *text_states,
             final_index_values[row] = 1u;
         }
     }
-    const double span[5] = {1.0, 4.0, 4.0, 4.0, 4.0};
     double temporal = origin;
     for (uint32_t frame = 0u; frame < video_frames; ++frame) {
-        uint32_t spatial_rows = (latent_height / 2u) * (latent_width / 2u);
-        for (uint32_t spatial = 0u; spatial < spatial_rows; ++spatial) {
-            uint32_t row = (uint32_t)text_rows + audio_rows +
-                           frame * spatial_rows + spatial;
+        for (uint32_t spatial = 0u; spatial < rows_per_video_frame; ++spatial) {
+            uint32_t row = (uint32_t)text_rows + condition_rows + audio_rows +
+                           frame * rows_per_video_frame + spatial;
             position_values[row * 3u] = (float)temporal;
             uint32_t spatial_y = spatial / width_count;
             uint32_t spatial_x = spatial % width_count;
@@ -3122,16 +3244,36 @@ static int h3_transformer_run(const uint16_t *text_states,
     }
 
     size_t video_values = (size_t)24u * video_frames * latent_height * latent_width;
+    size_t condition_values_per_image = (size_t)24u * latent_height *
+                                        latent_width;
+    size_t condition_value_count = condition_values_per_image *
+                                   condition_images;
     size_t audio_values = (size_t)32u * 2u * audio_frames;
     float *video = malloc(video_values * sizeof(float));
+    condition_video = condition_value_count != 0u
+                          ? malloc(condition_value_count * sizeof(float))
+                          : NULL;
     float *audio = malloc(audio_values * sizeof(float));
-    if (video == NULL || audio == NULL) {
+    if (video == NULL || audio == NULL ||
+        (condition_value_count != 0u && condition_video == NULL)) {
         free(video);
         free(audio);
         e2e_error(error, error_capacity, "latent allocation failed");
         goto cleanup;
     }
     uint64_t rng = options->seed != 0u ? options->seed : UINT64_C(1);
+    condition_index = 0u;
+    for (uint32_t anchor = 0u; anchor < 2u; ++anchor) {
+        const float *condition = anchor == 0u ? first_condition
+                                              : last_condition;
+        if (condition == NULL) continue;
+        float *destination = condition_video +
+                             condition_index * condition_values_per_image;
+        for (size_t index = 0u; index < condition_values_per_image; ++index)
+            destination[index] = 0.999f * condition[index] +
+                                 0.001f * h3_rng_normal(&rng);
+        ++condition_index;
+    }
     for (size_t index = 0u; index < video_values; ++index)
         video[index] = h3_rng_normal(&rng);
     for (size_t index = 0u; index < audio_values; ++index)
@@ -3158,9 +3300,45 @@ static int h3_transformer_run(const uint16_t *text_states,
             audio_sigmas.buffer.contents + audio_sigmas.offset);
     }
     double started = e2e_now();
+    const char *validate_groups_text =
+        getenv("MINIMAX_H3_VALIDATE_LAYER_GROUPS");
+    const int validate_layer_groups = validate_groups_text != NULL &&
+                                      strcmp(validate_groups_text, "1") == 0;
+    const char *pipeline_groups_text =
+        getenv("MINIMAX_H3_PIPELINE_LAYER_GROUPS");
+    const int pipeline_layer_groups = !validate_layer_groups &&
+        (pipeline_groups_text == NULL ||
+         strcmp(pipeline_groups_text, "0") != 0);
+    const char *lora_mma_text = getenv("MINIMAX_H3_LORA_MMA");
+    const int lora_mma_enabled =
+        lora_mma_text == NULL || strcmp(lora_mma_text, "0") != 0;
+    fprintf(stderr,
+            "stage=denoise-schedule layer_groups=%s lora=%s validation=%s\n",
+            pipeline_layer_groups ? "pipelined" : "synchronous",
+            lora_mma_enabled ? "bf16-mma" : "simd-reduction",
+            validate_layer_groups ? "layer-group" : "step");
     for (uint32_t step = 0u; step < step_count; ++step) {
         float *vp = video_input.contents;
         uint32_t patch_row = 0u;
+        for (uint32_t condition = 0u; condition < condition_images;
+             ++condition) {
+            const float *condition_source = condition_video +
+                (size_t)condition * condition_values_per_image;
+            for (uint32_t y = 0u; y < latent_height; y += 2u)
+                for (uint32_t x = 0u; x < latent_width; x += 2u) {
+                    uint32_t column = 0u;
+                    for (uint32_t channel = 0u; channel < 24u; ++channel)
+                        for (uint32_t py = 0u; py < 2u; ++py)
+                            for (uint32_t px = 0u; px < 2u; ++px) {
+                                size_t source = ((size_t)channel *
+                                    latent_height + y + py) * latent_width +
+                                    x + px;
+                                vp[(size_t)patch_row * 96u + column++] =
+                                    condition_source[source];
+                            }
+                    ++patch_row;
+                }
+        }
         for (uint32_t frame = 0u; frame < video_frames; ++frame) {
             for (uint32_t y = 0u; y < latent_height; y += 2u) {
                 for (uint32_t x = 0u; x < latent_width; x += 2u) {
@@ -3212,11 +3390,20 @@ static int h3_transformer_run(const uint16_t *text_states,
         memset(hidden.contents, 0, hidden_bytes);
         memcpy(hidden.contents, text_hidden.contents, text_rows * 5376u * 2u);
         memcpy((uint16_t *)hidden.contents + text_rows * 5376u,
+               video_hidden.contents, (size_t)condition_rows * 5376u * 2u);
+        memcpy((uint16_t *)hidden.contents +
+                   ((size_t)text_rows + condition_rows) * 5376u,
                audio_hidden.contents, (size_t)audio_rows * 5376u * 2u);
         memcpy((uint16_t *)hidden.contents +
-                   ((size_t)text_rows + audio_rows) * 5376u,
-               video_hidden.contents, (size_t)video_rows * 5376u * 2u);
+                   ((size_t)text_rows + condition_rows + audio_rows) * 5376u,
+               (uint16_t *)video_hidden.contents +
+                   (size_t)condition_rows * 5376u,
+               (size_t)target_video_rows * 5376u * 2u);
         const unsigned layers_per_command = 4u;
+        id<MTLCommandBuffer> group_commands[13] = { nil };
+        unsigned group_layer_starts[13] = { 0u };
+        unsigned group_layer_ends[13] = { 0u };
+        unsigned group_count = 0u;
         for (unsigned layer_start = 0u; layer_start < 50u;
              layer_start += layers_per_command) {
             unsigned layer_end = layer_start + layers_per_command;
@@ -3241,23 +3428,38 @@ static int h3_transformer_run(const uint16_t *text_states,
                 }
             }
             [encoder endEncoding];
-            if (group_status ||
-                h3_wait(command, error, error_capacity) != 0) {
+            if (group_status) {
                 free(video);
                 free(audio);
                 goto cleanup;
             }
-            size_t first_bad = 0u;
-            float largest = 0.0f;
-            if (!h3_bfloat_buffer_is_finite(hidden, (size_t)rows * 5376u,
-                                            &first_bad, &largest)) {
+            if (pipeline_layer_groups) {
+                group_commands[group_count] = command;
+                group_layer_starts[group_count] = layer_start;
+                group_layer_ends[group_count] = layer_end;
+                ++group_count;
+                [command commit];
+                continue;
+            }
+            if (h3_wait(command, error, error_capacity) != 0) {
                 free(video);
                 free(audio);
-                e2e_error(error, error_capacity,
-                          "non-finite transformer hidden at step %u layer %u "
-                          "index %zu (largest finite magnitude %.9g)",
-                          step, layer_end - 1u, first_bad, largest);
                 goto cleanup;
+            }
+            if (validate_layer_groups) {
+                size_t first_bad = 0u;
+                float largest = 0.0f;
+                if (!h3_bfloat_buffer_is_finite(
+                        hidden, (size_t)rows * 5376u, &first_bad, &largest)) {
+                    free(video);
+                    free(audio);
+                    e2e_error(
+                        error, error_capacity,
+                        "non-finite transformer hidden at step %u layer %u "
+                        "index %zu (largest finite magnitude %.9g)",
+                        step, layer_end - 1u, first_bad, largest);
+                    goto cleanup;
+                }
             }
             fprintf(stderr,
                     "stage=denoise-layer-group step=%u/%u layers=%u-%u/50 "
@@ -3265,6 +3467,48 @@ static int h3_transformer_run(const uint16_t *text_states,
                     step + 1u, step_count, layer_start + 1u, layer_end,
                     e2e_now() - group_started);
             fflush(stderr);
+        }
+        if (pipeline_layer_groups) {
+            if (group_count == 0u ||
+                h3_wait_committed(group_commands[group_count - 1u], error,
+                                  error_capacity) != 0) {
+                free(video);
+                free(audio);
+                goto cleanup;
+            }
+            for (unsigned group = 0u; group < group_count; ++group) {
+                id<MTLCommandBuffer> command = group_commands[group];
+                if (command.status == MTLCommandBufferStatusError) {
+                    e2e_error(error, error_capacity,
+                              "Metal layer-group command failed: %s",
+                              command.error.localizedDescription.UTF8String);
+                    free(video);
+                    free(audio);
+                    goto cleanup;
+                }
+                double gpu_seconds = command.GPUEndTime - command.GPUStartTime;
+                fprintf(stderr,
+                        "stage=denoise-layer-group step=%u/%u "
+                        "layers=%u-%u/50 seconds=%.6f submit=pipelined\n",
+                        step + 1u, step_count,
+                        group_layer_starts[group] + 1u,
+                        group_layer_ends[group], gpu_seconds);
+            }
+            fflush(stderr);
+        }
+        if (!validate_layer_groups) {
+            size_t first_bad = 0u;
+            float largest = 0.0f;
+            if (!h3_bfloat_buffer_is_finite(hidden, (size_t)rows * 5376u,
+                                            &first_bad, &largest)) {
+                free(video);
+                free(audio);
+                e2e_error(error, error_capacity,
+                          "non-finite transformer hidden at step %u "
+                          "index %zu (largest finite magnitude %.9g)",
+                          step, first_bad, largest);
+                goto cleanup;
+            }
         }
         {
             id<MTLCommandBuffer> command = [metal->queue commandBuffer];
@@ -3300,12 +3544,17 @@ static int h3_transformer_run(const uint16_t *text_states,
             }
         }
         memcpy(audio_hidden.contents,
-               (uint16_t *)normalized.contents + text_rows * 5376u,
-               (size_t)audio_rows * 5376u * 2u);
-        memcpy(video_hidden.contents,
                (uint16_t *)normalized.contents +
-                   ((size_t)text_rows + audio_rows) * 5376u,
-               (size_t)video_rows * 5376u * 2u);
+                   ((size_t)text_rows + condition_rows) * 5376u,
+               (size_t)audio_rows * 5376u * 2u);
+        memcpy(video_hidden.contents, (uint16_t *)normalized.contents +
+                   (size_t)text_rows * 5376u,
+               (size_t)condition_rows * 5376u * 2u);
+        memcpy((uint16_t *)video_hidden.contents +
+                   (size_t)condition_rows * 5376u,
+               (uint16_t *)normalized.contents +
+                   ((size_t)text_rows + condition_rows + audio_rows) * 5376u,
+               (size_t)target_video_rows * 5376u * 2u);
         {
             id<MTLCommandBuffer> command = [metal->queue commandBuffer];
             id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
@@ -3353,7 +3602,8 @@ static int h3_transformer_run(const uint16_t *text_states,
                 goto cleanup;
             }
         }
-        const float *vv = video_velocity.contents;
+        const float *vv = (const float *)video_velocity.contents +
+                          (size_t)condition_rows * 96u;
         patch_row = 0u;
         float vd = video_sigma[step] - video_sigma[step + 1u];
         for (uint32_t frame = 0u; frame < video_frames; ++frame)
@@ -3413,6 +3663,7 @@ static int h3_transformer_run(const uint16_t *text_states,
     latents->audio_latent_frames = audio_frames;
     status = 0;
 cleanup:
+    free(condition_video);
     h3_remote_image_close(&adapter);
     h3_remote_image_close(&cache);
     h3_remote_image_close(&weights);
@@ -3611,6 +3862,517 @@ static const uint16_t *h3_f16_tensor_pointer(h3_remote_image *image,
                               image->file_padding + tensor->data_start);
 }
 
+static MPSImage *h3_mps_image(id<MTLDevice> device,
+                              uint32_t width,
+                              uint32_t height,
+                              uint32_t channels) {
+    MPSImageDescriptor *descriptor = [MPSImageDescriptor
+        imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat16
+                                    width:width
+                                   height:height
+                          featureChannels:channels];
+    return [[MPSImage alloc] initWithDevice:device imageDescriptor:descriptor];
+}
+
+static int h3_mps_wait(id<MTLCommandBuffer> command,
+                       char *error,
+                       size_t error_capacity) {
+    return h3_wait(command, error, error_capacity);
+}
+
+static int h3_mps_image_unary(h3_metal *metal,
+                              id<MTLComputePipelineState> pipeline,
+                              MPSImage *source,
+                              MPSImage *destination,
+                              char *error,
+                              size_t error_capacity) {
+    id<MTLCommandBuffer> command = [metal->queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+    [encoder setComputePipelineState:pipeline];
+    [encoder setTexture:source.texture atIndex:0];
+    [encoder setTexture:destination.texture atIndex:1];
+    NSUInteger slices = (destination.featureChannels + 3u) / 4u;
+    [encoder dispatchThreads:MTLSizeMake(destination.width,
+                                         destination.height, slices)
+             threadsPerThreadgroup:MTLSizeMake(8u, 8u, 1u)];
+    [encoder endEncoding];
+    return h3_mps_wait(command, error, error_capacity);
+}
+
+static int h3_mps_image_add(h3_metal *metal,
+                            MPSImage *left,
+                            MPSImage *right,
+                            MPSImage *destination,
+                            char *error,
+                            size_t error_capacity) {
+    id<MTLCommandBuffer> command = [metal->queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+    [encoder setComputePipelineState:metal->image_add];
+    [encoder setTexture:left.texture atIndex:0];
+    [encoder setTexture:right.texture atIndex:1];
+    [encoder setTexture:destination.texture atIndex:2];
+    NSUInteger slices = (destination.featureChannels + 3u) / 4u;
+    [encoder dispatchThreads:MTLSizeMake(destination.width,
+                                         destination.height, slices)
+             threadsPerThreadgroup:MTLSizeMake(8u, 8u, 1u)];
+    [encoder endEncoding];
+    return h3_mps_wait(command, error, error_capacity);
+}
+
+static int h3_mps_convolution(h3_remote_image *vae,
+                              h3_metal *metal,
+                              const char *prefix,
+                              MPSImage *source,
+                              uint32_t stride,
+                              MPSImage **destination,
+                              char *error,
+                              size_t error_capacity) {
+    char weight_name[192];
+    char bias_name[192];
+    snprintf(weight_name, sizeof(weight_name), "%s.weight", prefix);
+    snprintf(bias_name, sizeof(bias_name), "%s.bias", prefix);
+    minimax_h3_remote_tensor weight_tensor;
+    minimax_h3_remote_tensor bias_tensor;
+    const uint16_t *source_weights = h3_f16_tensor_pointer(
+        vae, weight_name, &weight_tensor, error, error_capacity);
+    const uint16_t *source_bias = h3_f16_tensor_pointer(
+        vae, bias_name, &bias_tensor, error, error_capacity);
+    if (source_weights == NULL || source_bias == NULL ||
+        weight_tensor.rank != 5u || bias_tensor.rank != 1u ||
+        weight_tensor.shape[0] != bias_tensor.shape[0] ||
+        weight_tensor.shape[1] != source.featureChannels ||
+        (weight_tensor.shape[2] != 1u && weight_tensor.shape[2] != 3u) ||
+        (weight_tensor.shape[3] != 1u && weight_tensor.shape[3] != 3u) ||
+        weight_tensor.shape[3] != weight_tensor.shape[4] ||
+        (stride != 1u && stride != 2u)) {
+        e2e_error(error, error_capacity,
+                  "unexpected Video VAE convolution shape: %s", prefix);
+        return 1;
+    }
+    uint32_t output_channels = (uint32_t)weight_tensor.shape[0];
+    uint32_t input_channels = (uint32_t)weight_tensor.shape[1];
+    uint32_t temporal_kernel = (uint32_t)weight_tensor.shape[2];
+    uint32_t kernel = (uint32_t)weight_tensor.shape[3];
+    size_t packed_count = (size_t)output_channels * kernel * kernel *
+                          input_channels;
+    NSMutableData *packed = [NSMutableData
+        dataWithLength:packed_count * sizeof(uint16_t)];
+    if (packed == nil) {
+        e2e_error(error, error_capacity,
+                  "cannot allocate Video VAE convolution weights: %s", prefix);
+        return 1;
+    }
+    uint16_t *target_weights = packed.mutableBytes;
+    uint32_t temporal = temporal_kernel - 1u;
+    for (uint32_t output = 0u; output < output_channels; ++output)
+        for (uint32_t y = 0u; y < kernel; ++y)
+            for (uint32_t x = 0u; x < kernel; ++x)
+                for (uint32_t input = 0u; input < input_channels; ++input) {
+                    size_t source_index =
+                        ((((size_t)output * input_channels + input) *
+                               temporal_kernel + temporal) *
+                              kernel + y) *
+                             kernel + x;
+                    size_t target_index =
+                        (((size_t)output * kernel + y) * kernel + x) *
+                            input_channels + input;
+                    target_weights[target_index] = source_weights[source_index];
+                }
+    NSMutableData *biases = [NSMutableData
+        dataWithLength:(size_t)output_channels * sizeof(float)];
+    float *target_bias = biases.mutableBytes;
+    for (uint32_t output = 0u; output < output_channels; ++output)
+        target_bias[output] = (float)((const __fp16 *)source_bias)[output];
+
+    MPSCNNConvolutionDescriptor *descriptor = [MPSCNNConvolutionDescriptor
+        cnnConvolutionDescriptorWithKernelWidth:kernel
+                                   kernelHeight:kernel
+                           inputFeatureChannels:input_channels
+                          outputFeatureChannels:output_channels];
+    descriptor.strideInPixelsX = stride;
+    descriptor.strideInPixelsY = stride;
+    H3MPSConvolutionDataSource *data_source =
+        [H3MPSConvolutionDataSource new];
+    data_source.convDescriptor = descriptor;
+    data_source.weightStorage = packed;
+    data_source.biasStorage = biases;
+    data_source.sourceLabel = [NSString stringWithUTF8String:prefix];
+    MPSCNNConvolution *convolution = [[MPSCNNConvolution alloc]
+        initWithDevice:metal->device weights:data_source];
+    convolution.edgeMode = MPSImageEdgeModeMirror;
+    convolution.offset = (MPSOffset) {
+        .x = stride == 2u ? 1 : 0,
+        .y = stride == 2u ? 1 : 0,
+        .z = 0,
+    };
+    uint32_t width = stride == 2u ? (uint32_t)((source.width + 1u) / 2u)
+                                  : (uint32_t)source.width;
+    uint32_t height = stride == 2u ? (uint32_t)((source.height + 1u) / 2u)
+                                   : (uint32_t)source.height;
+    MPSImage *output = h3_mps_image(metal->device, width, height,
+                                    output_channels);
+    if (convolution == nil || output == nil) {
+        e2e_error(error, error_capacity,
+                  "cannot create Video VAE convolution: %s", prefix);
+        return 1;
+    }
+    id<MTLCommandBuffer> command = [metal->queue commandBuffer];
+    [convolution encodeToCommandBuffer:command
+                           sourceImage:source
+                      destinationImage:output];
+    if (h3_mps_wait(command, error, error_capacity) != 0) return 1;
+    *destination = output;
+    return 0;
+}
+
+static int h3_mps_norm_silu(h3_remote_image *vae,
+                            h3_metal *metal,
+                            const char *prefix,
+                            MPSImage *source,
+                            MPSImage **destination,
+                            char *error,
+                            size_t error_capacity) {
+    char weight_name[192];
+    char bias_name[192];
+    snprintf(weight_name, sizeof(weight_name), "%s.weight", prefix);
+    snprintf(bias_name, sizeof(bias_name), "%s.bias", prefix);
+    minimax_h3_remote_tensor weight_tensor;
+    minimax_h3_remote_tensor bias_tensor;
+    const uint16_t *weights = h3_f16_tensor_pointer(
+        vae, weight_name, &weight_tensor, error, error_capacity);
+    const uint16_t *bias = h3_f16_tensor_pointer(
+        vae, bias_name, &bias_tensor, error, error_capacity);
+    if (weights == NULL || bias == NULL || weight_tensor.rank != 1u ||
+        bias_tensor.rank != 1u ||
+        weight_tensor.shape[0] != source.featureChannels ||
+        bias_tensor.shape[0] != source.featureChannels) {
+        e2e_error(error, error_capacity,
+                  "unexpected Video VAE group norm shape: %s", prefix);
+        return 1;
+    }
+    uint32_t channels = (uint32_t)source.featureChannels;
+    H3MPSGroupNormDataSource *data_source = [H3MPSGroupNormDataSource new];
+    data_source.gammaStorage = [NSMutableData
+        dataWithLength:(size_t)channels * sizeof(float)];
+    data_source.betaStorage = [NSMutableData
+        dataWithLength:(size_t)channels * sizeof(float)];
+    data_source.channelCount = channels;
+    data_source.numberOfGroups = 32u;
+    data_source.sourceLabel = [NSString stringWithUTF8String:prefix];
+    float *gamma = data_source.gammaStorage.mutableBytes;
+    float *beta = data_source.betaStorage.mutableBytes;
+    for (uint32_t channel = 0u; channel < channels; ++channel) {
+        gamma[channel] = (float)((const __fp16 *)weights)[channel];
+        beta[channel] = (float)((const __fp16 *)bias)[channel];
+    }
+    MPSCNNGroupNormalization *normalization =
+        [[MPSCNNGroupNormalization alloc] initWithDevice:metal->device
+                                              dataSource:data_source];
+    normalization.epsilon = 1e-6f;
+    MPSImage *normalized = h3_mps_image(
+        metal->device, (uint32_t)source.width, (uint32_t)source.height,
+        channels);
+    MPSImage *activated = h3_mps_image(
+        metal->device, (uint32_t)source.width, (uint32_t)source.height,
+        channels);
+    if (normalization == nil || normalized == nil || activated == nil) {
+        e2e_error(error, error_capacity,
+                  "cannot create Video VAE group norm: %s", prefix);
+        return 1;
+    }
+    id<MTLCommandBuffer> command = [metal->queue commandBuffer];
+    [normalization encodeToCommandBuffer:command
+                              sourceImage:source
+                         destinationImage:normalized];
+    if (h3_mps_wait(command, error, error_capacity) != 0 ||
+        h3_mps_image_unary(metal, metal->image_silu, normalized, activated,
+                           error, error_capacity) != 0)
+        return 1;
+    *destination = activated;
+    return 0;
+}
+
+static int h3_mps_resnet_block(h3_remote_image *vae,
+                               h3_metal *metal,
+                               uint32_t level,
+                               uint32_t block,
+                               MPSImage *source,
+                               MPSImage **destination,
+                               char *error,
+                               size_t error_capacity) {
+    char prefix[160];
+    char name[192];
+    snprintf(prefix, sizeof(prefix), "encoder.down.%u.block.%u", level,
+             block);
+    MPSImage *activated = nil;
+    MPSImage *hidden = nil;
+    snprintf(name, sizeof(name), "%s.norm1", prefix);
+    if (h3_mps_norm_silu(vae, metal, name, source, &activated, error,
+                         error_capacity) != 0)
+        return 1;
+    snprintf(name, sizeof(name), "%s.conv1", prefix);
+    if (h3_mps_convolution(vae, metal, name, activated, 1u, &hidden, error,
+                           error_capacity) != 0)
+        return 1;
+    snprintf(name, sizeof(name), "%s.norm2", prefix);
+    if (h3_mps_norm_silu(vae, metal, name, hidden, &activated, error,
+                         error_capacity) != 0)
+        return 1;
+    snprintf(name, sizeof(name), "%s.conv2", prefix);
+    if (h3_mps_convolution(vae, metal, name, activated, 1u, &hidden, error,
+                           error_capacity) != 0)
+        return 1;
+    MPSImage *residual = source;
+    if (source.featureChannels != hidden.featureChannels) {
+        snprintf(name, sizeof(name), "%s.nin_shortcut", prefix);
+        if (h3_mps_convolution(vae, metal, name, source, 1u, &residual, error,
+                               error_capacity) != 0)
+            return 1;
+    }
+    MPSImage *output = h3_mps_image(
+        metal->device, (uint32_t)hidden.width, (uint32_t)hidden.height,
+        (uint32_t)hidden.featureChannels);
+    if (output == nil || h3_mps_image_add(metal, residual, hidden, output,
+                                          error, error_capacity) != 0)
+        return 1;
+    *destination = output;
+    return 0;
+}
+
+static int h3_load_condition_image(const char *path,
+                                   uint32_t width,
+                                   uint32_t height,
+                                   uint16_t **pixels,
+                                   char *error,
+                                   size_t error_capacity) {
+    NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+    CGImageSourceRef source = CGImageSourceCreateWithURL(
+        (__bridge CFURLRef)url, NULL);
+    CGImageRef image = source != NULL
+                           ? CGImageSourceCreateImageAtIndex(source, 0u, NULL)
+                           : NULL;
+    if (source != NULL) CFRelease(source);
+    if (image == NULL) {
+        e2e_error(error, error_capacity,
+                  "cannot decode conditioning image: %s", path);
+        return 1;
+    }
+    size_t source_width = CGImageGetWidth(image);
+    size_t source_height = CGImageGetHeight(image);
+    double source_ratio = (double)source_width / (double)source_height;
+    double target_ratio = (double)width / (double)height;
+    CGRect crop = CGRectMake(0.0, 0.0, (double)source_width,
+                             (double)source_height);
+    if (source_ratio > target_ratio) {
+        double crop_width = (double)source_height * target_ratio;
+        crop.origin.x = ((double)source_width - crop_width) * 0.5;
+        crop.size.width = crop_width;
+    } else if (source_ratio < target_ratio) {
+        double crop_height = (double)source_width / target_ratio;
+        crop.origin.y = ((double)source_height - crop_height) * 0.5;
+        crop.size.height = crop_height;
+    }
+    CGImageRef cropped = CGImageCreateWithImageInRect(image, crop);
+    size_t rgba_bytes = (size_t)width * height * 4u;
+    uint8_t *rgba = calloc(rgba_bytes, 1u);
+    CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = rgba != NULL
+        ? CGBitmapContextCreate(rgba, width, height, 8u, (size_t)width * 4u,
+                                color_space,
+                                kCGImageAlphaPremultipliedLast |
+                                    kCGBitmapByteOrder32Big)
+        : NULL;
+    CGColorSpaceRelease(color_space);
+    if (cropped == NULL || context == NULL) {
+        if (cropped != NULL) CGImageRelease(cropped);
+        CGImageRelease(image);
+        if (context != NULL) CGContextRelease(context);
+        free(rgba);
+        e2e_error(error, error_capacity,
+                  "cannot allocate conditioning image canvas");
+        return 1;
+    }
+    CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
+    CGContextTranslateCTM(context, 0.0, height);
+    CGContextScaleCTM(context, 1.0, -1.0);
+    CGContextDrawImage(context, CGRectMake(0.0, 0.0, width, height), cropped);
+    CGContextRelease(context);
+    CGImageRelease(cropped);
+    CGImageRelease(image);
+
+    size_t values = (size_t)width * height * 3u;
+    uint16_t *normalized = malloc(values * sizeof(uint16_t));
+    if (normalized == NULL) {
+        free(rgba);
+        e2e_error(error, error_capacity,
+                  "cannot allocate normalized conditioning image");
+        return 1;
+    }
+    const float mean[3] = {0.485f, 0.456f, 0.406f};
+    const float standard_deviation[3] = {0.229f, 0.224f, 0.225f};
+    for (size_t pixel = 0u; pixel < (size_t)width * height; ++pixel)
+        for (uint32_t channel = 0u; channel < 3u; ++channel) {
+            float value = (float)rgba[pixel * 4u + channel] / 255.0f;
+            ((__fp16 *)normalized)[pixel * 3u + channel] =
+                (__fp16)((value - mean[channel]) /
+                         standard_deviation[channel]);
+        }
+    free(rgba);
+    *pixels = normalized;
+    return 0;
+}
+
+static int h3_video_encode_condition(const char *path,
+                                     const minimax_h3_m3_e2e_options *options,
+                                     h3_metal *metal,
+                                     float **latents,
+                                     double *seconds,
+                                     size_t *peak_footprint,
+                                     char *error,
+                                     size_t error_capacity) {
+    double started = e2e_now();
+    h3_remote_image vae = {0};
+    uint16_t *pixels = NULL;
+    float *result = NULL;
+    MPSImage *hidden = nil;
+    MPSImage *next = nil;
+    int status = 1;
+    if (h3_remote_image_open("video_vae.safetensors", "video-vae", &vae,
+                             error, error_capacity) != 0)
+        return 1;
+    if (h3_load_condition_image(path, options->width, options->height,
+                                &pixels, error, error_capacity) != 0)
+        goto cleanup;
+    hidden = h3_mps_image(metal->device, options->width,
+                          options->height, 3u);
+    if (hidden == nil) {
+        e2e_error(error, error_capacity,
+                  "cannot allocate Video VAE input image");
+        goto cleanup;
+    }
+    MTLRegion full = MTLRegionMake3D(0u, 0u, 0u, options->width,
+                                     options->height, 1u);
+    MPSImageReadWriteParams rw = {
+        .featureChannelOffset = 0u,
+        .numberOfFeatureChannelsToReadWrite = 3u,
+    };
+    [hidden writeBytes:pixels
+            dataLayout:MPSDataLayoutHeightxWidthxFeatureChannels
+           bytesPerRow:(NSUInteger)options->width * 3u * sizeof(uint16_t)
+                region:full
+    featureChannelInfo:rw
+            imageIndex:0u];
+    free(pixels);
+    pixels = NULL;
+    if (h3_mps_convolution(&vae, metal, "encoder.conv_in", hidden, 1u,
+                           &next, error, error_capacity) != 0)
+        goto cleanup;
+    hidden = next;
+    for (uint32_t level = 0u; level < 6u; ++level) {
+        for (uint32_t block = 0u; block < 2u; ++block) {
+            if (h3_mps_resnet_block(&vae, metal, level, block, hidden, &next,
+                                    error, error_capacity) != 0)
+                goto cleanup;
+            hidden = next;
+        }
+        if (level < 4u) {
+            char name[160];
+            snprintf(name, sizeof(name), "encoder.down.%u.downsample.conv",
+                     level);
+            if (h3_mps_convolution(&vae, metal, name, hidden, 2u, &next,
+                                   error, error_capacity) != 0)
+                goto cleanup;
+            hidden = next;
+        }
+        *peak_footprint = MAX(*peak_footprint, e2e_footprint());
+        fprintf(stderr,
+                "stage=image-vae path=%s level=%u/6 geometry=%lux%lux%lu "
+                "footprint=%zu\n",
+                path, level + 1u, (unsigned long)hidden.width,
+                (unsigned long)hidden.height,
+                (unsigned long)hidden.featureChannels, e2e_footprint());
+        fflush(stderr);
+    }
+    if (h3_mps_norm_silu(&vae, metal, "encoder.norm_out", hidden, &next,
+                         error, error_capacity) != 0 ||
+        h3_mps_convolution(&vae, metal, "encoder.conv_out", next, 1u,
+                           &hidden, error, error_capacity) != 0 ||
+        h3_mps_convolution(&vae, metal, "quant_conv", hidden, 1u, &next,
+                           error, error_capacity) != 0)
+        goto cleanup;
+    uint32_t latent_width = options->width / 16u;
+    uint32_t latent_height = options->height / 16u;
+    if (next.width != latent_width || next.height != latent_height ||
+        next.featureChannels != 48u) {
+        e2e_error(error, error_capacity,
+                  "unexpected Video VAE latent geometry: %lux%lux%lu",
+                  (unsigned long)next.width, (unsigned long)next.height,
+                  (unsigned long)next.featureChannels);
+        goto cleanup;
+    }
+    size_t moment_values = (size_t)latent_width * latent_height * 48u;
+    uint16_t *moments = malloc(moment_values * sizeof(uint16_t));
+    result = malloc((size_t)latent_width * latent_height * 24u *
+                    sizeof(float));
+    if (moments == NULL || result == NULL) {
+        free(moments);
+        e2e_error(error, error_capacity,
+                  "cannot allocate Video VAE posterior");
+        goto cleanup;
+    }
+    full = MTLRegionMake3D(0u, 0u, 0u, latent_width, latent_height, 1u);
+    rw.numberOfFeatureChannelsToReadWrite = 48u;
+    [next readBytes:moments
+          dataLayout:MPSDataLayoutHeightxWidthxFeatureChannels
+         bytesPerRow:(NSUInteger)latent_width * 48u * sizeof(uint16_t)
+              region:full
+  featureChannelInfo:rw
+          imageIndex:0u];
+    minimax_h3_remote_tensor mean_tensor;
+    minimax_h3_remote_tensor std_tensor;
+    const uint16_t *latent_mean = h3_f16_tensor_pointer(
+        &vae, "latents_mean", &mean_tensor, error, error_capacity);
+    const uint16_t *latent_std = h3_f16_tensor_pointer(
+        &vae, "latents_std", &std_tensor, error, error_capacity);
+    if (latent_mean == NULL || latent_std == NULL ||
+        mean_tensor.rank != 1u || std_tensor.rank != 1u ||
+        mean_tensor.shape[0] != 24u || std_tensor.shape[0] != 24u) {
+        free(moments);
+        goto cleanup;
+    }
+    uint64_t rng = UINT64_C(42);
+    size_t spatial = (size_t)latent_width * latent_height;
+    for (size_t pixel = 0u; pixel < spatial; ++pixel)
+        for (uint32_t channel = 0u; channel < 24u; ++channel) {
+            float mean = (float)((const __fp16 *)moments)[pixel * 48u +
+                                                               channel];
+            float log_variance = (float)((const __fp16 *)moments)[
+                pixel * 48u + 24u + channel];
+            log_variance = fmaxf(-30.0f, fminf(20.0f, log_variance));
+            float sample = mean + expf(0.5f * log_variance) *
+                                      h3_rng_normal(&rng);
+            sample = (float)(__fp16)sample;
+            result[(size_t)channel * spatial + pixel] =
+                (sample - (float)((const __fp16 *)latent_mean)[channel]) /
+                (float)((const __fp16 *)latent_std)[channel];
+        }
+    free(moments);
+    *latents = result;
+    result = NULL;
+    *seconds = e2e_now() - started;
+    fprintf(stderr,
+            "stage=image-vae status=complete path=%s latent=%ux%ux24 "
+            "seconds=%.6f\n",
+            path, latent_width, latent_height, *seconds);
+    fflush(stderr);
+    status = 0;
+cleanup:
+    free(pixels);
+    free(result);
+    h3_remote_image_close(&vae);
+    return status;
+}
+
 static int h3_write_ppm_frames(const char *directory,
                                const uint8_t *rgb,
                                uint32_t frames,
@@ -3793,7 +4555,11 @@ static int h3_video_decode(const h3_latents *latents,
         return 1;
     }
     uint32_t chunk_count = pseudo_tokens / chunk_stride - 1u;
-    uint32_t tile_height = 256u;
+    /* At the 640x352 "360p" profile, a 256-pixel-high tile forces two
+     * tiles to overlap by 160 pixels.  Three 160-pixel tiles retain the
+     * required 64-pixel overlap while reducing both redundant projection
+     * work and the quadratic attention footprint. */
+    uint32_t tile_height = options->height == 352u ? 160u : 256u;
     uint32_t tile_width = 256u;
     const char *tile_height_text = getenv("MINIMAX_H3_VAE_TILE_HEIGHT");
     const char *tile_width_text = getenv("MINIMAX_H3_VAE_TILE_WIDTH");
@@ -3810,6 +4576,9 @@ static int h3_video_decode(const h3_latents *latents,
         h3_remote_image_close(&vae);
         return 1;
     }
+    fprintf(stderr,
+            "stage=video-vae-tiling tile=%ux%u grid=%ux%u chunks=%u\n",
+            tile_width, tile_height, x_plan.count, y_plan.count, chunk_count);
     uint32_t maximum_latent_height = y_plan.lengths[0] / 16u;
     uint32_t maximum_latent_width = x_plan.lengths[0] / 16u;
     uint32_t maximum_tokens = chunk_latent_frames * maximum_latent_height *
@@ -4712,7 +5481,8 @@ int minimax_h3_m3_run_downstream_smoke(
             return 1;
         measured.metal_setup_seconds = metal.setup_seconds;
         measured.pipeline_archive_hit = metal.pipeline_archive_hit;
-        if (h3_transformer_run(fixed_state, 1u, options, &metal, &generated,
+        if (h3_transformer_run(fixed_state, 1u, options, NULL, NULL, &metal,
+                               &generated,
                                &measured.transformer_download_seconds,
                                &measured.turbo_compile_seconds,
                                &measured.rope_precompute_seconds,
@@ -4856,6 +5626,73 @@ int minimax_h3_m3_run_video_vae_smoke(
     }
 }
 
+int minimax_h3_m3_run_image_vae_smoke(
+    const minimax_h3_m3_e2e_options *options,
+    minimax_h3_m3_e2e_result *result,
+    char *error,
+    size_t error_capacity) {
+    if (options == NULL || result == NULL ||
+        options->first_image_path == NULL || options->metallib_path == NULL ||
+        options->output_directory == NULL || options->width == 0u ||
+        options->height == 0u || options->width % 16u != 0u ||
+        options->height % 16u != 0u) {
+        e2e_error(error, error_capacity, "invalid image VAE smoke options");
+        return 2;
+    }
+    @autoreleasepool {
+        h3_metal metal;
+        minimax_h3_m3_e2e_result measured;
+        memset(&measured, 0, sizeof(measured));
+        float *condition = NULL;
+        if (h3_metal_open(options->metallib_path, &metal, error,
+                          error_capacity) != 0)
+            return 1;
+        measured.metal_setup_seconds = metal.setup_seconds;
+        measured.pipeline_archive_hit = metal.pipeline_archive_hit;
+        if (h3_video_encode_condition(
+                options->first_image_path, options, &metal, &condition,
+                &measured.image_encode_seconds,
+                &measured.peak_footprint_bytes, error,
+                error_capacity) != 0)
+            return 1;
+        if (mkdir(options->output_directory, 0755) != 0 && errno != EEXIST) {
+            free(condition);
+            e2e_error(error, error_capacity,
+                      "cannot create image VAE smoke directory");
+            return 1;
+        }
+        if (snprintf(measured.output_path, sizeof(measured.output_path),
+                     "%s/condition-latent.f32", options->output_directory) >=
+            (int)sizeof(measured.output_path)) {
+            free(condition);
+            e2e_error(error, error_capacity,
+                      "image VAE smoke output path is too long");
+            return 1;
+        }
+        FILE *file = fopen(measured.output_path, "wb");
+        size_t values = (size_t)24u * (options->height / 16u) *
+                        (options->width / 16u);
+        size_t written = 0u;
+        int close_status = 0;
+        if (file != NULL) {
+            written = fwrite(condition, sizeof(float), values, file);
+            close_status = fclose(file);
+        }
+        if (file == NULL || written != values || close_status != 0) {
+            free(condition);
+            e2e_error(error, error_capacity,
+                      "cannot write image VAE smoke latent");
+            return 1;
+        }
+        free(condition);
+        measured.condition_images = 1u;
+        measured.sequence_rows = (size_t)(options->height / 32u) *
+                                 (options->width / 32u);
+        *result = measured;
+        return 0;
+    }
+}
+
 int minimax_h3_m3_run_e2e(const minimax_h3_m3_e2e_options *options,
                           minimax_h3_m3_e2e_result *result,
                           char *error,
@@ -4907,9 +5744,43 @@ int minimax_h3_m3_run_e2e(const minimax_h3_m3_e2e_options *options,
             return 1;
         }
         free(token_ids);
+        float *first_condition = NULL;
+        float *last_condition = NULL;
+        if (options->first_image_path != NULL &&
+            h3_video_encode_condition(
+                options->first_image_path, options, &metal, &first_condition,
+                &measured.image_encode_seconds,
+                &measured.peak_footprint_bytes, error, error_capacity) != 0) {
+            free(text_states);
+            return 1;
+        }
+        if (options->last_image_path != NULL) {
+            double last_seconds = 0.0;
+            if (h3_video_encode_condition(
+                    options->last_image_path, options, &metal,
+                    &last_condition, &last_seconds,
+                    &measured.peak_footprint_bytes, error,
+                    error_capacity) != 0) {
+                free(first_condition);
+                free(text_states);
+                return 1;
+            }
+            measured.image_encode_seconds += last_seconds;
+        }
+        measured.condition_images =
+            (first_condition != NULL ? 1u : 0u) +
+            (last_condition != NULL ? 1u : 0u);
+        if (measured.condition_images != 0u) {
+            fprintf(stderr,
+                    "stage=fl2va conditions=%u conditioner=vae-anchor "
+                    "vision_tokens=text-only\n",
+                    measured.condition_images);
+            fflush(stderr);
+        }
         h3_latents generated = {0};
         measured.peak_footprint_bytes = e2e_footprint();
-        if (h3_transformer_run(text_states, token_count, options, &metal,
+        if (h3_transformer_run(text_states, token_count, options,
+                               first_condition, last_condition, &metal,
                                &generated,
                                &measured.transformer_download_seconds,
                                &measured.turbo_compile_seconds,
@@ -4917,13 +5788,43 @@ int minimax_h3_m3_run_e2e(const minimax_h3_m3_e2e_options *options,
                                &measured.denoise_seconds,
                                &measured.peak_footprint_bytes, error,
                                error_capacity) != 0) {
+            free(first_condition);
+            free(last_condition);
             free(text_states);
             return 1;
         }
+        free(first_condition);
+        free(last_condition);
         measured.turbo_adapter_enabled =
             getenv("MINIMAX_H3_TURBO_ADAPTER") != NULL;
         measured.sampling_steps = measured.turbo_adapter_enabled ? 4u : 30u;
         free(text_states);
+        const char *denoise_only_text =
+            getenv("MINIMAX_H3_DENOISE_ONLY");
+        if (denoise_only_text != NULL &&
+            strcmp(denoise_only_text, "1") == 0) {
+            measured.sequence_rows = token_count +
+                (size_t)generated.audio_latent_frames * 2u +
+                ((size_t)generated.video_latent_frames +
+                 measured.condition_images) *
+                    (generated.latent_height / 2u) *
+                    (generated.latent_width / 2u);
+            free(generated.video);
+            free(generated.audio);
+            measured.total_seconds = e2e_now() - total_started;
+            getrusage(RUSAGE_SELF, &usage_end);
+            measured.process_user_seconds =
+                e2e_timeval(usage_end.ru_utime) -
+                e2e_timeval(usage_start.ru_utime);
+            measured.process_system_seconds =
+                e2e_timeval(usage_end.ru_stime) -
+                e2e_timeval(usage_start.ru_stime);
+            measured.peak_footprint_bytes =
+                MAX(measured.peak_footprint_bytes, e2e_footprint());
+            *result = measured;
+            if (error != NULL && error_capacity != 0u) error[0] = '\0';
+            return 0;
+        }
         if (mkdir(options->output_directory, 0755) != 0 && errno != EEXIST) {
             free(generated.video);
             free(generated.audio);
@@ -4965,7 +5866,8 @@ int minimax_h3_m3_run_e2e(const minimax_h3_m3_e2e_options *options,
             return 1;
         measured.sequence_rows = token_count +
             (size_t)generated.audio_latent_frames * 2u +
-            (size_t)generated.video_latent_frames *
+            ((size_t)generated.video_latent_frames +
+             measured.condition_images) *
                 (generated.latent_height / 2u) *
                 (generated.latent_width / 2u);
         measured.total_seconds = e2e_now() - total_started;

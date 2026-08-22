@@ -1,0 +1,109 @@
+{
+  "schema": "cpullama.minimax-h3.m3-pro.benchmark.v1",
+  "measured_at": "2026-08-22",
+  "machine": {
+    "model": "MacBook Pro Mac15,6",
+    "soc": "Apple M3 Pro",
+    "gpu_cores": 14,
+    "unified_memory_bytes": 38654705664
+  },
+  "workload": {
+    "prompt_file": "prompt.txt",
+    "prompt_tokens": 88,
+    "width": 640,
+    "height": 352,
+    "frames": 124,
+    "fps": 24,
+    "seed": 604315832732455,
+    "sampler": "turbo-v4-step600-ema",
+    "sampling_steps": 4,
+    "sequence_rows": 8642,
+    "conditioning_images": 0
+  },
+  "baseline": {
+    "durations_seconds": {
+      "tokenizer": 0.008780,
+      "metal_setup": 0.050447,
+      "text_download": 4.938298,
+      "text_encode": 2.192624,
+      "turbo_compile": 0.944112,
+      "rope_precompute": 0.000461,
+      "denoise": 768.833793,
+      "video_precompute": 0.008543,
+      "video_decode": 199.300129,
+      "audio_decode": 13.979280,
+      "mux": 1.096302,
+      "total": 999.590614
+    },
+    "peak_footprint_bytes": 2316179392,
+    "denoise_schedule": "synchronous four-layer groups; SIMD-reduction LoRA",
+    "video_vae_tiles": "256x256; 3x2 spatial grid; 7 temporal chunks"
+  },
+  "optimized": {
+    "durations_seconds": {
+      "tokenizer": 0.009325,
+      "metal_setup": 0.046693,
+      "text_download": 4.705997,
+      "text_encode": 2.207999,
+      "turbo_compile": 0.905891,
+      "rope_precompute": 0.000604,
+      "denoise": 595.291946,
+      "video_precompute": 0.008035,
+      "video_decode": 159.662679,
+      "audio_decode": 13.642022,
+      "mux": 1.227907,
+      "total": 783.832033
+    },
+    "peak_footprint_bytes": 2818906816,
+    "denoise_schedule": "pipelined four-layer command buffers; BF16 simdgroup-matrix LoRA",
+    "video_vae_tiles": "256x160; 3x3 spatial grid; 7 temporal chunks"
+  },
+  "improvement": {
+    "total_seconds_saved": 215.758581,
+    "total_percent": 21.5847,
+    "total_speedup": 1.27526,
+    "denoise_percent": 22.5710,
+    "video_decode_percent": 19.8883
+  },
+  "component_ab": {
+    "lora_mma_128x128x124": {
+      "simd_reduction_seconds": 92.476261,
+      "bf16_mma_seconds": 52.163499,
+      "speedup": 1.77281
+    },
+    "video_vae_640x352x124": {
+      "tile_256x256_seconds": 198.378460,
+      "tile_256x160_seconds": 159.409562,
+      "tile_256x256_peak_bytes": 577030336,
+      "tile_256x160_peak_bytes": 457197824,
+      "cross_tile_psnr_db": 36.939526
+    }
+  },
+  "rejected_experiments": [
+    {
+      "name": "Q4 batch-64 activation tile",
+      "candidate_seconds": 94.436593,
+      "control_seconds": 93.332582,
+      "finding": "1.18 percent slower; video and audio hashes identical"
+    },
+    {
+      "name": "step-only finite validation as speed optimization",
+      "candidate_seconds": 93.851104,
+      "control_seconds": 93.332582,
+      "finding": "no stable performance gain; retained as the release validation boundary"
+    },
+    {
+      "name": "BF16 LoRA threadgroup weight staging and batch-64 tile",
+      "candidate_seconds": 52.254701,
+      "control_seconds": 52.163499,
+      "finding": "no gain; barriers cancel cached-weight reuse"
+    }
+  ],
+  "quality": {
+    "status": "visual-pass-with-trajectory-divergence",
+    "sampled_frames": [0, 62, 123],
+    "sampled_spatial_seams": "none observed",
+    "optimized_vs_baseline_encoded_video_psnr_db": 16.056232,
+    "note": "BF16 matrix accumulation changes reduction order, so same-seed composition is not bit-exact. Both outputs are coherent."
+  }
+}

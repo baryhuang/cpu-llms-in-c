@@ -28,6 +28,61 @@ Quality gates therefore review prompts against this budget before
 attributing artifacts to the runtime, and attention changes are
 reviewed per-frame on the highest-motion shot.
 
+## 360p Turbo-4 optimization round (2026-08-22)
+
+A fixed-seed `640x352x124` text-to-video run exposed the same two dominant
+boundaries as 480p: H3 denoise and Video VAE decode.  The initial native run
+took 999.590614 seconds: 768.833793 seconds in denoise and 199.300129 seconds
+in Video VAE.  The selected path takes 783.832033 seconds, a 215.758581-second
+or 21.58 percent reduction.  Denoise falls to 595.291946 seconds and Video VAE
+to 159.662679 seconds.
+
+| Selected change | Component A/B | Full-run effect | Correctness boundary |
+|---|---:|---:|---|
+| BF16 simdgroup-matrix Turbo LoRA down/up | 128x128x124 denoise: 92.476261 → 52.163499 s (1.773x) | 360p denoise, combined with submission pipelining: 768.833793 → 595.291946 s | FP32 accumulation and BF16 output remain, but matrix reduction order changes; fixed-seed media is not bit identical |
+| Thirteen precommitted four-layer command buffers | 128x128x124 denoise: 93.332582 → 92.350155 s | included in the 595.291946-second denoise result | serial queue and hidden-state dependencies are retained; control media hashes are identical |
+| Geometry-specific 256x160 Video VAE tiles at 352-pixel height | deterministic VAE: 198.378460 → 159.409562 s; peak 550.3 → 436.0 MiB | 199.300129 → 159.662679 s | required 64-pixel overlap retained; 124-frame deterministic-latent PSNR is 36.939526 dB and sampled seams pass visual review |
+
+The LoRA kernel is selected only when adapter dimensions are multiples of the
+64-output/8-input matrix tile.  `MINIMAX_H3_LORA_MMA=0` restores the scalar
+SIMD-reduction adapter path.  `MINIMAX_H3_PIPELINE_LAYER_GROUPS=0` restores
+synchronous four-layer submission.  `MINIMAX_H3_VAE_TILE_HEIGHT` and
+`MINIMAX_H3_VAE_TILE_WIDTH` override the geometry default.  Release validation
+checks the hidden state once per denoise step; setting
+`MINIMAX_H3_VALIDATE_LAYER_GROUPS=1` restores validation after every four
+layers.  `MINIMAX_H3_DENOISE_ONLY=1` is a benchmark-only boundary that stops
+before both VAEs and mux.
+
+### Rejected experiments and reusable lessons
+
+* A 64-row Q4 activation batch changed no media bits but was slower:
+  94.436593 versus 93.332582 seconds at 128x128x124.  Q4 dequantization,
+  barriers and register pressure already dominate enough that doubling the
+  activation tile does not improve this M3 Pro kernel.
+* Reducing finite scans from 52 per run to four is the right release boundary,
+  but it is not a performance optimization: 93.851104 versus 93.332582
+  seconds is measurement noise.  Keep the change for validation cost and
+  semantics, not as a speed claim.
+* Staging a 64x32 BF16 LoRA weight tile in threadgroup memory and expanding the
+  batch tile from 32 to 64 did not beat direct MMA: 52.254701 versus
+  52.163499 seconds.  The adapter already benefits from device/L2 cache and
+  the extra barriers cancel the saved reads.
+* At 352 pixels, two 256-pixel vertical tiles overlap by 160 pixels.  Three
+  160-pixel tiles use the required 64-pixel overlap, reduce redundant token
+  work and make each quadratic attention task smaller.  Tile count alone is
+  therefore a misleading cost metric; overlap area and per-tile attention
+  rows must be evaluated together.
+* BF16 MMA changes FP32 summation order.  The optimized 360p run is visually
+  coherent and has no sampled tile seam, but its same-seed encoded-video PSNR
+  versus the prior reduction order is 16.056232 dB and composition diverges.
+  This is a quality-gated optimization, not an exact-reproducibility claim.
+* Full resolution changes the bottleneck mix.  LoRA MMA improves the isolated
+  128p denoise by 43.59 percent but complete 360p denoise by 22.57 percent,
+  because exact dense attention consumes a larger share at 8,642 rows.
+
+The exact prompt, baseline, optimized breakdown and experiment records are in
+[`artifacts/walking-woman-640x352-turbo4/benchmark.json`](artifacts/walking-woman-640x352-turbo4/benchmark.json).
+
 ## N-to-N optimization timeline
 
 | Runtime milestone | Affected stage | Affected-stage time before → after | 480p N-to-N time and change | Reason | Evidence |

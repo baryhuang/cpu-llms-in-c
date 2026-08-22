@@ -29,6 +29,15 @@ frames=${MINIMAX_H3_FRAMES:-22}
 seed=${MINIMAX_H3_SEED:-42}
 run_id=$(date +%Y%m%d-%H%M%S)
 output_directory=${MINIMAX_H3_OUTPUT_DIR:-"$repository/tmp/minimax-h3-runs/$run_id"}
+first_image=${MINIMAX_H3_FIRST_IMAGE:-}
+last_image=${MINIMAX_H3_LAST_IMAGE:-}
+
+for image in "$first_image" "$last_image"; do
+    if [ -n "$image" ] && [ ! -f "$image" ]; then
+        echo "Conditioning image does not exist: $image" >&2
+        exit 3
+    fi
+done
 
 if [ ! -x "$runner" ] ||
    [ ! -f "$repository/build/minimax-h3-m3-attention.metallib" ] ||
@@ -117,8 +126,17 @@ fi
 mkdir -p "$output_directory"
 echo "Output: $output_directory/minimax-h3.mp4" >&2
 echo "Geometry: ${width}x${height}, ${frames} frames at 24 fps; seed $seed" >&2
+if [ -n "$first_image" ] || [ -n "$last_image" ]; then
+    echo "Conditioning: first=${first_image:-none}, last=${last_image:-none}" >&2
+fi
 
 cd "$repository"
+set -- "$prompt" "$output_directory" "$width" "$height" "$frames" "$seed"
+if [ -n "$last_image" ]; then
+    set -- --last-image "$last_image" "$@"
+fi
+if [ -n "$first_image" ]; then
+    set -- --first-image "$first_image" "$@"
+fi
 MINIMAX_H3_TEXT_ENCODER_URL="file://$text_encoder" \
-    "$runner" "$prompt" "$output_directory" \
-    "$width" "$height" "$frames" "$seed"
+    "$runner" "$@"

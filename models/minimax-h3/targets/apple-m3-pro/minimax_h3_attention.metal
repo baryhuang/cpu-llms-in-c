@@ -2,6 +2,29 @@
 #include <metal_simdgroup_matrix>
 using namespace metal;
 
+kernel void minimax_h3_mps_image_silu(
+    texture2d_array<half, access::read> source [[texture(0)]],
+    texture2d_array<half, access::write> destination [[texture(1)]],
+    uint3 gid [[thread_position_in_grid]]) {
+    if (gid.x >= destination.get_width() ||
+        gid.y >= destination.get_height() ||
+        gid.z >= destination.get_array_size()) return;
+    half4 value = source.read(gid.xy, gid.z);
+    destination.write(value / (half4(1.0h) + exp(-value)), gid.xy, gid.z);
+}
+
+kernel void minimax_h3_mps_image_add(
+    texture2d_array<half, access::read> left [[texture(0)]],
+    texture2d_array<half, access::read> right [[texture(1)]],
+    texture2d_array<half, access::write> destination [[texture(2)]],
+    uint3 gid [[thread_position_in_grid]]) {
+    if (gid.x >= destination.get_width() ||
+        gid.y >= destination.get_height() ||
+        gid.z >= destination.get_array_size()) return;
+    destination.write(left.read(gid.xy, gid.z) + right.read(gid.xy, gid.z),
+                      gid.xy, gid.z);
+}
+
 constant uint kH3HeadCount = 56;
 constant uint kH3HeadDim = 128;
 constant uint kH3HeadHalf4 = 32;
@@ -760,6 +783,118 @@ kernel void minimax_h3_dense_bf16_activation_add(
     if (lane == 0u) {
         uint destination = batch * parameters.rows + row;
         output[destination] = bfloat(float(output[destination]) + value);
+    }
+}
+
+/* Turbo LoRA runs the same low-rank projection over every sequence row.
+ * Evaluate a 32x64 output tile with BF16 simdgroup matrices so activations
+ * and adapter weights are reused across output rows.  Accumulation remains
+ * FP32 and the public activation boundary remains BF16. */
+kernel void minimax_h3_dense_bf16_mma(
+    device const bfloat *input [[buffer(0)]],
+    device const bfloat *weights [[buffer(1)]],
+    device const bfloat *bias [[buffer(2)]],
+    device bfloat *output [[buffer(3)]],
+    constant H3DenseParameters &parameters [[buffer(4)]],
+    constant uint &has_bias [[buffer(5)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup float spill[32 * 64];
+    uint output_row0 = group.x * 64u;
+    uint batch0 = group.y * 32u;
+    uint batch_row0 = batch0 + simdgroup_index * 8u;
+    uint spill_row0 = simdgroup_index * 8u;
+    simdgroup_float8x8 accumulators[8];
+    for (uint output_fragment = 0u; output_fragment < 8u; ++output_fragment)
+        accumulators[output_fragment] =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+
+    for (uint column = 0u; column < parameters.columns; column += 8u) {
+        simdgroup_bfloat8x8 activation;
+        simdgroup_load(activation,
+                       input + batch_row0 * parameters.input_stride + column,
+                       parameters.input_stride);
+        for (uint output_fragment = 0u; output_fragment < 8u;
+             ++output_fragment) {
+            simdgroup_bfloat8x8 weight;
+            simdgroup_load(
+                weight,
+                weights + (output_row0 + output_fragment * 8u) *
+                              parameters.columns + column,
+                parameters.columns, 0u, true);
+            simdgroup_multiply_accumulate(
+                accumulators[output_fragment], activation, weight,
+                accumulators[output_fragment]);
+        }
+    }
+    for (uint output_fragment = 0u; output_fragment < 8u; ++output_fragment)
+        simdgroup_store(accumulators[output_fragment],
+                        spill + spill_row0 * 64u + output_fragment * 8u, 64u);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint value = 0u; value < 16u; ++value) {
+        uint linear = tid * 16u + value;
+        uint batch_row = batch0 + (linear >> 6u);
+        uint matrix_row = output_row0 + (linear & 63u);
+        if (batch_row < parameters.batch && matrix_row < parameters.rows) {
+            float result = spill[linear];
+            if (has_bias != 0u) result += float(bias[matrix_row]);
+            output[batch_row * parameters.rows + matrix_row] = bfloat(result);
+        }
+    }
+}
+
+kernel void minimax_h3_dense_bf16_mma_add(
+    device const bfloat *input [[buffer(0)]],
+    device const bfloat *weights [[buffer(1)]],
+    device bfloat *output [[buffer(2)]],
+    constant H3DenseParameters &parameters [[buffer(3)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup_index [[simdgroup_index_in_threadgroup]],
+    uint3 group [[threadgroup_position_in_grid]]) {
+    threadgroup float spill[32 * 64];
+    uint output_row0 = group.x * 64u;
+    uint batch0 = group.y * 32u;
+    uint batch_row0 = batch0 + simdgroup_index * 8u;
+    uint spill_row0 = simdgroup_index * 8u;
+    simdgroup_float8x8 accumulators[8];
+    for (uint output_fragment = 0u; output_fragment < 8u; ++output_fragment)
+        accumulators[output_fragment] =
+            make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+
+    for (uint column = 0u; column < parameters.columns; column += 8u) {
+        simdgroup_bfloat8x8 activation;
+        simdgroup_load(activation,
+                       input + batch_row0 * parameters.input_stride + column,
+                       parameters.input_stride);
+        for (uint output_fragment = 0u; output_fragment < 8u;
+             ++output_fragment) {
+            simdgroup_bfloat8x8 weight;
+            simdgroup_load(
+                weight,
+                weights + (output_row0 + output_fragment * 8u) *
+                              parameters.columns + column,
+                parameters.columns, 0u, true);
+            simdgroup_multiply_accumulate(
+                accumulators[output_fragment], activation, weight,
+                accumulators[output_fragment]);
+        }
+    }
+    for (uint output_fragment = 0u; output_fragment < 8u; ++output_fragment)
+        simdgroup_store(accumulators[output_fragment],
+                        spill + spill_row0 * 64u + output_fragment * 8u, 64u);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint value = 0u; value < 16u; ++value) {
+        uint linear = tid * 16u + value;
+        uint batch_row = batch0 + (linear >> 6u);
+        uint matrix_row = output_row0 + (linear & 63u);
+        if (batch_row < parameters.batch && matrix_row < parameters.rows) {
+            uint destination = batch_row * parameters.rows + matrix_row;
+            output[destination] =
+                bfloat(float(output[destination]) + spill[linear]);
+        }
     }
 }
 
