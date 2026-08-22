@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "minimindo_thinker.h"
+#include "minimindo_parallel.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -154,14 +155,21 @@ static float q8_f32_dot(const int8_t *weights, const float *input,
 #endif
 }
 
-static void q8_matvec(const mmo_tensor *tensor, const float *input,
-                      float *output)
+typedef struct {
+    const mmo_tensor *tensor;
+    const float *input;
+    float *output;
+    uint32_t length;
+} q8_parallel_context;
+
+static void q8_matvec_rows(void *opaque, size_t begin, size_t end)
 {
+    q8_parallel_context *context = opaque;
+    const mmo_tensor *tensor = context->tensor;
+    const float *input = context->input;
+    float *output = context->output;
     const size_t stride = sizeof(float) + tensor->header->cols;
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for (uint32_t row = 0; row < tensor->header->rows; ++row) {
+    for (size_t row = begin; row < end; ++row) {
         const unsigned char *record = tensor->data + (size_t)row * stride;
         float scale;
         memcpy(&scale, record, sizeof(scale));
@@ -170,25 +178,38 @@ static void q8_matvec(const mmo_tensor *tensor, const float *input,
     }
 }
 
-static void q8_matmul_sequence(const mmo_tensor *tensor, const float *input,
-                               uint32_t length, float *output)
+static void q8_matvec(const mmo_tensor *tensor, const float *input,
+                      float *output)
 {
+    q8_parallel_context context = {tensor, input, output, 1U};
+    minimindo_parallel_for(tensor->header->rows, q8_matvec_rows, &context);
+}
+
+static void q8_matmul_rows(void *opaque, size_t begin, size_t end)
+{
+    q8_parallel_context *context = opaque;
+    const mmo_tensor *tensor = context->tensor;
     const uint32_t input_width = tensor->header->cols;
     const uint32_t output_width = tensor->header->rows;
     const size_t weight_stride = sizeof(float) + input_width;
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for (uint32_t row = 0; row < output_width; ++row) {
-        const unsigned char *record = tensor->data + (size_t)row * weight_stride;
+    for (size_t row = begin; row < end; ++row) {
+        const unsigned char *record = tensor->data + row * weight_stride;
         float scale;
         memcpy(&scale, record, sizeof(scale));
         const int8_t *weights = (const int8_t *)(record + sizeof(scale));
-        for (uint32_t position = 0; position < length; ++position)
-            output[(size_t)position * output_width + row] =
-                q8_f32_dot(weights, input + (size_t)position * input_width,
+        for (uint32_t position = 0; position < context->length; ++position)
+            context->output[(size_t)position * output_width + row] =
+                q8_f32_dot(weights,
+                           context->input + (size_t)position * input_width,
                            input_width) * scale;
     }
+}
+
+static void q8_matmul_sequence(const mmo_tensor *tensor, const float *input,
+                               uint32_t length, float *output)
+{
+    q8_parallel_context context = {tensor, input, output, length};
+    minimindo_parallel_for(tensor->header->rows, q8_matmul_rows, &context);
 }
 
 static void rms_norm(const float *input, const float *weight, float *output,
@@ -202,16 +223,30 @@ static void rms_norm(const float *input, const float *weight, float *output,
         output[index] = (float)((double)input[index] * scale * weight[index]);
 }
 
+typedef struct {
+    const float *input;
+    const float *weight;
+    float *output;
+    uint32_t width;
+    float epsilon;
+} norm_parallel_context;
+
+static void rms_norm_positions(void *opaque, size_t begin, size_t end)
+{
+    norm_parallel_context *context = opaque;
+    for (size_t position = begin; position < end; ++position)
+        rms_norm(context->input + position * context->width,
+                 context->weight,
+                 context->output + position * context->width,
+                 context->width, context->epsilon);
+}
+
 static void rms_norm_sequence(const float *input, const float *weight,
                               float *output, uint32_t length,
                               uint32_t width, float epsilon)
 {
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for (uint32_t position = 0; position < length; ++position)
-        rms_norm(input + (size_t)position * width, weight,
-                 output + (size_t)position * width, width, epsilon);
+    norm_parallel_context context = {input, weight, output, width, epsilon};
+    minimindo_parallel_for(length, rms_norm_positions, &context);
 }
 
 static void apply_rope(float *states, uint32_t heads, uint32_t head_dim,
@@ -522,7 +557,7 @@ int minimindo_thinker_prefill_sequence(
     if (model == NULL || token_ids == NULL || token_count == 0U ||
         token_count > UINT32_MAX ||
         model->position + token_count > model->max_context ||
-        logits == NULL || logits_count < model->header->vocab ||
+        (logits != NULL && logits_count < model->header->vocab) ||
         bridge_states == NULL ||
         bridge_count < token_count * (size_t)model->header->hidden) {
         set_error(error, error_capacity, "invalid sequence prefill arguments");
@@ -675,9 +710,11 @@ int minimindo_thinker_prefill_sequence(
             memcpy(bridge_states, hidden, hidden_count * sizeof(float));
     }
     const float *last_hidden = hidden + (size_t)(length - 1U) * h;
-    rms_norm(last_hidden, f32_data(&model->final_norm), model->normed,
-             h, model->header->rms_epsilon);
-    q8_matvec(&model->embedding, model->normed, logits);
+    if (logits != NULL) {
+        rms_norm(last_hidden, f32_data(&model->final_norm), model->normed,
+                 h, model->header->rms_epsilon);
+        q8_matvec(&model->embedding, model->normed, logits);
+    }
     memcpy(model->hidden, last_hidden, h * sizeof(float));
     model->position += length;
     free(hidden); free(normed); free(query); free(key); free(value);

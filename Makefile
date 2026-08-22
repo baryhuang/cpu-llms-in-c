@@ -35,6 +35,8 @@ WHISPER_SMALL_A113X_DECODER_CHECK := $(BUILD_DIR)/whisper-small-decoder-check-a1
 WHISPER_SMALL_TRANSCRIBE := $(BUILD_DIR)/whisper-small-transcribe
 WHISPER_SMALL_A113X_TRANSCRIBE := $(BUILD_DIR)/whisper-small-transcribe-a113x
 MINIMINDO_GENERIC := models/minimind-o/targets/generic
+MINIMINDO_PARALLEL := $(MINIMINDO_GENERIC)/minimindo_parallel.c
+MINIMINDO_PARALLEL_TEST := $(BUILD_DIR)/minimindo-parallel-test
 MINIMINDO_LAYER_TEST := $(BUILD_DIR)/minimindo-layer-test
 MINIMINDO_LAYER_FIXTURE := tests/fixtures/minimindo_layer_v1.bin
 MINIMINDO_THINKER := $(BUILD_DIR)/minimindo-thinker
@@ -235,6 +237,7 @@ test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35
 	$(WHISPER_ENCODER_STEM_TEST) $(WHISPER_ENCODER_STEM_FIXTURE) \
 	$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_ENCODER_BLOCK_FIXTURE) \
 	$(MINIMINDO_LAYER_TEST) $(MINIMINDO_LAYER_FIXTURE) \
+	$(MINIMINDO_PARALLEL_TEST) \
 	$(QWEN38_SAFETENSORS_TEST) $(QWEN38_SHA256_TEST) \
 	$(QWEN38_SAMPLER_TEST) $(MINIMAX_H3_TEST) $(MINIMAX_H3_M3_AOT_TEST) \
 	$(MINIMAX_H3_M3_TREE_TEST) $(MINIMAX_H3_M3_CACHE_TEST) \
@@ -246,6 +249,7 @@ test: $(GEMMA4_LAYER_TEST) $(GEMMA4_LAYER_FIXTURE) $(QWEN35_LAYER_TEST) $(QWEN35
 	$(WHISPER_ENCODER_STEM_TEST) $(WHISPER_ENCODER_STEM_FIXTURE)
 	$(WHISPER_ENCODER_BLOCK_TEST) $(WHISPER_ENCODER_BLOCK_FIXTURE)
 	$(MINIMINDO_LAYER_TEST) $(MINIMINDO_LAYER_FIXTURE)
+	$(MINIMINDO_PARALLEL_TEST)
 	$(QWEN38_SAFETENSORS_TEST)
 	$(QWEN38_SHA256_TEST)
 	$(QWEN38_SAMPLER_TEST)
@@ -262,7 +266,14 @@ $(MINIMINDO_LAYER_TEST): tests/minimindo_layer_test.c \
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
 		tests/minimindo_layer_test.c $(MINIMINDO_GENERIC)/minimindo_layer.c \
-		-o $@ $(LDFLAGS) -lm
+		-o $@ $(LDFLAGS) $(LDLIBS) -lm
+
+$(MINIMINDO_PARALLEL_TEST): tests/minimindo_parallel_test.c \
+	$(MINIMINDO_PARALLEL) $(MINIMINDO_GENERIC)/minimindo_parallel.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
+		tests/minimindo_parallel_test.c $(MINIMINDO_PARALLEL) \
+		-o $@ $(LDFLAGS) $(LDLIBS)
 
 $(MINIMINDO_LAYER_FIXTURE): compiler/generate_minimindo_layer_fixture.py
 	mkdir -p $(dir $@)
@@ -270,71 +281,78 @@ $(MINIMINDO_LAYER_FIXTURE): compiler/generate_minimindo_layer_fixture.py
 
 $(MINIMINDO_THINKER): $(MINIMINDO_GENERIC)/minimindo_thinker_cli.c \
 	$(MINIMINDO_GENERIC)/minimindo_thinker.c \
-	$(MINIMINDO_GENERIC)/minimindo_thinker.h
+	$(MINIMINDO_GENERIC)/minimindo_thinker.h $(MINIMINDO_PARALLEL)
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
 		$(MINIMINDO_GENERIC)/minimindo_thinker_cli.c \
 		$(MINIMINDO_GENERIC)/minimindo_thinker.c \
-		-o $@ $(LDFLAGS) -lm
+		$(MINIMINDO_PARALLEL) \
+		-o $@ $(LDFLAGS) $(LDLIBS) -lm
 
 $(MINIMINDO_CHAT): $(MINIMINDO_GENERIC)/minimindo_chat.c \
 	$(MINIMINDO_GENERIC)/minimindo_thinker.c \
 	$(MINIMINDO_GENERIC)/minimindo_thinker.h \
 	$(MINIMINDO_GENERIC)/minimindo_tokenizer.c \
-	$(MINIMINDO_GENERIC)/minimindo_tokenizer.h
+	$(MINIMINDO_GENERIC)/minimindo_tokenizer.h $(MINIMINDO_PARALLEL)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
 		$(MINIMINDO_GENERIC)/minimindo_chat.c \
 		$(MINIMINDO_GENERIC)/minimindo_thinker.c \
 		$(MINIMINDO_GENERIC)/minimindo_tokenizer.c \
-		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+		$(MINIMINDO_PARALLEL) \
+		-o $@ $(LDFLAGS) $(LDLIBS) -lm
 
 $(MINIMINDO_OMNI_FORWARD): \
 	$(MINIMINDO_GENERIC)/minimindo_omni_forward.c \
 	$(MINIMINDO_GENERIC)/minimindo_thinker.c \
 	$(MINIMINDO_GENERIC)/minimindo_thinker.h \
 	$(MINIMINDO_GENERIC)/minimindo_talker.c \
-	$(MINIMINDO_GENERIC)/minimindo_talker.h
+	$(MINIMINDO_GENERIC)/minimindo_talker.h $(MINIMINDO_PARALLEL)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
 		$(MINIMINDO_GENERIC)/minimindo_omni_forward.c \
 		$(MINIMINDO_GENERIC)/minimindo_thinker.c \
 		$(MINIMINDO_GENERIC)/minimindo_talker.c \
-		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+		$(MINIMINDO_PARALLEL) \
+		-o $@ $(LDFLAGS) $(LDLIBS) -lm
 
 $(MINIMINDO_MIMI): $(MINIMINDO_GENERIC)/minimindo_mimi_cli.c \
 	$(MINIMINDO_GENERIC)/minimindo_mimi.c \
-	$(MINIMINDO_GENERIC)/minimindo_mimi.h
+	$(MINIMINDO_GENERIC)/minimindo_mimi.h $(MINIMINDO_PARALLEL)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
 		$(MINIMINDO_GENERIC)/minimindo_mimi_cli.c \
 		$(MINIMINDO_GENERIC)/minimindo_mimi.c \
-		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+		$(MINIMINDO_PARALLEL) \
+		-o $@ $(LDFLAGS) $(LDLIBS) -lm
 
 $(MINIMINDO_SPEECH): $(MINIMINDO_GENERIC)/minimindo_speech.c \
 	$(MINIMINDO_GENERIC)/minimindo_thinker.c $(MINIMINDO_GENERIC)/minimindo_thinker.h \
 	$(MINIMINDO_GENERIC)/minimindo_talker.c $(MINIMINDO_GENERIC)/minimindo_talker.h \
 	$(MINIMINDO_GENERIC)/minimindo_tokenizer.c $(MINIMINDO_GENERIC)/minimindo_tokenizer.h \
 	$(MINIMINDO_GENERIC)/minimindo_mimi.c $(MINIMINDO_GENERIC)/minimindo_mimi.h \
-	$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c $(MINIMINDO_GENERIC)/minimindo_audio_encoder.h
+	$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c $(MINIMINDO_GENERIC)/minimindo_audio_encoder.h \
+	$(MINIMINDO_PARALLEL)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
 		$(MINIMINDO_GENERIC)/minimindo_speech.c \
 		$(MINIMINDO_GENERIC)/minimindo_thinker.c \
 		$(MINIMINDO_GENERIC)/minimindo_talker.c \
 		$(MINIMINDO_GENERIC)/minimindo_tokenizer.c \
 		$(MINIMINDO_GENERIC)/minimindo_mimi.c \
 		$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c \
-		-o $@ $(LDFLAGS) $(OMPFLAGS) $(LDLIBS) -lm
+		$(MINIMINDO_PARALLEL) \
+		-o $@ $(LDFLAGS) $(LDLIBS) -lm
 
 $(MINIMINDO_AUDIO_ENCODER): $(MINIMINDO_GENERIC)/minimindo_audio_encoder_cli.c \
 	$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c \
-	$(MINIMINDO_GENERIC)/minimindo_audio_encoder.h
+	$(MINIMINDO_GENERIC)/minimindo_audio_encoder.h $(MINIMINDO_PARALLEL)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(MINIMINDO_GENERIC) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I$(MINIMINDO_GENERIC) \
 		$(MINIMINDO_GENERIC)/minimindo_audio_encoder_cli.c \
 		$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c \
-		-o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+		$(MINIMINDO_PARALLEL) \
+		-o $@ $(LDFLAGS) $(LDLIBS) -lm
 
 $(MINIMAX_H3_TEST): tests/minimax_h3_test.c \
 	$(MINIMAX_H3_GENERIC)/minimax_h3.c $(MINIMAX_H3_GENERIC)/minimax_h3.h

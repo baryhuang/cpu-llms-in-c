@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "minimindo_audio_encoder.h"
+#include "minimindo_parallel.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -117,28 +118,39 @@ static void q8_dot4(const int8_t *w,const float *x,uint32_t stride,
 static void row(const tensor *t,uint32_t r,const int8_t **w,float *scale)
 {const unsigned char *p=t->data+(size_t)r*(4+t->header->cols);memcpy(scale,p,4);*w=(const int8_t *)(p+4);}
 
-static void matrix_sequence(const tensor *matrix,const float *input,uint32_t length,
-                            uint32_t input_width,float *output,const float *bias)
+typedef struct {
+    const tensor *matrix;
+    const float *input;
+    uint32_t length;
+    uint32_t input_width;
+    float *output;
+    const float *bias;
+} matrix_parallel_context;
+
+static void matrix_rows(void *opaque,size_t begin,size_t end)
 {
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for(uint32_t out=0;out<matrix->header->rows;++out){const int8_t *w;float scale;row(matrix,out,&w,&scale);
-        uint32_t p=0;for(;p+4<=length;p+=4){float sums[4];q8_dot4(w,input+(size_t)p*input_width,input_width,input_width,sums);
-            for(uint32_t lane=0;lane<4;++lane)output[(size_t)(p+lane)*matrix->header->rows+out]=sums[lane]*scale+(bias?bias[out]:0);}
-        for(;p<length;++p)output[(size_t)p*matrix->header->rows+out]=q8_dot(w,input+(size_t)p*input_width,input_width)*scale+(bias?bias[out]:0);
+    matrix_parallel_context *c=opaque;const tensor *matrix=c->matrix;
+    for(size_t out=begin;out<end;++out){const int8_t *w;float scale;row(matrix,(uint32_t)out,&w,&scale);
+        uint32_t p=0;for(;p+4<=c->length;p+=4){float sums[4];q8_dot4(w,c->input+(size_t)p*c->input_width,c->input_width,c->input_width,sums);
+            for(uint32_t lane=0;lane<4;++lane)c->output[(size_t)(p+lane)*matrix->header->rows+out]=sums[lane]*scale+(c->bias?c->bias[out]:0);}
+        for(;p<c->length;++p)c->output[(size_t)p*matrix->header->rows+out]=q8_dot(w,c->input+(size_t)p*c->input_width,c->input_width)*scale+(c->bias?c->bias[out]:0);
     }
 }
+
+static void matrix_sequence(const tensor *matrix,const float *input,uint32_t length,
+                            uint32_t input_width,float *output,const float *bias)
+{matrix_parallel_context c={matrix,input,length,input_width,output,bias};minimindo_parallel_for(matrix->header->rows,matrix_rows,&c);}
+
+typedef struct {const float *input;float *output;uint32_t width;const float *weight;const float *bias;float epsilon;} norm_parallel_context;
+static void norm_positions(void *opaque,size_t begin,size_t end)
+{norm_parallel_context *c=opaque;for(size_t p=begin;p<end;++p){const float *x=c->input+p*c->width;float *y=c->output+p*c->width;double mean=0,sq=0;
+    for(uint32_t i=0;i<c->width;++i){mean+=x[i];sq+=(double)x[i]*x[i];}mean/=c->width;double scale=1.0/sqrt(sq/c->width-mean*mean+c->epsilon);
+    for(uint32_t i=0;i<c->width;++i)y[i]=(float)((x[i]-mean)*scale*c->weight[i]+c->bias[i]);}}
 
 static void layer_norm_sequence(const float *input,float *output,uint32_t length,uint32_t width,
                                 const float *weight,const float *bias,float epsilon)
 {
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for(uint32_t p=0;p<length;++p){const float *x=input+(size_t)p*width;float *y=output+(size_t)p*width;double mean=0,sq=0;
-        for(uint32_t i=0;i<width;++i){mean+=x[i];sq+=(double)x[i]*x[i];}mean/=width;double scale=1.0/sqrt(sq/width-mean*mean+epsilon);
-        for(uint32_t i=0;i<width;++i)y[i]=(float)((x[i]-mean)*scale*weight[i]+bias[i]);}
+    norm_parallel_context c={input,output,width,weight,bias,epsilon};minimindo_parallel_for(length,norm_positions,&c);
 }
 
 static void fft512(complex_value *values)
@@ -149,6 +161,20 @@ static void fft512(complex_value *values)
             double vr=v.real*w.real-v.imaginary*w.imaginary,vi=v.real*w.imaginary+v.imaginary*w.real;
             values[start+j]=(complex_value){u.real+vr,u.imaginary+vi};values[start+j+length/2]=(complex_value){u.real-vr,u.imaginary-vi};
             w=(complex_value){w.real*step.real-w.imaginary*step.imaginary,w.real*step.imaginary+w.imaginary*step.real};}}}
+}
+
+typedef struct {const minimindo_audio_encoder *model;const int16_t *samples;uint32_t frames;float *mel;} frontend_parallel_context;
+static void frontend_frames(void *opaque,size_t begin,size_t end)
+{frontend_parallel_context *c=opaque;const float *filters=f32(&c->model->mel_filters);
+    for(size_t frame=begin;frame<end;++frame){complex_value values[FFT_SIZE];double mean=0;
+        for(uint32_t i=0;i<400;++i)mean+=c->samples[frame*160+i];
+        mean/=400;
+        double previous=c->samples[frame*160]-mean;
+        for(uint32_t i=0;i<400;++i){double current=c->samples[frame*160+i]-mean;double emphasized=i?current-0.97*previous:current-0.97*current;previous=current;
+            values[i].real=emphasized*(0.54-0.46*cos(2.0*3.14159265358979323846*i/400.0));values[i].imaginary=0;}
+        for(uint32_t i=400;i<FFT_SIZE;++i)values[i]=(complex_value){0,0};
+        fft512(values);double power[256];for(uint32_t k=0;k<256;++k)power[k]=values[k].real*values[k].real+values[k].imaginary*values[k].imaginary;
+        for(uint32_t m=0;m<80;++m){double sum=0;for(uint32_t k=0;k<256;++k)sum+=power[k]*filters[(size_t)m*256+k];c->mel[frame*80+m]=(float)log(sum>1.19e-7?sum:1.19e-7);}}
 }
 
 size_t minimindo_audio_encoder_frames(size_t samples)
@@ -164,23 +190,7 @@ static float *frontend(const minimindo_audio_encoder *model,const int16_t *sampl
     if(sample_count<400)return NULL;
     uint32_t frames=1+(uint32_t)((sample_count-400)/160);
     float *mel=malloc((size_t)frames*80*sizeof(float));if(!mel)return NULL;
-    const float *filters=f32(&model->mel_filters);
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for(uint32_t frame=0;frame<frames;++frame){complex_value values[FFT_SIZE];double mean=0;
-        for(uint32_t i=0;i<400;++i)
-            mean+=samples[(size_t)frame*160+i];
-        mean/=400;
-        double previous=samples[(size_t)frame*160]-mean;
-        for(uint32_t i=0;i<400;++i){double current=samples[(size_t)frame*160+i]-mean;double emphasized=i?current-0.97*previous:current-0.97*current;previous=current;
-            values[i].real=emphasized*(0.54-0.46*cos(2.0*3.14159265358979323846*i/400.0));values[i].imaginary=0;}
-        for(uint32_t i=400;i<FFT_SIZE;++i)
-            values[i]=(complex_value){0,0};
-        fft512(values);double power[256];
-        for(uint32_t k=0;k<256;++k)power[k]=values[k].real*values[k].real+values[k].imaginary*values[k].imaginary;
-        for(uint32_t m=0;m<80;++m){double sum=0;for(uint32_t k=0;k<256;++k)sum+=power[k]*filters[(size_t)m*256+k];
-            mel[(size_t)frame*80+m]=(float)log(sum>1.19e-7?sum:1.19e-7);}}
+    frontend_parallel_context c={model,samples,frames,mel};minimindo_parallel_for(frames,frontend_frames,&c);
     uint32_t lfr=(frames+5)/6;float *features=malloc((size_t)lfr*560*sizeof(float));if(!features){free(mel);return NULL;}
     const float *mean=f32(&model->cmvn_mean),*scale=f32(&model->cmvn_scale);
     for(uint32_t t=0;t<lfr;++t)for(uint32_t j=0;j<7;++j){int64_t source=(int64_t)t*6-3+j;if(source<0)source=0;if(source>=(int64_t)frames)source=frames-1;

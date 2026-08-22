@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "minimindo_parallel.h"
 #include "minimindo_thinker.h"
 #include "minimindo_tokenizer.h"
 
@@ -120,6 +121,10 @@ static int answer(chat_runtime *runtime, const char *user)
     }
     generated = malloc((size_t)runtime->max_tokens * sizeof(*generated));
     if (generated == NULL) { free(prompt); free(prompt_ids); return -1; }
+    if (minimindo_parallel_session_begin(4U) != 0) {
+        free(prompt); free(prompt_ids); free(generated);
+        return -1;
+    }
     minimindo_thinker_reset(runtime->thinker);
     const double start = seconds();
     for (size_t index = 0; index < prompt_count; ++index) {
@@ -127,6 +132,7 @@ static int answer(chat_runtime *runtime, const char *user)
                                       runtime->logits, runtime->vocab,
                                       error, sizeof(error)) != 0) {
             fprintf(stderr, "thinker: %s\n", error);
+            minimindo_parallel_session_end();
             free(prompt); free(prompt_ids); free(generated);
             return -1;
         }
@@ -140,6 +146,7 @@ static int answer(chat_runtime *runtime, const char *user)
         if (minimindo_thinker_forward(runtime->thinker, token, runtime->logits,
                                       runtime->vocab, error, sizeof(error)) != 0) {
             fprintf(stderr, "thinker: %s\n", error);
+            minimindo_parallel_session_end();
             free(prompt); free(prompt_ids); free(generated);
             return -1;
         }
@@ -149,9 +156,11 @@ static int answer(chat_runtime *runtime, const char *user)
                               error, sizeof(error));
     if (text == NULL) {
         fprintf(stderr, "decode: %s\n", error);
+        minimindo_parallel_session_end();
         free(prompt); free(prompt_ids); free(generated);
         return -1;
     }
+    minimindo_parallel_session_end();
     fputs("{\"text\":", stdout);
     json_string(text);
     printf(",\"prompt_tokens\":%zu,\"generated_tokens\":%zu,"

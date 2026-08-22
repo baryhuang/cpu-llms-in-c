@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "minimindo_mimi.h"
+#include "minimindo_parallel.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -77,6 +78,7 @@ struct minimindo_mimi_stream {
     uint32_t frames;
     uint32_t transformer_positions;
     float *upsample_tail;
+    float *transformer_pair;
     mimi_conv_stream convs[14];
 };
 
@@ -152,6 +154,89 @@ static float q8_dot(const int8_t *weights, const float *input, uint32_t count)
 #endif
 }
 
+typedef struct {
+    int8_t *values;
+    float *scales;
+} q8_windows;
+
+static int32_t q8_i8_dot(const int8_t *weights, const int8_t *input,
+                         uint32_t count)
+{
+#if defined(__aarch64__)
+    int32x4_t sum0 = vdupq_n_s32(0);
+    int32x4_t sum1 = vdupq_n_s32(0);
+    uint32_t index = 0;
+    for (; index + 16U <= count; index += 16U) {
+        const int8x16_t w = vld1q_s8(weights + index);
+        const int8x16_t x = vld1q_s8(input + index);
+        sum0 = vpadalq_s16(sum0,
+                           vmull_s8(vget_low_s8(w), vget_low_s8(x)));
+        sum1 = vpadalq_s16(sum1,
+                           vmull_s8(vget_high_s8(w), vget_high_s8(x)));
+    }
+    int32_t sum = vaddvq_s32(vaddq_s32(sum0, sum1));
+    for (; index < count; ++index) sum += weights[index] * input[index];
+    return sum;
+#else
+    int32_t sum = 0;
+    for (uint32_t index = 0; index < count; ++index)
+        sum += weights[index] * input[index];
+    return sum;
+#endif
+}
+
+static float quantize_i8(const float *input, int8_t *output, uint32_t count)
+{
+    float maximum = 0.0f;
+#if defined(__aarch64__)
+    float32x4_t vmax = vdupq_n_f32(0.0f);
+    uint32_t index = 0;
+    for (; index + 4U <= count; index += 4U)
+        vmax = vmaxq_f32(vmax, vabsq_f32(vld1q_f32(input + index)));
+    maximum = vmaxvq_f32(vmax);
+    for (; index < count; ++index) {
+        const float value = fabsf(input[index]);
+        if (value > maximum) maximum = value;
+    }
+#else
+    for (uint32_t index = 0; index < count; ++index) {
+        const float value = fabsf(input[index]);
+        if (value > maximum) maximum = value;
+    }
+#endif
+    if (!(maximum > 0.0f)) {
+        memset(output, 0, count);
+        return 0.0f;
+    }
+    const float scale = maximum / 127.0f;
+    const float inverse = 1.0f / scale;
+#if defined(__aarch64__)
+    const float32x4_t vinverse = vdupq_n_f32(inverse);
+    uint32_t output_index = 0;
+    for (; output_index + 16U <= count; output_index += 16U) {
+        const int32x4_t q0 = vcvtnq_s32_f32(
+            vmulq_f32(vld1q_f32(input + output_index), vinverse));
+        const int32x4_t q1 = vcvtnq_s32_f32(
+            vmulq_f32(vld1q_f32(input + output_index + 4U), vinverse));
+        const int32x4_t q2 = vcvtnq_s32_f32(
+            vmulq_f32(vld1q_f32(input + output_index + 8U), vinverse));
+        const int32x4_t q3 = vcvtnq_s32_f32(
+            vmulq_f32(vld1q_f32(input + output_index + 12U), vinverse));
+        const int16x8_t lo = vcombine_s16(vqmovn_s32(q0), vqmovn_s32(q1));
+        const int16x8_t hi = vcombine_s16(vqmovn_s32(q2), vqmovn_s32(q3));
+        vst1q_s8(output + output_index,
+                 vcombine_s8(vqmovn_s16(lo), vqmovn_s16(hi)));
+    }
+    for (; output_index < count; ++output_index)
+        output[output_index] =
+            (int8_t)lrintf(input[output_index] * inverse);
+#else
+    for (uint32_t index = 0; index < count; ++index)
+        output[index] = (int8_t)lrintf(input[index] * inverse);
+#endif
+    return scale;
+}
+
 static void q8_row(const tensor *value, uint32_t row,
                    const int8_t **weights, float *scale)
 {
@@ -161,16 +246,45 @@ static void q8_row(const tensor *value, uint32_t row,
     *weights = (const int8_t *)(record + sizeof(*scale));
 }
 
+typedef struct { const tensor *matrix; const float *input; float *output; } matvec_parallel_context;
+
+static void matvec_rows(void *opaque, size_t begin, size_t end)
+{
+    matvec_parallel_context *context = opaque;
+    const tensor *matrix = context->matrix;
+    for (size_t row = begin; row < end; ++row) {
+        const int8_t *weights; float scale;
+        q8_row(matrix, (uint32_t)row, &weights, &scale);
+        context->output[row] = q8_dot(
+            weights, context->input, matrix->header->cols) * scale;
+    }
+}
+
 static void matvec(const tensor *matrix, const float *input, float *output)
 {
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for (uint32_t row = 0; row < matrix->header->rows; ++row) {
+    matvec_parallel_context context = {matrix,input,output};
+    minimindo_parallel_for(matrix->header->rows,matvec_rows,&context);
+}
+
+static void matvec_pair_rows(void *opaque, size_t begin, size_t end)
+{
+    matvec_parallel_context *context = opaque;
+    const tensor *matrix = context->matrix;
+    const uint32_t rows = matrix->header->rows;
+    const uint32_t columns = matrix->header->cols;
+    for (size_t row = begin; row < end; ++row) {
         const int8_t *weights; float scale;
-        q8_row(matrix, row, &weights, &scale);
-        output[row] = q8_dot(weights, input, matrix->header->cols) * scale;
+        q8_row(matrix,(uint32_t)row,&weights,&scale);
+        context->output[row]=q8_dot(weights,context->input,columns)*scale;
+        context->output[rows+row]=q8_dot(weights,context->input+columns,columns)*scale;
     }
+}
+
+static void matvec_pair(const tensor *matrix, const float *input,
+                        float *output)
+{
+    matvec_parallel_context context = {matrix,input,output};
+    minimindo_parallel_for(matrix->header->rows,matvec_pair_rows,&context);
 }
 
 static void layer_norm(const float *input, const float *weight, const float *bias,
@@ -408,9 +522,6 @@ static float *causal_windows(const float *input, const float *history,
     float *windows = calloc((size_t)length * columns, sizeof(float));
     if (windows == NULL) return NULL;
     const uint32_t history_length = kernel - 1U;
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
     for (uint32_t t = 0; t < length; ++t) {
         float *window = windows + (size_t)t * columns;
         for (uint32_t in = 0; in < channels; ++in) {
@@ -431,6 +542,54 @@ static float *causal_windows(const float *input, const float *history,
     return windows;
 }
 
+typedef struct {
+    const float *input, *history;
+    float *scratch;
+    q8_windows output;
+    uint32_t channels, kernel, length;
+} causal_q8_context;
+
+static void causal_q8_positions(void *opaque,size_t begin,size_t end)
+{
+    causal_q8_context *context=opaque;
+    const uint32_t columns=context->channels*context->kernel;
+    const uint32_t history_length=context->kernel-1U;
+    for(size_t t=begin;t<end;++t){
+        float *window=context->scratch+t*columns;
+        for(uint32_t in=0;in<context->channels;++in)
+            for(uint32_t k=0;k<context->kernel;++k){
+                const int32_t source=(int32_t)t-(int32_t)history_length+(int32_t)k;
+                float value=0.0f;
+                if(source>=0)value=context->input[(size_t)in*context->length+(uint32_t)source];
+                else if(context->history)value=context->history[(size_t)in*history_length+(uint32_t)((int32_t)history_length+source)];
+                window[(size_t)in*context->kernel+k]=value;
+            }
+        context->output.scales[t]=quantize_i8(window,context->output.values+t*columns,columns);
+    }
+}
+
+static q8_windows causal_q8_windows(const float *input, const float *history,
+                                    uint32_t channels, uint32_t kernel,
+                                    uint32_t length)
+{
+    const uint32_t columns = channels * kernel;
+    q8_windows result = {
+        .values = malloc((size_t)length * columns),
+        .scales = malloc((size_t)length * sizeof(float))
+    };
+    float *scratch = malloc((size_t)length * columns * sizeof(float));
+    if (result.values == NULL || result.scales == NULL || scratch == NULL) {
+        free(result.values);
+        free(result.scales);
+        free(scratch);
+        return (q8_windows){0};
+    }
+    causal_q8_context context={input,history,scratch,result,channels,kernel,length};
+    minimindo_parallel_for(length,causal_q8_positions,&context);
+    free(scratch);
+    return result;
+}
+
 static float *conv1d(const decoder_conv *conv, const float *input, uint32_t length)
 {
     float *output = malloc((size_t)conv->out_channels * length * sizeof(float));
@@ -443,9 +602,6 @@ static float *conv1d(const decoder_conv *conv, const float *input, uint32_t leng
     }
     const uint32_t columns = conv->in_channels * conv->kernel;
     const float *bias = f32_data(&conv->bias);
-#if defined(_OPENMP)
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
     for (uint32_t out = 0; out < conv->out_channels; ++out) {
         for (uint32_t t = 0; t < length; ++t) {
             const int8_t *weights;
@@ -465,9 +621,6 @@ static float *deconv_windows(const float *input, const float *history,
     const size_t columns = (size_t)channels * 2U;
     float *windows = calloc((size_t)length * columns, sizeof(float));
     if (windows == NULL) return NULL;
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
     for (uint32_t t = 0; t < length; ++t) {
         float *window = windows + (size_t)t * columns;
         for (uint32_t in = 0; in < channels; ++in) {
@@ -480,6 +633,43 @@ static float *deconv_windows(const float *input, const float *history,
         }
     }
     return windows;
+}
+
+typedef struct {
+    const float *input, *history;
+    float *scratch;
+    q8_windows output;
+    uint32_t channels, length;
+} deconv_q8_context;
+
+static void deconv_q8_positions(void *opaque,size_t begin,size_t end)
+{
+    deconv_q8_context *context=opaque;const uint32_t columns=context->channels*2U;
+    for(size_t t=begin;t<end;++t){float *window=context->scratch+t*columns;
+        for(uint32_t in=0;in<context->channels;++in){window[in]=context->input[(size_t)in*context->length+t];
+            window[context->channels+in]=t?context->input[(size_t)in*context->length+t-1U]:context->history?context->history[in]:0.0f;}
+        context->output.scales[t]=quantize_i8(window,context->output.values+t*columns,columns);}
+}
+
+static q8_windows deconv_q8_windows(const float *input, const float *history,
+                                    uint32_t channels, uint32_t length)
+{
+    const uint32_t columns = channels * 2U;
+    q8_windows result = {
+        .values = malloc((size_t)length * columns),
+        .scales = malloc((size_t)length * sizeof(float))
+    };
+    float *scratch = malloc((size_t)length * columns * sizeof(float));
+    if (result.values == NULL || result.scales == NULL || scratch == NULL) {
+        free(result.values);
+        free(result.scales);
+        free(scratch);
+        return (q8_windows){0};
+    }
+    deconv_q8_context context={input,history,scratch,result,channels,length};
+    minimindo_parallel_for(length,deconv_q8_positions,&context);
+    free(scratch);
+    return result;
 }
 
 static float *conv_transpose(const decoder_conv *conv, const float *input,
@@ -497,9 +687,6 @@ static float *conv_transpose(const decoder_conv *conv, const float *input,
         return NULL;
     }
     const float *bias = f32_data(&conv->bias);
-#if defined(_OPENMP)
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
     for (uint32_t out = 0; out < conv->out_channels; ++out) {
         for (uint32_t t = 0; t < length; ++t) {
             const int8_t *unused_weights;
@@ -521,12 +708,14 @@ static float *conv_transpose(const decoder_conv *conv, const float *input,
     return output;
 }
 
+static void activate_elu_range(void *opaque,size_t begin,size_t end)
+{
+    float *values=opaque;for(size_t index=begin;index<end;++index)values[index]=elu(values[index]);
+}
+
 static void activate_elu(float *values, size_t count)
 {
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for (size_t i = 0; i < count; ++i) values[i] = elu(values[i]);
+    minimindo_parallel_for(count,activate_elu_range,values);
 }
 
 static float *residual_block(minimindo_mimi *model, uint32_t first_index,
@@ -548,86 +737,136 @@ static float *residual_block(minimindo_mimi *model, uint32_t first_index,
     return second;
 }
 
-static int transformer_stream_position(minimindo_mimi *model, uint32_t position,
-                                       const float *input, float *output)
+static int transformer_stream_pair(minimindo_mimi *model, uint32_t position,
+                                   const float *input, float *output,
+                                   float *scratch)
 {
     const uint32_t h = model->header->hidden;
     const uint32_t heads = model->header->heads;
     const uint32_t d = model->header->head_dim;
     const uint32_t window = model->header->sliding_window;
     const uint32_t cache_stride = model->max_frames * 2U;
-    if (position >= cache_stride) return -1;
-    memcpy(model->hidden, input, (size_t)h * sizeof(float));
+    const uint32_t m = model->header->intermediate;
+    if (position + 1U >= cache_stride) return -1;
+    float *hidden = scratch;
+    float *normed = hidden + (size_t)h * 2U;
+    float *query = normed + (size_t)h * 2U;
+    float *key = query + (size_t)h * 2U;
+    float *value = key + (size_t)h * 2U;
+    float *attention = value + (size_t)h * 2U;
+    float *projected = attention + (size_t)h * 2U;
+    float *mlp = projected + (size_t)h * 2U;
+    for (uint32_t index = 0; index < h; ++index) {
+        hidden[index] = input[(size_t)index * 2U];
+        hidden[h + index] = input[(size_t)index * 2U + 1U];
+    }
     for (uint32_t li = 0; li < model->header->layers; ++li) {
         const transformer_layer *layer = &model->layers[li];
-        layer_norm(model->hidden, f32_data(&layer->input_weight),
-                   f32_data(&layer->input_bias), model->normed, h,
-                   model->header->norm_epsilon);
-        matvec(&layer->q, model->normed, model->query);
-        matvec(&layer->k, model->normed, model->key);
-        matvec(&layer->v, model->normed, model->value);
-        rope(model->query, heads, d, position, model->header->rope_theta);
-        rope(model->key, heads, d, position, model->header->rope_theta);
-        const size_t cache =
-            ((size_t)li * cache_stride + position) * h;
-        memcpy(model->key_cache + cache, model->key, (size_t)h * sizeof(float));
-        memcpy(model->value_cache + cache, model->value,
-               (size_t)h * sizeof(float));
-        const uint32_t first = position + 1U > window
-            ? position + 1U - window : 0U;
-        for (uint32_t head = 0; head < heads; ++head) {
-            const float *query = model->query + (size_t)head * d;
-            double maximum = -INFINITY;
-            for (uint32_t source = first; source <= position; ++source) {
-                const size_t base =
-                    ((size_t)li * cache_stride + source) * h +
-                    (size_t)head * d;
-                double score = 0.0;
-                for (uint32_t index = 0; index < d; ++index)
-                    score += (double)query[index] *
-                             model->key_cache[base + index];
-                model->scores[source] =
-                    (float)(score / sqrt((double)d));
-                if (model->scores[source] > maximum)
-                    maximum = model->scores[source];
-            }
-            double denominator = 0.0;
-            for (uint32_t source = first; source <= position; ++source) {
-                model->scores[source] =
-                    (float)exp(model->scores[source] - maximum);
-                denominator += model->scores[source];
-            }
-            for (uint32_t index = 0; index < d; ++index) {
-                double sum = 0.0;
-                for (uint32_t source = first; source <= position; ++source) {
+        for (uint32_t slot = 0; slot < 2U; ++slot)
+            layer_norm(hidden + (size_t)slot * h,
+                       f32_data(&layer->input_weight),
+                       f32_data(&layer->input_bias),
+                       normed + (size_t)slot * h, h,
+                       model->header->norm_epsilon);
+        matvec_pair(&layer->q, normed, query);
+        matvec_pair(&layer->k, normed, key);
+        matvec_pair(&layer->v, normed, value);
+        for (uint32_t slot = 0; slot < 2U; ++slot) {
+            const uint32_t absolute = position + slot;
+            rope(query + (size_t)slot * h, heads, d, absolute,
+                 model->header->rope_theta);
+            rope(key + (size_t)slot * h, heads, d, absolute,
+                 model->header->rope_theta);
+            const size_t cache =
+                ((size_t)li * cache_stride + absolute) * h;
+            memcpy(model->key_cache + cache, key + (size_t)slot * h,
+                   (size_t)h * sizeof(float));
+            memcpy(model->value_cache + cache, value + (size_t)slot * h,
+                   (size_t)h * sizeof(float));
+            const uint32_t first = absolute + 1U > window
+                ? absolute + 1U - window : 0U;
+            for (uint32_t head = 0; head < heads; ++head) {
+                const float *head_query = query + (size_t)slot * h +
+                                          (size_t)head * d;
+                double maximum = -INFINITY;
+                for (uint32_t source = first; source <= absolute; ++source) {
                     const size_t base =
                         ((size_t)li * cache_stride + source) * h +
                         (size_t)head * d;
-                    sum += model->scores[source] *
-                           model->value_cache[base + index];
+                    double score = 0.0;
+                    for (uint32_t index = 0; index < d; ++index)
+                        score += (double)head_query[index] *
+                                 model->key_cache[base + index];
+                    model->scores[source] =
+                        (float)(score / sqrt((double)d));
+                    if (model->scores[source] > maximum)
+                        maximum = model->scores[source];
                 }
-                model->attention[(size_t)head * d + index] =
-                    (float)(sum / denominator);
+                double denominator = 0.0;
+                for (uint32_t source = first; source <= absolute; ++source) {
+                    model->scores[source] =
+                        (float)exp(model->scores[source] - maximum);
+                    denominator += model->scores[source];
+                }
+                for (uint32_t index = 0; index < d; ++index) {
+                    double sum = 0.0;
+                    for (uint32_t source = first; source <= absolute; ++source) {
+                        const size_t base =
+                            ((size_t)li * cache_stride + source) * h +
+                            (size_t)head * d;
+                        sum += model->scores[source] *
+                               model->value_cache[base + index];
+                    }
+                    attention[(size_t)slot * h + (size_t)head * d + index] =
+                        (float)(sum / denominator);
+                }
             }
         }
-        matvec(&layer->o, model->attention, model->projected);
+        matvec_pair(&layer->o, attention, projected);
         const float *attention_scale = f32_data(&layer->attention_scale);
-        for (uint32_t index = 0; index < h; ++index)
-            model->hidden[index] +=
-                model->projected[index] * attention_scale[index];
-        layer_norm(model->hidden, f32_data(&layer->post_weight),
-                   f32_data(&layer->post_bias), model->normed, h,
-                   model->header->norm_epsilon);
-        matvec(&layer->fc1, model->normed, model->mlp);
-        for (uint32_t index = 0; index < model->header->intermediate; ++index)
-            model->mlp[index] = gelu(model->mlp[index]);
-        matvec(&layer->fc2, model->mlp, model->projected);
+        for (uint32_t slot = 0; slot < 2U; ++slot) {
+            for (uint32_t index = 0; index < h; ++index)
+                hidden[(size_t)slot * h + index] +=
+                    projected[(size_t)slot * h + index] *
+                    attention_scale[index];
+            layer_norm(hidden + (size_t)slot * h,
+                       f32_data(&layer->post_weight),
+                       f32_data(&layer->post_bias),
+                       normed + (size_t)slot * h, h,
+                       model->header->norm_epsilon);
+        }
+        matvec_pair(&layer->fc1, normed, mlp);
+        for (uint32_t index = 0; index < m * 2U; ++index)
+            mlp[index] = gelu(mlp[index]);
+        matvec_pair(&layer->fc2, mlp, projected);
         const float *mlp_scale = f32_data(&layer->mlp_scale);
-        for (uint32_t index = 0; index < h; ++index)
-            model->hidden[index] += model->projected[index] * mlp_scale[index];
+        for (uint32_t slot = 0; slot < 2U; ++slot)
+            for (uint32_t index = 0; index < h; ++index)
+                hidden[(size_t)slot * h + index] +=
+                    projected[(size_t)slot * h + index] * mlp_scale[index];
     }
-    memcpy(output, model->hidden, (size_t)h * sizeof(float));
+    for (uint32_t index = 0; index < h; ++index) {
+        output[(size_t)index * 2U] = hidden[index];
+        output[(size_t)index * 2U + 1U] = hidden[h + index];
+    }
     return 0;
+}
+
+typedef struct {
+    const decoder_conv *conv;
+    q8_windows windows;
+    float *output;
+    uint32_t length;
+} stream_conv_context;
+
+static void stream_conv_cells(void *opaque,size_t begin,size_t end)
+{
+    stream_conv_context *context=opaque;const decoder_conv *conv=context->conv;
+    const uint32_t columns=conv->in_channels*conv->kernel;const float *bias=f32_data(&conv->bias);
+    for(size_t cell=begin;cell<end;++cell){const uint32_t out=(uint32_t)(cell/context->length),t=(uint32_t)(cell%context->length);
+        const int8_t *weights;float scale;q8_row(&conv->weight,out,&weights,&scale);
+        context->output[(size_t)out*context->length+t]=bias[out]+scale*context->windows.scales[t]*
+            q8_i8_dot(weights,context->windows.values+(size_t)t*columns,columns);}
 }
 
 static float *stream_conv1d(mimi_conv_stream *state,
@@ -637,27 +876,16 @@ static float *stream_conv1d(mimi_conv_stream *state,
     float *output = malloc((size_t)conv->out_channels * length * sizeof(float));
     if (output == NULL) return NULL;
     const uint32_t history_length = conv->kernel - 1U;
-    float *windows = causal_windows(input, state->history, conv->in_channels,
-                                    conv->kernel, length);
-    if (windows == NULL) {
+    q8_windows windows = causal_q8_windows(
+        input, state->history, conv->in_channels, conv->kernel, length);
+    if (windows.values == NULL) {
         free(output);
         return NULL;
     }
-    const uint32_t columns = conv->in_channels * conv->kernel;
-    const float *bias = f32_data(&conv->bias);
-#if defined(_OPENMP)
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
-    for (uint32_t out = 0; out < conv->out_channels; ++out) {
-        for (uint32_t t = 0; t < length; ++t) {
-            const int8_t *weights;
-            float scale;
-            q8_row(&conv->weight, out, &weights, &scale);
-            output[(size_t)out * length + t] = bias[out] + scale *
-                q8_dot(weights, windows + (size_t)t * columns, columns);
-        }
-    }
-    free(windows);
+    stream_conv_context context={conv,windows,output,length};
+    minimindo_parallel_for((size_t)conv->out_channels*length,stream_conv_cells,&context);
+    free(windows.values);
+    free(windows.scales);
     if (history_length != 0U) {
         for (uint32_t in = 0; in < conv->in_channels; ++in) {
             float *history = state->history + (size_t)in * history_length;
@@ -676,6 +904,19 @@ static float *stream_conv1d(mimi_conv_stream *state,
     return output;
 }
 
+static void stream_deconv_cells(void *opaque,size_t begin,size_t end)
+{
+    stream_conv_context *context=opaque;const decoder_conv *conv=context->conv;
+    const uint32_t columns=conv->in_channels*2U;const float *bias=f32_data(&conv->bias);
+    const uint32_t result_length=context->length*conv->stride;
+    for(size_t cell=begin;cell<end;++cell){const uint32_t out=(uint32_t)(cell/context->length),t=(uint32_t)(cell%context->length);
+        const int8_t *unused;float scale;q8_row(&conv->weight,out,&unused,&scale);
+        const int8_t *window=context->windows.values+(size_t)t*columns;
+        float *row=context->output+(size_t)out*result_length+(size_t)t*conv->stride;
+        for(uint32_t phase=0;phase<conv->stride;++phase){const int8_t *weights=conv->phase_weights+
+            ((size_t)out*conv->stride+phase)*columns;row[phase]=bias[out]+scale*context->windows.scales[t]*q8_i8_dot(weights,window,columns);}}
+}
+
 static float *stream_conv_transpose(mimi_conv_stream *state,
                                     const decoder_conv *conv,
                                     const float *input, uint32_t length,
@@ -685,36 +926,19 @@ static float *stream_conv_transpose(mimi_conv_stream *state,
     float *output = malloc((size_t)conv->out_channels * result_length *
                            sizeof(float));
     if (output == NULL) return NULL;
-    const uint32_t columns = conv->in_channels * 2U;
-    float *windows = deconv_windows(input, state->history,
-                                    conv->in_channels, length);
-    if (windows == NULL || conv->phase_weights == NULL ||
+    q8_windows windows = deconv_q8_windows(
+        input, state->history, conv->in_channels, length);
+    if (windows.values == NULL || conv->phase_weights == NULL ||
         conv->kernel != conv->stride * 2U) {
-        free(windows);
+        free(windows.values);
+        free(windows.scales);
         free(output);
         return NULL;
     }
-    const float *bias = f32_data(&conv->bias);
-#if defined(_OPENMP)
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
-    for (uint32_t out = 0; out < conv->out_channels; ++out) {
-        for (uint32_t t = 0; t < length; ++t) {
-            const int8_t *unused_weights;
-            float scale;
-            q8_row(&conv->weight, out, &unused_weights, &scale);
-            const float *window = windows + (size_t)t * columns;
-            float *row = output + (size_t)out * result_length +
-                         (size_t)t * conv->stride;
-            for (uint32_t phase = 0; phase < conv->stride; ++phase) {
-                const int8_t *weights = conv->phase_weights +
-                    ((size_t)out * conv->stride + phase) * columns;
-                row[phase] = bias[out] + scale *
-                    q8_dot(weights, window, columns);
-            }
-        }
-    }
-    free(windows);
+    stream_conv_context context={conv,windows,output,length};
+    minimindo_parallel_for((size_t)conv->out_channels*length,stream_deconv_cells,&context);
+    free(windows.values);
+    free(windows.scales);
     for (uint32_t in = 0; in < conv->in_channels; ++in)
         state->history[in] = input[(size_t)in * length + length - 1U];
     *output_length = result_length;
@@ -766,7 +990,11 @@ minimindo_mimi_stream *minimindo_mimi_stream_open(
     stream->model = model;
     const uint32_t h = model->header->hidden;
     stream->upsample_tail = calloc((size_t)h * 2U, sizeof(float));
-    if (stream->upsample_tail == NULL) goto oom;
+    stream->transformer_pair = malloc(
+        ((size_t)h * 16U + (size_t)model->header->intermediate * 2U) *
+        sizeof(float));
+    if (stream->upsample_tail == NULL || stream->transformer_pair == NULL)
+        goto oom;
     for (uint32_t index = 0; index < 14; ++index) {
         const decoder_conv *conv = &model->convs[index];
         if (conv->transpose) {
@@ -817,10 +1045,34 @@ void minimindo_mimi_stream_close(minimindo_mimi_stream *stream)
 {
     if (stream == NULL) return;
     free(stream->upsample_tail);
+    free(stream->transformer_pair);
     for (uint32_t index = 0; index < 14; ++index) {
         free(stream->convs[index].history);
     }
     free(stream);
+}
+
+typedef struct {
+    minimindo_mimi *model;
+    minimindo_mimi_stream *stream;
+    const float *semantic,*acoustic;
+    float *sequence;
+    uint32_t frames,sequence_length;
+} upsample_parallel_context;
+
+static void upsample_channels(void *opaque,size_t begin,size_t end)
+{
+    upsample_parallel_context *context=opaque;
+    for(size_t channel=begin;channel<end;++channel){const int8_t *weights;float scale;
+        q8_row(&context->model->upsample,(uint32_t)channel,&weights,&scale);
+        float *row=context->sequence+channel*context->sequence_length;
+        float *tail=context->stream->upsample_tail+channel*2U;
+        row[0]+=tail[0];row[1]+=tail[1];tail[0]=0.0f;tail[1]=0.0f;
+        for(uint32_t t=0;t<context->frames;++t){const float value=
+            context->semantic[channel*context->frames+t]+context->acoustic[channel*context->frames+t];
+            for(uint32_t k=0;k<4U;++k){const uint32_t target=t*2U+k;const float contribution=value*weights[k]*scale;
+                if(target<context->sequence_length)row[target]+=contribution;else tail[target-context->sequence_length]+=contribution;}}
+    }
 }
 
 int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
@@ -829,6 +1081,11 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
                                  size_t *audio_samples,
                                  char *error, size_t error_capacity)
 {
+    const int profile = getenv("MINIMINDO_MIMI_STREAM_PROFILE") != NULL;
+    const double profile_start = profile ? seconds() : 0.0;
+    double profile_previous = profile_start;
+    double profile_codebooks = 0.0, profile_transformer = 0.0;
+    double profile_conv0 = 0.0, profile_stages[4] = {0};
     if (stream == NULL || codes == NULL || audio == NULL || frames == 0U ||
         stream->frames + frames > stream->model->max_frames ||
         audio_capacity < minimindo_mimi_samples_for_frames(stream->model,
@@ -869,64 +1126,60 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
     }
     free(projected);
     projected = NULL;
+    if (profile) {
+        const double now = seconds();
+        profile_codebooks = now - profile_previous;
+        profile_previous = now;
+    }
     const uint32_t sequence_length = length * 2U;
     float *sequence = calloc((size_t)h * sequence_length, sizeof(float));
     if (sequence == NULL) goto oom;
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(static)
-#endif
-    for (uint32_t channel = 0; channel < h; ++channel) {
-        const int8_t *weights;
-        float scale;
-        q8_row(&model->upsample, channel, &weights, &scale);
-        float *row = sequence + (size_t)channel * sequence_length;
-        float *tail = stream->upsample_tail + (size_t)channel * 2U;
-        row[0] += tail[0];
-        row[1] += tail[1];
-        tail[0] = 0.0f;
-        tail[1] = 0.0f;
-        for (uint32_t t = 0; t < length; ++t) {
-            const float value = semantic[(size_t)channel * frames + t] +
-                                acoustic[(size_t)channel * frames + t];
-            for (uint32_t k = 0; k < 4U; ++k) {
-                const uint32_t target = t * 2U + k;
-                const float contribution = value * weights[k] * scale;
-                if (target < sequence_length) row[target] += contribution;
-                else tail[target - sequence_length] += contribution;
-            }
-        }
-    }
+    upsample_parallel_context upsample_context={model,stream,semantic,acoustic,sequence,length,sequence_length};
+    minimindo_parallel_for(h,upsample_channels,&upsample_context);
     free(semantic);
     free(acoustic);
     semantic = NULL;
     acoustic = NULL;
-    float *position_input = malloc((size_t)h * sizeof(float));
-    if (position_input == NULL) {
-        free(sequence);
-        goto oom;
-    }
-    for (uint32_t t = 0; t < sequence_length; ++t) {
-        for (uint32_t channel = 0; channel < h; ++channel)
-            position_input[channel] =
+    const size_t scratch_floats = (size_t)h * 14U +
+                                  (size_t)model->header->intermediate * 2U;
+    float *position_pair = stream->transformer_pair + scratch_floats;
+    for (uint32_t t = 0; t < sequence_length; t += 2U) {
+        for (uint32_t channel = 0; channel < h; ++channel) {
+            position_pair[(size_t)channel * 2U] =
                 sequence[(size_t)channel * sequence_length + t];
-        if (transformer_stream_position(model,
-                                        stream->transformer_positions++,
-                                        position_input, position_input) != 0) {
-            free(position_input);
+            position_pair[(size_t)channel * 2U + 1U] =
+                sequence[(size_t)channel * sequence_length + t + 1U];
+        }
+        if (transformer_stream_pair(model, stream->transformer_positions,
+                                    position_pair, position_pair,
+                                    stream->transformer_pair) != 0) {
             free(sequence);
             set_error(error, error_capacity,
                       "Mimi stream transformer context exhausted");
             return -1;
         }
-        for (uint32_t channel = 0; channel < h; ++channel)
+        stream->transformer_positions += 2U;
+        for (uint32_t channel = 0; channel < h; ++channel) {
             sequence[(size_t)channel * sequence_length + t] =
-                position_input[channel];
+                position_pair[(size_t)channel * 2U];
+            sequence[(size_t)channel * sequence_length + t + 1U] =
+                position_pair[(size_t)channel * 2U + 1U];
+        }
     }
-    free(position_input);
+    if (profile) {
+        const double now = seconds();
+        profile_transformer = now - profile_previous;
+        profile_previous = now;
+    }
     float *current = stream_conv1d(&stream->convs[0], &model->convs[0],
                                    sequence, sequence_length);
     free(sequence);
     if (current == NULL) goto oom_simple;
+    if (profile) {
+        const double now = seconds();
+        profile_conv0 = now - profile_previous;
+        profile_previous = now;
+    }
     uint32_t current_length = sequence_length;
     static const uint32_t deconvs[4] = {1, 4, 7, 10};
     static const uint32_t residuals[4] = {2, 5, 8, 11};
@@ -948,6 +1201,11 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
         if (residual == NULL) goto oom_simple;
         current = residual;
         current_length = next_length;
+        if (profile) {
+            const double now = seconds();
+            profile_stages[stage] = now - profile_previous;
+            profile_previous = now;
+        }
     }
     activate_elu(current,
                  (size_t)model->convs[13].in_channels * current_length);
@@ -959,6 +1217,19 @@ int minimindo_mimi_stream_decode(minimindo_mimi_stream *stream,
     free(final);
     stream->frames += length;
     if (audio_samples != NULL) *audio_samples = current_length;
+    if (profile) {
+        fprintf(stderr,
+                "MIMI_STREAM_PROFILE frame=%u codebooks_ms=%.3f "
+                "transformer_ms=%.3f conv0_ms=%.3f stage1_ms=%.3f "
+                "stage2_ms=%.3f stage3_ms=%.3f stage4_ms=%.3f "
+                "final_ms=%.3f total_ms=%.3f\n",
+                stream->frames, profile_codebooks * 1000.0,
+                profile_transformer * 1000.0, profile_conv0 * 1000.0,
+                profile_stages[0] * 1000.0, profile_stages[1] * 1000.0,
+                profile_stages[2] * 1000.0, profile_stages[3] * 1000.0,
+                (seconds() - profile_previous) * 1000.0,
+                (seconds() - profile_start) * 1000.0);
+    }
     return 0;
 oom:
     free(semantic);
