@@ -636,13 +636,27 @@ static char *audio_prompt(size_t frames)
     return text;
 }
 
+typedef struct {
+    float *text_logits;
+    size_t prompt_count;
+    size_t audio_frames;
+    minimindo_audio_encoder_profile audio_profile;
+    double run_start;
+    double audio_encode_seconds;
+    double audio_encode_cpu_seconds;
+    double prefill_thinker_seconds;
+    double prefill_talker_seconds;
+    double prefill_cpu_seconds;
+} prefilled_audio_input;
+
 static int run(const char *thinker_path, const char *talker_path,
                const char *tokenizer_path, const char *mimi_path,
                const char *prompt_text, const char *wav_path,
                const char *audio_encoder_path,const char *audio_path,
                const int16_t *provided_pcm,size_t provided_pcm_count,
                uint32_t max_tokens, uint64_t seed,
-               const char *playback_device, unsigned live_turn)
+               const char *playback_device, unsigned live_turn,
+               const prefilled_audio_input *prefilled)
 {
     /* Text EOS and spoken EOS are not close in time: a 10-token Chinese
      * answer required another 46 Talker steps before all Mimi codebooks
@@ -652,11 +666,11 @@ static int run(const char *thinker_path, const char *talker_path,
     const size_t generation_capacity =
         (size_t)max_tokens + AUDIO_DRAIN_STEPS;
     char error[256] = {0};
-    const double run_start = monotonic_seconds();
+    const double run_start = prefilled?prefilled->run_start:monotonic_seconds();
     if(ensure_resident(thinker_path,talker_path,tokenizer_path,mimi_path,audio_encoder_path,error,sizeof(error))){fprintf(stderr,"%s\n",error);return -1;}
     minimindo_thinker *thinker=resident_thinker;minimindo_talker *talker=resident_talker;
     minimindo_tokenizer *tokenizer=resident_tokenizer;minimindo_mimi *mimi=resident_mimi;
-    minimindo_thinker_reset(thinker);minimindo_talker_reset(talker);
+    if(!prefilled){minimindo_thinker_reset(thinker);minimindo_talker_reset(talker);}
     const uint32_t tv = minimindo_thinker_vocab_size(thinker), av = minimindo_talker_vocab_size(talker);
     const uint32_t hidden = minimindo_thinker_hidden_size(thinker), pad = minimindo_talker_pad_token(talker);
     float *text_logits = malloc((size_t)tv*sizeof(float));
@@ -666,33 +680,68 @@ static int run(const char *thinker_path, const char *talker_path,
     uint32_t *all_codes=malloc((size_t)8*generation_capacity*sizeof(uint32_t));
     uint32_t *frames=malloc((size_t)8*generation_capacity*sizeof(uint32_t));
     minimindo_audio_encoder *audio_encoder=resident_audio_encoder;minimindo_audio_encoder_profile audio_profile={0};float *audio_embeddings=NULL;size_t audio_frames=0;char *audio_user=NULL;int16_t *owned_pcm=NULL;
-    const double audio_encode_start = monotonic_seconds();
-    const double audio_encode_cpu_start = process_cpu_seconds();
-    if(audio_path||provided_pcm){const int16_t *pcm=provided_pcm;size_t pcm_count=provided_pcm_count;if(audio_path&&load_wav(audio_path,&owned_pcm,&pcm_count)){fprintf(stderr,"audio input must be 16 kHz mono PCM WAV\n");return -1;}if(owned_pcm)pcm=owned_pcm;
-        size_t frame_capacity=minimindo_audio_encoder_frames(pcm_count);audio_embeddings=malloc(frame_capacity*768*sizeof(float));
-        if(!audio_encoder||!audio_embeddings||minimindo_audio_encoder_encode_pcm16(audio_encoder,pcm,pcm_count,audio_embeddings,frame_capacity*768,&audio_frames,error,sizeof(error))){fprintf(stderr,"audio encoder: %s\n",error);free(owned_pcm);return -1;}minimindo_audio_encoder_last_profile(audio_encoder,&audio_profile);free(owned_pcm);audio_user=audio_prompt(audio_frames);prompt_text=audio_user;}
-    const double audio_encode_end = monotonic_seconds();
-    const double audio_encode_cpu_end = process_cpu_seconds();
-    char *formatted=format_prompt(prompt_text); uint32_t *prompt=NULL; size_t prompt_count=0;
-    if(!text_logits||!audio_logits||!work||!generated||!all_codes||!frames||!formatted||
-       encode(tokenizer,formatted,&prompt,&prompt_count,error,sizeof(error))!=0) { fprintf(stderr,"allocation/tokenizer: %s\n",error); return -1; }
-    if(prompt_count+generation_capacity>resident_context){
-        fprintf(stderr,"prompt plus text/audio drain exceeds context: %zu + %zu > %u\n",
-                prompt_count,generation_capacity,resident_context);return -1;}
-    uint32_t current_audio[8]; for(int i=0;i<8;++i) current_audio[i]=pad;
-    bridge=malloc(prompt_count*(size_t)hidden*sizeof(float));
-    float *replacement_embeddings=calloc(prompt_count*(size_t)hidden,sizeof(float));
-    uint8_t *replacement_mask=calloc(prompt_count,sizeof(uint8_t));
-    if(!bridge||!replacement_embeddings||!replacement_mask){fprintf(stderr,"prefill allocation failed\n");return -1;}
-    size_t audio_cursor=0;
-    for(size_t p=0;p<prompt_count;++p)if(prompt[p]==16&&audio_cursor<audio_frames){
-        memcpy(replacement_embeddings+p*(size_t)hidden,
-               audio_embeddings+audio_cursor++*(size_t)hidden,
-               hidden*sizeof(float));replacement_mask[p]=1;}
-    if(audio_cursor!=audio_frames){fprintf(stderr,"audio token/embedding count mismatch: %zu/%zu\n",audio_cursor,audio_frames);return -1;}
+    char *formatted=NULL;uint32_t *prompt=NULL;size_t prompt_count=0;
+    float *replacement_embeddings=NULL;uint8_t *replacement_mask=NULL;
+    double audio_encode_seconds=0.0,audio_encode_cpu_seconds=0.0;
     double prefill_thinker_seconds=0.0,prefill_talker_seconds=0.0;
+    double prefill_seconds=0.0,prefill_cpu_seconds=0.0;
+    double prefill_end=0.0,prefill_cpu_end=0.0;
+    uint32_t current_audio[8]; for(int i=0;i<8;++i) current_audio[i]=pad;
+    if(!text_logits||!audio_logits||!work||!generated||!all_codes||!frames){
+        fprintf(stderr,"inference allocation failed\n");return -1;
+    }
+    if(prefilled){
+        if(!prefilled->text_logits||
+           minimindo_thinker_position(thinker)!=prefilled->prompt_count||
+           minimindo_talker_position(talker)!=prefilled->prompt_count){
+            fprintf(stderr,"streaming input state mismatch: thinker=%u talker=%u prompt=%zu\n",
+                    minimindo_thinker_position(thinker),
+                    minimindo_talker_position(talker),prefilled->prompt_count);
+            return -1;
+        }
+        memcpy(text_logits,prefilled->text_logits,(size_t)tv*sizeof(float));
+        prompt_count=prefilled->prompt_count;audio_frames=prefilled->audio_frames;
+        audio_profile=prefilled->audio_profile;
+        audio_encode_seconds=prefilled->audio_encode_seconds;
+        audio_encode_cpu_seconds=prefilled->audio_encode_cpu_seconds;
+        prefill_thinker_seconds=prefilled->prefill_thinker_seconds;
+        prefill_talker_seconds=prefilled->prefill_talker_seconds;
+        prefill_seconds=prefill_thinker_seconds+prefill_talker_seconds;
+        prefill_cpu_seconds=prefilled->prefill_cpu_seconds;
+        bridge=malloc((size_t)hidden*sizeof(float));
+        prefill_end=monotonic_seconds();prefill_cpu_end=process_cpu_seconds();
+        printf("EVENT input_ready turn=%u input_frames=%zu prompt_tokens=%zu "
+               "speech_start_to_ready_ms=%.0f\n",live_turn,audio_frames,
+               prompt_count,(prefill_end-run_start)*1000.0);fflush(stdout);
+    }else{
+        const double audio_encode_start=monotonic_seconds();
+        const double audio_encode_cpu_start=process_cpu_seconds();
+        if(audio_path||provided_pcm){const int16_t *pcm=provided_pcm;size_t pcm_count=provided_pcm_count;if(audio_path&&load_wav(audio_path,&owned_pcm,&pcm_count)){fprintf(stderr,"audio input must be 16 kHz mono PCM WAV\n");return -1;}if(owned_pcm)pcm=owned_pcm;
+            size_t frame_capacity=minimindo_audio_encoder_frames(pcm_count);audio_embeddings=malloc(frame_capacity*768*sizeof(float));
+            if(!audio_encoder||!audio_embeddings||minimindo_audio_encoder_encode_pcm16(audio_encoder,pcm,pcm_count,audio_embeddings,frame_capacity*768,&audio_frames,error,sizeof(error))){fprintf(stderr,"audio encoder: %s\n",error);free(owned_pcm);return -1;}minimindo_audio_encoder_last_profile(audio_encoder,&audio_profile);free(owned_pcm);owned_pcm=NULL;audio_user=audio_prompt(audio_frames);prompt_text=audio_user;}
+        const double audio_encode_end=monotonic_seconds();
+        const double audio_encode_cpu_end=process_cpu_seconds();
+        audio_encode_seconds=audio_encode_end-audio_encode_start;
+        audio_encode_cpu_seconds=audio_encode_cpu_end-audio_encode_cpu_start;
+        formatted=format_prompt(prompt_text);
+        if(!formatted||encode(tokenizer,formatted,&prompt,&prompt_count,error,sizeof(error))!=0) { fprintf(stderr,"allocation/tokenizer: %s\n",error); return -1; }
+        if(prompt_count+generation_capacity>resident_context){
+            fprintf(stderr,"prompt plus text/audio drain exceeds context: %zu + %zu > %u\n",
+                    prompt_count,generation_capacity,resident_context);return -1;}
+        bridge=malloc(prompt_count*(size_t)hidden*sizeof(float));
+        replacement_embeddings=calloc(prompt_count*(size_t)hidden,sizeof(float));
+        replacement_mask=calloc(prompt_count,sizeof(uint8_t));
+        if(!bridge||!replacement_embeddings||!replacement_mask){fprintf(stderr,"prefill allocation failed\n");return -1;}
+        size_t audio_cursor=0;
+        for(size_t p=0;p<prompt_count;++p)if(prompt[p]==16&&audio_cursor<audio_frames){
+            memcpy(replacement_embeddings+p*(size_t)hidden,
+                   audio_embeddings+audio_cursor++*(size_t)hidden,
+                   hidden*sizeof(float));replacement_mask[p]=1;}
+        if(audio_cursor!=audio_frames){fprintf(stderr,"audio token/embedding count mismatch: %zu/%zu\n",audio_cursor,audio_frames);return -1;}
+        const double prefill_start=monotonic_seconds();
+        const double prefill_cpu_start=process_cpu_seconds();
 #if defined(MINIMINDO_SEQUENTIAL_PREFILL)
-    for(size_t p=0;p<prompt_count;++p) {
+        for(size_t p=0;p<prompt_count;++p) {
         const int need_text_logits=p+1U==prompt_count;
         double stage_start=monotonic_seconds();
         int thinker_result;
@@ -712,23 +761,29 @@ static int run(const char *thinker_path, const char *talker_path,
             talker,bridge,hidden,current_audio,NULL,0,0,NULL,0,error,sizeof(error));
         prefill_talker_seconds+=monotonic_seconds()-stage_start;
         if(thinker_result||talker_result){fprintf(stderr,"prefill: %s\n",error);return -1;}
-    }
+        }
 #else
-    double stage_start=monotonic_seconds();
-    int thinker_result=minimindo_thinker_prefill_sequence(
-        thinker,prompt,prompt_count,replacement_embeddings,replacement_mask,
-        text_logits,tv,bridge,prompt_count*(size_t)hidden,error,sizeof(error));
-    prefill_thinker_seconds=monotonic_seconds()-stage_start;
-    if(thinker_result){fprintf(stderr,"prefill: %s\n",error);return -1;}
-    stage_start=monotonic_seconds();
-    int talker_result=minimindo_talker_prefill_sequence(
-        talker,bridge,prompt_count*(size_t)hidden,current_audio,prompt_count,
-        error,sizeof(error));
-    prefill_talker_seconds=monotonic_seconds()-stage_start;
-    if(talker_result) { fprintf(stderr,"prefill: %s\n",error);return -1; }
+        double stage_start=monotonic_seconds();
+        int thinker_result=minimindo_thinker_prefill_sequence(
+            thinker,prompt,prompt_count,replacement_embeddings,replacement_mask,
+            text_logits,tv,bridge,prompt_count*(size_t)hidden,error,sizeof(error));
+        prefill_thinker_seconds=monotonic_seconds()-stage_start;
+        if(thinker_result){fprintf(stderr,"prefill: %s\n",error);return -1;}
+        stage_start=monotonic_seconds();
+        int talker_result=minimindo_talker_prefill_sequence(
+            talker,bridge,prompt_count*(size_t)hidden,current_audio,prompt_count,
+            error,sizeof(error));
+        prefill_talker_seconds=monotonic_seconds()-stage_start;
+        if(talker_result) { fprintf(stderr,"prefill: %s\n",error);return -1; }
 #endif
-    const double prefill_end = monotonic_seconds();
-    const double prefill_cpu_end = process_cpu_seconds();
+        prefill_end=monotonic_seconds();prefill_cpu_end=process_cpu_seconds();
+        prefill_seconds=prefill_end-prefill_start;
+        prefill_cpu_seconds=prefill_cpu_end-prefill_cpu_start;
+    }
+    if(!bridge||prompt_count+generation_capacity>resident_context){
+        fprintf(stderr,"streamed prompt plus text/audio drain exceeds context: %zu + %zu > %u\n",
+                prompt_count,generation_capacity,resident_context);return -1;
+    }
     mimi_decode_worker decoder;
     int decoder_started = 0;
     alsa_playback_worker playback;
@@ -951,6 +1006,8 @@ static int run(const char *thinker_path, const char *talker_path,
            "\"generate_cpu_ms\":%.0f,\"generate_cpu_pct\":%.0f,"
            "\"mimi_cpu_ms\":%.0f,\"mimi_cpu_pct\":%.0f,"
            "\"model_ms\":%.0f,\"streaming\":%s,"
+           "\"input_streaming\":%s,\"input_center_ms\":480,"
+           "\"input_right_context_ms\":240,\"input_kv_cache_ms\":1920,"
            "\"decode_overlapped_with_generation\":%s,"
            "\"decode_overlap_frames\":%zu,"
            "\"decoder_to_alsa_streaming\":%s,"
@@ -961,20 +1018,20 @@ static int run(const char *thinker_path, const char *talker_path,
            "\"audio_drain_complete\":%s}\n",
            steps,text_steps?text_steps:steps,frame_count,audio_frames,prompt_count,samples,
            (unsigned long long)seed,
-           (audio_encode_end-audio_encode_start)*1000,
+           audio_encode_seconds*1000,
            audio_profile.frontend_ms,audio_profile.encoder_ms,
            audio_profile.projector_ms,
-           (prefill_end-audio_encode_end)*1000,
+           prefill_seconds*1000,
            prefill_thinker_seconds*1000,prefill_talker_seconds*1000,
            (generation_end-prefill_end)*1000,
            generate_thinker_seconds*1000,generate_talker_seconds*1000,
            (mimi_end-generation_end)*1000,
-           (audio_encode_cpu_end-audio_encode_cpu_start)*1000,
-           (audio_encode_cpu_end-audio_encode_cpu_start)*100.0/
-               (audio_encode_end-audio_encode_start),
-           (prefill_cpu_end-audio_encode_cpu_end)*1000,
-           (prefill_cpu_end-audio_encode_cpu_end)*100.0/
-               (prefill_end-audio_encode_end),
+           audio_encode_cpu_seconds*1000,
+           audio_encode_seconds>0.0?
+               audio_encode_cpu_seconds*100.0/audio_encode_seconds:0.0,
+           prefill_cpu_seconds*1000,
+           prefill_seconds>0.0?
+               prefill_cpu_seconds*100.0/prefill_seconds:0.0,
            (generation_cpu_end-prefill_cpu_end)*1000,
            (generation_cpu_end-prefill_cpu_end)*100.0/
                (generation_end-prefill_end),
@@ -983,6 +1040,7 @@ static int run(const char *thinker_path, const char *talker_path,
                (mimi_end-generation_end),
            (mimi_end-run_start)*1000,
            decoder.decode_overlap_frames?"true":"false",
+           prefilled?"true":"false",
            decoder.decode_overlap_frames?"true":"false",
            decoder.decode_overlap_frames,
            playback_device!=NULL?"true":"false",
@@ -1138,6 +1196,301 @@ static void capture_stop(capture_queue *queue)
     pthread_mutex_destroy(&queue->wait_mutex);
 }
 
+enum { INPUT_PCM_QUEUE=512, INPUT_EMBEDDING_FRAMES=16 };
+
+typedef struct {
+    int16_t samples[CAPTURE_CHUNK];
+    size_t count;
+    int end_of_stream;
+} input_pcm_item;
+
+typedef struct {
+    pthread_t thread;
+    pthread_mutex_t wait_mutex;
+    pthread_cond_t ready;
+    input_pcm_item items[INPUT_PCM_QUEUE];
+    atomic_size_t read_sequence;
+    atomic_size_t write_sequence;
+    atomic_int abort_requested;
+    int started;
+    int result;
+    unsigned turn;
+    prefilled_audio_input prefilled;
+    char error[256];
+} live_input_stream;
+
+static int live_input_enqueue(live_input_stream *worker,const int16_t *samples,
+                              size_t count,int end_of_stream)
+{
+    if(!worker||!worker->started||count>CAPTURE_CHUNK||(!samples&&count))
+        return -1;
+    const size_t write=atomic_load_explicit(&worker->write_sequence,
+                                            memory_order_relaxed);
+    const size_t read=atomic_load_explicit(&worker->read_sequence,
+                                           memory_order_acquire);
+    if(write-read>=INPUT_PCM_QUEUE)return -1;
+    input_pcm_item *item=&worker->items[write%INPUT_PCM_QUEUE];
+    if(count)memcpy(item->samples,samples,count*sizeof(int16_t));
+    item->count=count;item->end_of_stream=end_of_stream;
+    atomic_store_explicit(&worker->write_sequence,write+1U,
+                          memory_order_release);
+    /* The ring itself is lock-free SPSC.  This mutex exists only to close the
+     * enqueue/dequeue sleep race around the condition variable. */
+    pthread_mutex_lock(&worker->wait_mutex);
+    pthread_cond_signal(&worker->ready);
+    pthread_mutex_unlock(&worker->wait_mutex);
+    return 0;
+}
+
+static int live_input_next(live_input_stream *worker,input_pcm_item *item)
+{
+    pthread_mutex_lock(&worker->wait_mutex);
+    while(atomic_load_explicit(&worker->read_sequence,memory_order_relaxed)==
+          atomic_load_explicit(&worker->write_sequence,memory_order_acquire))
+        pthread_cond_wait(&worker->ready,&worker->wait_mutex);
+    pthread_mutex_unlock(&worker->wait_mutex);
+    const size_t read=atomic_load_explicit(&worker->read_sequence,
+                                           memory_order_relaxed);
+    *item=worker->items[read%INPUT_PCM_QUEUE];
+    atomic_store_explicit(&worker->read_sequence,read+1U,memory_order_release);
+    return 0;
+}
+
+static int live_input_prefill(live_input_stream *worker,const uint32_t *tokens,
+                              size_t count,const float *embeddings,
+                              int final_logits)
+{
+    if(count==0)return 0;
+    const uint32_t hidden=minimindo_thinker_hidden_size(resident_thinker);
+    const uint32_t vocab=minimindo_thinker_vocab_size(resident_thinker);
+    const uint32_t pad=minimindo_talker_pad_token(resident_talker);
+    float *bridges=malloc(count*(size_t)hidden*sizeof(float));
+    uint8_t *mask=embeddings?malloc(count):NULL;
+    if(!bridges||(embeddings&&!mask)){free(bridges);free(mask);return -1;}
+    if(mask)memset(mask,1,count);
+    uint32_t audio_ids[8];for(size_t i=0;i<8;++i)audio_ids[i]=pad;
+    double cpu_start=process_cpu_seconds();
+    double stage=monotonic_seconds();
+    int thinker_result=minimindo_thinker_prefill_sequence(
+        resident_thinker,tokens,count,embeddings,mask,
+        final_logits?worker->prefilled.text_logits:NULL,
+        final_logits?vocab:0,bridges,count*(size_t)hidden,
+        worker->error,sizeof(worker->error));
+    worker->prefilled.prefill_thinker_seconds+=monotonic_seconds()-stage;
+    stage=monotonic_seconds();
+    int talker_result=thinker_result?-1:minimindo_talker_prefill_sequence(
+        resident_talker,bridges,count*(size_t)hidden,audio_ids,count,
+        worker->error,sizeof(worker->error));
+    worker->prefilled.prefill_talker_seconds+=monotonic_seconds()-stage;
+    worker->prefilled.prefill_cpu_seconds+=process_cpu_seconds()-cpu_start;
+    free(bridges);free(mask);
+    return thinker_result||talker_result?-1:0;
+}
+
+static int live_input_verify_tokens(live_input_stream *worker,
+                                    const uint32_t *prefix,size_t prefix_count,
+                                    const uint32_t *suffix,size_t suffix_count)
+{
+    char *audio=audio_prompt(worker->prefilled.audio_frames);
+    char *formatted=audio?format_prompt(audio):NULL;
+    uint32_t *whole=NULL;size_t whole_count=0;
+    int result=-1;
+    if(formatted&&encode(resident_tokenizer,formatted,&whole,&whole_count,
+                         worker->error,sizeof(worker->error))==0&&
+       whole_count==prefix_count+worker->prefilled.audio_frames+suffix_count){
+        result=0;
+        for(size_t i=0;i<prefix_count;++i)if(whole[i]!=prefix[i])result=-1;
+        for(size_t i=0;i<worker->prefilled.audio_frames;++i)
+            if(whole[prefix_count+i]!=16U)result=-1;
+        for(size_t i=0;i<suffix_count;++i)
+            if(whole[prefix_count+worker->prefilled.audio_frames+i]!=suffix[i])
+                result=-1;
+    }
+    if(result)snprintf(worker->error,sizeof(worker->error),
+                       "incremental tokenizer boundary mismatch");
+    free(whole);free(formatted);free(audio);return result;
+}
+
+static void *live_input_thread(void *opaque)
+{
+    static const char prefix_text[]="<|im_start|>user\n";
+    static const char suffix_text[]=
+        "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+    live_input_stream *worker=opaque;
+    uint32_t *prefix=NULL,*suffix=NULL;size_t prefix_count=0,suffix_count=0;
+    minimindo_audio_encoder_stream *encoder=NULL;
+    float embeddings[INPUT_EMBEDDING_FRAMES*768];
+    worker->result=-1;
+    (void)minimindo_parallel_pin_current(0U);
+    if(minimindo_parallel_session_begin(4U)!=0){
+        snprintf(worker->error,sizeof(worker->error),
+                 "input compute session failed");
+        goto done;
+    }
+    minimindo_thinker_reset(resident_thinker);
+    minimindo_talker_reset(resident_talker);
+    worker->prefilled.text_logits=malloc(
+        (size_t)minimindo_thinker_vocab_size(resident_thinker)*sizeof(float));
+    encoder=minimindo_audio_encoder_stream_open(resident_audio_encoder,
+                                                 worker->error,
+                                                 sizeof(worker->error));
+    if(!worker->prefilled.text_logits||!encoder||
+       encode(resident_tokenizer,prefix_text,&prefix,&prefix_count,
+              worker->error,sizeof(worker->error))||
+       encode(resident_tokenizer,suffix_text,&suffix,&suffix_count,
+              worker->error,sizeof(worker->error))||
+       live_input_prefill(worker,prefix,prefix_count,NULL,0))goto done;
+    printf("EVENT input_stream_start turn=%u prefix_tokens=%zu\n",
+           worker->turn,prefix_count);fflush(stdout);
+    for(;;){
+        input_pcm_item item;
+        live_input_next(worker,&item);
+        if(atomic_load_explicit(&worker->abort_requested,memory_order_acquire)){
+            snprintf(worker->error,sizeof(worker->error),"input stream aborted");
+            goto done;
+        }
+        size_t frames=0;
+        double cpu_start=process_cpu_seconds();
+        double stage=monotonic_seconds();
+        int encode_result=minimindo_audio_encoder_stream_push_pcm16(
+            encoder,item.count?item.samples:NULL,item.count,item.end_of_stream,
+            embeddings,sizeof(embeddings)/sizeof(embeddings[0]),&frames,
+            worker->error,sizeof(worker->error));
+        worker->prefilled.audio_encode_seconds+=monotonic_seconds()-stage;
+        worker->prefilled.audio_encode_cpu_seconds+=
+            process_cpu_seconds()-cpu_start;
+        if(encode_result)goto done;
+        if(frames){
+            uint32_t audio_tokens[INPUT_EMBEDDING_FRAMES];
+            for(size_t i=0;i<frames;++i)audio_tokens[i]=16U;
+            worker->prefilled.audio_frames+=frames;
+            printf("STREAM stage=input_audio_commit turn=%u frames=%zu "
+                   "total_frames=%zu pcm_ms=%zu elapsed_ms=%.0f\n",
+                   worker->turn,frames,worker->prefilled.audio_frames,
+                   minimindo_audio_encoder_stream_total_frames(encoder)*60U,
+                   (monotonic_seconds()-worker->prefilled.run_start)*1000.0);
+            fflush(stdout);
+            if(live_input_prefill(worker,audio_tokens,frames,embeddings,0))
+                goto done;
+            printf("STREAM stage=input_prefill turn=%u positions=%zu "
+                   "thinker_position=%u talker_position=%u elapsed_ms=%.0f\n",
+                   worker->turn,frames,
+                   minimindo_thinker_position(resident_thinker),
+                   minimindo_talker_position(resident_talker),
+                   (monotonic_seconds()-worker->prefilled.run_start)*1000.0);
+            fflush(stdout);
+        }
+        if(item.end_of_stream){
+            if(live_input_verify_tokens(worker,prefix,prefix_count,suffix,
+                                        suffix_count)||
+               live_input_prefill(worker,suffix,suffix_count,NULL,1))goto done;
+            worker->prefilled.prompt_count=prefix_count+
+                worker->prefilled.audio_frames+suffix_count;
+            minimindo_audio_encoder_stream_profile(
+                encoder,&worker->prefilled.audio_profile);
+            printf("EVENT input_stream_eos turn=%u input_frames=%zu "
+                   "prompt_tokens=%zu thinker_position=%u talker_position=%u "
+                   "elapsed_ms=%.0f\n",worker->turn,
+                   worker->prefilled.audio_frames,worker->prefilled.prompt_count,
+                   minimindo_thinker_position(resident_thinker),
+                   minimindo_talker_position(resident_talker),
+                   (monotonic_seconds()-worker->prefilled.run_start)*1000.0);
+            fflush(stdout);worker->result=0;break;
+        }
+    }
+done:
+    minimindo_audio_encoder_stream_close(encoder);
+    free(prefix);free(suffix);
+    minimindo_parallel_session_end();
+    if(worker->result)
+        fprintf(stderr,"input stream turn=%u failed: %s\n",worker->turn,
+                worker->error[0]?worker->error:"unknown error");
+    return NULL;
+}
+
+static int live_input_finish(live_input_stream *worker,int abort_stream);
+
+static int live_input_start(live_input_stream *worker,unsigned turn,
+                            double run_start,const int16_t *preroll,
+                            size_t preroll_count)
+{
+    memset(worker,0,sizeof(*worker));worker->turn=turn;
+    worker->prefilled.run_start=run_start;
+    atomic_init(&worker->read_sequence,0U);
+    atomic_init(&worker->write_sequence,0U);
+    atomic_init(&worker->abort_requested,0);
+    if(pthread_mutex_init(&worker->wait_mutex,NULL))return -1;
+    if(pthread_cond_init(&worker->ready,NULL)){
+        pthread_mutex_destroy(&worker->wait_mutex);return -1;
+    }
+    if(pthread_create(&worker->thread,NULL,live_input_thread,worker)!=0){
+        pthread_cond_destroy(&worker->ready);
+        pthread_mutex_destroy(&worker->wait_mutex);return -1;
+    }
+    worker->started=1;
+    for(size_t offset=0;offset<preroll_count;offset+=CAPTURE_CHUNK){
+        size_t count=preroll_count-offset;
+        if(count>CAPTURE_CHUNK)count=CAPTURE_CHUNK;
+        if(live_input_enqueue(worker,preroll+offset,count,0)){
+            (void)live_input_finish(worker,1);return -1;
+        }
+    }
+    return 0;
+}
+
+static int live_input_finish(live_input_stream *worker,int abort_stream)
+{
+    if(!worker||!worker->started)return -1;
+    if(abort_stream)
+        atomic_store_explicit(&worker->abort_requested,1,memory_order_release);
+    if(live_input_enqueue(worker,NULL,0,1))return -1;
+    pthread_join(worker->thread,NULL);worker->started=0;
+    pthread_cond_destroy(&worker->ready);
+    pthread_mutex_destroy(&worker->wait_mutex);
+    return worker->result;
+}
+
+static int run_audio_file_streaming(
+    const char *thinker,const char *talker,const char *tokenizer,
+    const char *mimi,const char *audio_encoder,const char *audio_path,
+    const char *output,const char *playback,uint32_t max_tokens,uint64_t seed)
+{
+    char error[256]={0};int16_t *samples=NULL;size_t sample_count=0;
+    if(ensure_resident(thinker,talker,tokenizer,mimi,audio_encoder,
+                       error,sizeof(error))||
+       load_wav(audio_path,&samples,&sample_count)){
+        fprintf(stderr,"streaming audio file setup failed: %s\n",
+                error[0]?error:"input must be 16 kHz mono PCM WAV");
+        free(samples);return -1;
+    }
+    live_input_stream input;
+    const double started=monotonic_seconds();
+    if(live_input_start(&input,0,started,NULL,0)){
+        free(samples);return -1;
+    }
+    int queue_result=0;
+    for(size_t offset=0;offset<sample_count;offset+=CAPTURE_CHUNK){
+        size_t count=sample_count-offset;if(count>CAPTURE_CHUNK)count=CAPTURE_CHUNK;
+        if(live_input_enqueue(&input,samples+offset,count,0)){
+            queue_result=-1;break;
+        }
+    }
+    free(samples);
+    if(queue_result){
+        (void)live_input_finish(&input,1);
+        free(input.prefilled.text_logits);return -1;
+    }
+    if(live_input_finish(&input,0)){
+        free(input.prefilled.text_logits);return -1;
+    }
+    (void)minimindo_parallel_pin_current(0U);
+    (void)minimindo_parallel_session_begin(3U);
+    int result=run(thinker,talker,tokenizer,mimi,NULL,output,audio_encoder,
+                   NULL,NULL,0,max_tokens,seed,playback,0,&input.prefilled);
+    minimindo_parallel_session_end();
+    free(input.prefilled.text_logits);return result;
+}
+
 static int live(const char *thinker,const char *talker,const char *tokenizer,
                 const char *mimi,const char *audio_encoder,const char *capture_device,
                 const char *playback_device,uint32_t max_tokens,uint64_t seed)
@@ -1149,12 +1502,20 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
     const int warm_result=warm_resident(thinker,talker,tokenizer,mimi,audio_encoder);
     minimindo_parallel_session_end();
     if(warm_result)return -1;
-    printf("READY pipeline=MiniMind-O-native-C warmup_ms=%.0f capture=%s playback=%s\n",
-           (monotonic_seconds()-warm_start)*1000,capture_device,playback_device);fflush(stdout);
+    printf("READY pipeline=MiniMind-O-native-C input_streaming=always "
+           "input_center_ms=480 input_right_context_ms=240 "
+           "input_kv_cache_ms=1920 warmup_ms=%.0f capture=%s playback=%s\n",
+           (monotonic_seconds()-warm_start)*1000,capture_device,
+           playback_device);fflush(stdout);
     capture_queue capture;if(capture_start(&capture,capture_device)){perror("arecord");return -1;}
     enum{CHUNK=CAPTURE_CHUNK,PREROLL=8192,MAX_SPEECH=3*16000};
-    int16_t chunk[CHUNK],ring[PREROLL],*speech=malloc(MAX_SPEECH*sizeof(int16_t));
-    size_t ring_write=0,ring_count=0,speech_count=0;double noise=120.0,last_monitor=0;int speaking=0,hot=0,silent=0,active_chunks=0,cooldown=0;unsigned turn=0;
+    int16_t chunk[CHUNK],ring[PREROLL],pending_silence[20][CHUNK];
+    int16_t *speech=malloc(MAX_SPEECH*sizeof(int16_t));
+    live_input_stream input={0};
+    size_t ring_write=0,ring_count=0,speech_count=0,pending_count=0;
+    double noise=120.0,last_monitor=0;
+    int speaking=0,hot=0,silent=0,active_chunks=0,cooldown=0;
+    unsigned turn=0;
     if(!speech)return -1;
     while(1){if(capture_next(&capture,chunk))break;size_t got=CHUNK;
         double squares=0,peak=0;for(size_t i=0;i<got;++i){double v=chunk[i];squares+=v*v;if(fabs(v)>peak)peak=fabs(v);}double rms=sqrt(squares/got);
@@ -1164,23 +1525,62 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
         if(cooldown){--cooldown;if(rms<threshold)noise=noise*.98+rms*.02;continue;}
         if(!speaking){if(rms<threshold)noise=noise*.995+rms*.005;
             for(size_t i=0;i<got;++i){ring[ring_write]=chunk[i];ring_write=(ring_write+1)%PREROLL;if(ring_count<PREROLL)++ring_count;}
-            hot=rms>threshold?hot+1:0;if(hot>=2){speaking=1;silent=0;active_chunks=hot;speech_count=0;size_t start=(ring_write+PREROLL-ring_count)%PREROLL;
+            hot=rms>threshold?hot+1:0;if(hot>=2){speaking=1;silent=0;active_chunks=hot;pending_count=0;speech_count=0;size_t start=(ring_write+PREROLL-ring_count)%PREROLL;
                 for(size_t i=0;i<ring_count&&speech_count<MAX_SPEECH;++i)speech[speech_count++]=ring[(start+i)%PREROLL];
-                printf("EVENT speech_start turn=%u preroll_ms=%zu\n",turn+1,ring_count*1000/16000);fflush(stdout);}}
-        else{const int hit_limit=speech_count+got>MAX_SPEECH;if(!hit_limit){memcpy(speech+speech_count,chunk,got*sizeof(int16_t));speech_count+=got;}if(rms>threshold)++active_chunks;
-            silent=rms<threshold*.65?silent+1:0;
+                const double speech_start=monotonic_seconds();
+                printf("EVENT speech_start turn=%u preroll_ms=%zu\n",turn+1,ring_count*1000/16000);fflush(stdout);
+                if(live_input_start(&input,turn+1,speech_start,speech,speech_count)){
+                    fprintf(stderr,"input streaming worker start failed\n");break;}}}
+        else{const int hit_limit=speech_count+got>MAX_SPEECH;
+            if(!hit_limit){memcpy(speech+speech_count,chunk,got*sizeof(int16_t));speech_count+=got;}
+            if(rms>threshold)++active_chunks;
+            if(!hit_limit&&rms<threshold*.65){
+                if(pending_count<20){
+                    memcpy(pending_silence[pending_count],chunk,sizeof(chunk));
+                    ++pending_count;
+                }
+                silent=(int)pending_count;
+            }else if(!hit_limit){
+                int enqueue_failed=0;
+                for(size_t p=0;p<pending_count;++p)
+                    if(live_input_enqueue(&input,pending_silence[p],CHUNK,0))
+                        enqueue_failed=1;
+                pending_count=0;silent=0;
+                if(live_input_enqueue(&input,chunk,got,0))enqueue_failed=1;
+                if(enqueue_failed){
+                    fprintf(stderr,"input PCM queue overflow\n");
+                    (void)live_input_finish(&input,1);break;
+                }
+            }
             if(silent>=20||hit_limit){speaking=0;hot=0;ring_count=0;++turn;size_t trim=(size_t)silent*CHUNK;if(trim<speech_count)speech_count-=trim;
-                if(speech_count<4000||active_chunks<3){printf("EVENT empty_vad turn=%u samples=%zu active_chunks=%d action=discard\n",turn,speech_count,active_chunks);fflush(stdout);speech_count=0;continue;}
+                pending_count=0;
+                if(speech_count<4000||active_chunks<3){
+                    printf("EVENT empty_vad turn=%u samples=%zu active_chunks=%d action=discard\n",turn,speech_count,active_chunks);fflush(stdout);
+                    (void)live_input_finish(&input,1);
+                    free(input.prefilled.text_logits);input.prefilled.text_logits=NULL;
+                    speech_count=0;continue;}
                 printf("EVENT speech_end turn=%u samples=%zu duration_ms=%zu end=%s\n",turn,speech_count,speech_count*1000/16000,hit_limit?"limit":"silence");fflush(stdout);
                 const double inference_start=monotonic_seconds();const char *response="/dev/shm/minimindo-live-response.wav";
+                if(live_input_finish(&input,0)){
+                    fprintf(stderr,"input streaming turn=%u did not finish\n",turn);
+                    free(input.prefilled.text_logits);input.prefilled.text_logits=NULL;
+                    break;
+                }
+                printf("EVENT input_caught_up turn=%u speech_end_to_ready_ms=%.0f\n",
+                       turn,(monotonic_seconds()-inference_start)*1000.0);fflush(stdout);
                 (void)minimindo_parallel_pin_current(0U);
                 (void)minimindo_parallel_session_begin(3U);
-                int result=run(thinker,talker,tokenizer,mimi,NULL,response,audio_encoder,NULL,speech,speech_count,max_tokens,seed+turn,playback_device,turn);
+                int result=run(thinker,talker,tokenizer,mimi,NULL,response,
+                               audio_encoder,NULL,NULL,0,max_tokens,seed+turn,
+                               playback_device,turn,&input.prefilled);
                 minimindo_parallel_session_end();
+                free(input.prefilled.text_logits);input.prefilled.text_logits=NULL;
                 printf("EVENT inference_end turn=%u elapsed_ms=%.0f result=%d\n",turn,(monotonic_seconds()-inference_start)*1000,result);fflush(stdout);speech_count=0;
                 capture_flush(&capture);cooldown=32;
             }}
     }
+    if(input.started)(void)live_input_finish(&input,1);
+    free(input.prefilled.text_logits);
     free(speech);capture_stop(&capture);return -1;
 }
 
@@ -1194,9 +1594,16 @@ int main(int argc,char **argv)
     if(live_mode)return live(argv[1],argv[2],argv[3],argv[4],audio_encoder,capture?capture:"plughw:1,0",playback?playback:"plughw:0,0",max_tokens,seed)!=0;
     if((!prompt&&!audio_path)||(prompt&&audio_path)||!output)return 2;
     if (playback != NULL && !safe_alsa_name(playback)) return 2;
-    (void)minimindo_parallel_pin_current(0U);
-    (void)minimindo_parallel_session_begin(3U);
-    const int result=run(argv[1],argv[2],argv[3],argv[4],prompt,output,audio_encoder,audio_path,NULL,0,max_tokens,seed,playback,0);
-    minimindo_parallel_session_end();
+    int result;
+    if(audio_path)result=run_audio_file_streaming(
+        argv[1],argv[2],argv[3],argv[4],audio_encoder,audio_path,output,
+        playback,max_tokens,seed);
+    else{
+        (void)minimindo_parallel_pin_current(0U);
+        (void)minimindo_parallel_session_begin(3U);
+        result=run(argv[1],argv[2],argv[3],argv[4],prompt,output,
+                   audio_encoder,NULL,NULL,0,max_tokens,seed,playback,0,NULL);
+        minimindo_parallel_session_end();
+    }
     return result!=0;
 }

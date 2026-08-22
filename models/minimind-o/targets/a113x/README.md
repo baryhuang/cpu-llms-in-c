@@ -14,10 +14,12 @@ USB microphone, 16 kHz PCM
 adaptive RMS VAD + pre-roll + bounded capture queue
         |
         v
-frozen SenseVoice encoder --> 768-wide audio embeddings
+online SenseVoice chunks --> committed 768-wide audio embeddings
         |
         v
-MiniMind Thinker bridge --> Talker --> 8 Mimi codebooks/frame
+incremental Thinker/Talker prompt prefill --> response generation
+        |                                      |
+        +-- while the user is still talking    +--> 8 Mimi codebooks/frame
                                       |
                                       v
                           stateful Mimi decoder worker
@@ -35,6 +37,45 @@ All model stages are resident. Capture runs in a dedicated pthread so ALSA is
 drained during inference and playback. The 64 x 512-sample bounded SPSC queue
 discards new echo while it is full and is flushed after a turn; stale speaker
 audio is therefore not interpreted as a new command.
+
+## Input-token streaming
+
+Input streaming starts at `speech_start`, not at `speech_end`. The VAD thread
+publishes pre-roll and each confirmed speech chunk to a 512-entry SPSC PCM
+ring. A dedicated input-inference thread owns SenseVoice, Thinker and Talker
+for that phase. It first prefills `<|im_start|>user\n`, then immediately
+injects each committed SenseVoice embedding at an `<|audio_pad|>` position in
+both language-model KV caches. End-of-speech only flushes the encoder's final
+right-context tail and prefills the assistant suffix. Ownership transfers to
+the generation thread only after the input thread is joined; model state is
+never accessed concurrently.
+
+The frozen SenseVoice graph was trained with full-sequence attention and an
+11-tap bidirectional FSMN, so an offline prefix embedding is not final until
+future audio exists. The native online graph follows the chunk/cache structure
+of SenseVoice's streaming SANM path:
+
+- 8 LFR center frames are committed per normal chunk (480 ms);
+- 4 LFR frames are retained as right lookahead (240 ms);
+- every one of the 70 layers retains 32 committed K/V frames (1.92 s);
+- right-context frames are recomputed in the next chunk and are never entered
+  into the cache until committed;
+- the final chunk commits all remaining frames at input EOS.
+
+This is truncated-attention inference for a frozen bidirectional checkpoint,
+not claimed to be bit-equivalent to the old whole-utterance graph. The runtime
+validates that incremental prefix, repeated audio-pad positions, and suffix
+exactly equal the tokenizer output for the complete prompt before generation.
+Potential trailing silence is held outside the model; it is enqueued only if
+speech resumes and discarded at VAD EOS, because a committed model token
+cannot be retracted.
+
+Production logs expose the actual overlap. `input_audio_commit` is printed
+when embeddings become stable, `input_prefill` after their Thinker/Talker KV
+positions advance, `speech_end` when VAD closes the utterance, and
+`input_caught_up` when the tail is complete. A real overlap requires at least
+one `input_prefill` line before `speech_end`; `input_streaming=always` and the
+chunk/cache geometry are also printed in the READY line.
 
 ## Stateful Mimi streaming
 
@@ -92,7 +133,9 @@ The production lifecycle has explicit single-writer ownership:
 
 - the capture pthread exclusively enqueues ALSA chunks; VAD exclusively
   dequeues them;
-- the main thread owns Thinker/Talker state and is the only Mimi-code producer;
+- the input-inference pthread exclusively owns SenseVoice and Thinker/Talker
+  state while PCM is arriving; after EOS/join, the main thread exclusively
+  owns the same Thinker/Talker state and is the only Mimi-code producer;
 - the Mimi pthread exclusively owns the stateful decoder and writes each unique
   PCM range before release-publishing `decoded_frames`;
 - the playback pthread reads only published PCM ranges and never touches Mimi
@@ -126,6 +169,9 @@ Cortex-A53:
   output/time tiles and activation ranges across the owned CPU set;
 - streaming Mimi causal/deconvolution windows are activation-quantized to i8,
   then evaluated with NEON W8A8 integer dots and per-window/per-row scales.
+- the online SenseVoice dense layers likewise quantize each input position to
+  symmetric i8 and evaluate four positions per weight load with Armv8.0 NEON
+  W8A8 dots; the projector remains Q8 x f32.
 
 Thinker and Talker prefill now run layer-by-layer across the full prompt. This
 reuses each Q8 weight row across all prompt positions, computes the Thinker LM
@@ -141,6 +187,18 @@ versus 2.52--2.62 seconds for the single-position kernel, with byte-identical
 embeddings. Talker top-50 sampling uses a 50-entry min-heap followed by a
 50-item sort instead of sorting all 2,112 logits. It removes about 66 ms of
 serial work per 24-step fixture and preserves the exact WAV hash.
+
+The input-streaming increment replaces SenseVoice's Q8 x f32 dense products
+with per-position W8A8 products. On the pinned 18,880-sample fixture, the
+streaming encoder CLI fell from 3.04 s to 1.11 s (2.74x); the measured dense
+encoder section fell from 2.392 s to 1.134 s (2.11x). Both runs used all four
+cores with 337--365% aggregate CPU and about 228 MiB peak RSS. Quantizing the
+shared normalized input once for Q/K/V preserved the W8A8 output byte for byte
+and accounts for the final 1.15 to 1.11 s reduction. The W8A8
+embeddings have cosine 0.998620222 against the Q8 x f32 online graph, RMSE
+0.029285131 and maximum absolute error 0.138373837. This is a numerical gate,
+not a language-quality claim; live multilingual response quality remains a
+required physical acceptance test.
 
 The im2col change trades about 11 MiB of temporary memory on the eight-frame
 fixture for contiguous vector access and reuse. It reduced Mimi decode from
@@ -177,6 +235,8 @@ The raw record is in [results.json](results.json). Important measured values:
 | Mimi 8-frame whole decode, NEON/im2col | 1.89 s | 347% | 70,300 KiB | 4.13x |
 | Mimi 8-frame, one frame per streaming call | 1.93 s | 347% | 48,700 KiB | 4.04x |
 | Mimi 8-frame, phase-packed one-frame streaming | 1.26 s | 318% | 58,844 KiB | 6.19x |
+| Online SenseVoice, Q8 x f32, 18,880 samples | 3.04 s | 337% | 228,568 KiB | 1.00x |
+| Online SenseVoice, W8A8, 18,880 samples | 1.11 s | 365% | 228,580 KiB | 2.74x |
 
 The historical four-thread A/B uses the same input, seed, 16 generation steps, eight
 audio frames and identical answer text. Four cores are genuinely used; the
@@ -319,7 +379,7 @@ require about 377 MiB. `/dev/shm` is erased on reboot. The persistent
 `/usr/local/bin/run-minimindo-native-a113x.sh` launcher solves that cold-boot
 failure by verifying every artifact against a pinned SHA256 and downloading
 only missing or corrupt files. The executable comes from
-[`minimindo-native-a113x-v1.1.0`](https://github.com/baryhuang/llm-in-c/releases/tag/minimindo-native-a113x-v1.1.0);
+[`minimindo-native-a113x-v1.2.0`](https://github.com/baryhuang/llm-in-c/releases/tag/minimindo-native-a113x-v1.2.0);
 the unchanged packed model images remain pinned to the v1.0.0 release.
 
 Downloads use a per-process `.part` file in `/dev/shm`; the launcher verifies
