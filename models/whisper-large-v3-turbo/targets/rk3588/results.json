@@ -195,6 +195,13 @@
     },
     "custom_w4_fp16_parallel3_aot_v3": {
       "status": "current appended result; retained v2 measurements remain unchanged",
+      "scope": {
+        "native_npu_w4a16": false,
+        "accurate_label": "AOT W4 storage -> initialization-time FP16 expansion -> three-core RKNPU2 FP16 MatMul",
+        "packed_int4_enters_npu": false,
+        "npu_role": "execute supported FP16 x FP16 -> FP16 MatMul shards",
+        "comparison_note": "the 17.933 s FP16 result uses RKNN_NPU_CORE_ALL inside fused precompiled encoder/decoder graphs; it is not a one-core control"
+      },
       "packages": {
         "layout": "version 3: N32 outer, K32 inner; each 640-byte record stores 32 FP32 scales followed by packed 32x32 signed INT4",
         "encoder": {
@@ -249,7 +256,14 @@
         "avg_decoder_step_ms": 230.369,
         "e2e_ms": 42479.700,
         "peak_rss_kib": 2582468,
-        "active_npu_cores": 3
+        "active_npu_cores": 3,
+        "w4_linear_runs": 3172,
+        "attention_matmul_runs": 30080,
+        "attention_host_dispatches": 752,
+        "w4_linear_wall_ms": 24628.302,
+        "attention_wall_ms": 13682.134,
+        "encoder_npu_avg_load_percent": [24.77, 24.54, 23.82],
+        "decoder_npu_avg_load_percent": [7.88, 7.88, 7.52]
       },
       "llmc_trials": [
         {"encoder_ms": 21940.541, "decoder_total_ms": 21082.896, "avg_decoder_step_ms": 234.254, "e2e_ms": 43775.668, "peak_rss_kib": 2582776},

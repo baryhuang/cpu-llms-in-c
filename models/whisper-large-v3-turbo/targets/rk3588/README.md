@@ -122,6 +122,12 @@ and
 The current appended path retains all v2 rows and adds a new versioned package
 and scheduler:
 
+> **Scope:** this is not native packed-W4 execution on the RK3588 NPU. The
+> package stores W4, the native C++ runtime expands it to FP16 once during
+> initialization, and Core0/Core1/Core2 execute supported FP16 MatMul shards.
+> The accurate label is **AOT W4 storage -> resident FP16 -> three-core RKNPU2
+> FP16 MatMul**. The packed INT4 values never enter the NPU.
+
 - Each 640-byte W4 record contains 32 FP32 scales followed by one packed
   32x32 INT4 tile. N32 is outermost and K32 is innermost, so CPU expansion is
   a sequential read instead of separate scale and nibble streams.
@@ -149,6 +155,18 @@ and the baseline emit the exact same 87-token sequence. The 1000-loop
 1x1280x51904 gate completed 3000 NPU jobs without a crash or stale DMA data;
 Core0/Core1/Core2 each reached 90% load, CPU/NPU cosine was 0.999999978, and
 average three-core MatMul time was 4.730 ms.
+
+The three cores are useful inside this custom path: the retained canonical
+1x1280x51904 gate takes 5.351 ms on Core0/Core1/Core2 versus 12.305 ms on
+Core0 alone, a 2.300x gain. That comparison must not be confused with the
+17.933-second vendor FP16 graph, which uses `RKNN_NPU_CORE_ALL` and can keep
+intermediate tensors inside a compiled, fused graph. The AOT W4 runtime makes
+3172 W4 linear calls, 30080 attention MatMul calls and 752 host attention
+dispatches. In the 42.480-second median trial, W4 linear wall time is 24.628
+seconds and attention wall time is 13.682 seconds; decoder average load is
+only 7.88/7.88/7.52% on Core0/Core1/Core2. Therefore the remaining gap is
+dominated by fragmented FP16 jobs, host/NPU boundaries and expanded-weight
+bandwidth, not by failure to activate the three cores.
 
 Two measured alternatives were rejected: complete-N Q/K/V jobs statically
 assigned one per core took 43.227 s, and retaining another 30.8 MB of
