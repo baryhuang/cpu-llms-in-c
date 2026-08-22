@@ -13,7 +13,7 @@ asset_sha256()
 {
     case "$1" in
         minimindo-speech-a113x)
-            printf '%s\n' 997934a2603673a096806deb8497bbf991262057b5c546d3d6741da82a413813 ;;
+            printf '%s\n' 530971bee858d221aba19acaa24810a65f7a34a40369ac17cce122e02e8ededf ;;
         minimindo-thinker-q8-v1.mmo)
             printf '%s\n' 7a0c78199510275aa25af55fcf6f1f5bd66ca05fdb99db3c18abd28c258a66ab ;;
         minimindo-talker-q8-v1.mmo)
@@ -94,7 +94,7 @@ if test "$#" -eq 0; then
         --audio-encoder "$install_dir/minimindo-sensevoice-q8-v1.mmo" \
         --capture-device plughw:0,0 \
         --playback-device plughw:0,0 \
-        --max-tokens 24 \
+        --max-tokens 64 \
         --seed 20260821
 fi
 

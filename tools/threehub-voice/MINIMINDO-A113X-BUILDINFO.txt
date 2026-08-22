@@ -5,7 +5,7 @@ Build date: 2026-08-22
 Target: ThirdReality TRHub-V3 / Amlogic A113D-A113X / 4x Cortex-A53
 Runtime: native C11, NEON, OpenMP, pthreads; no Python on target
 Compiler: GCC 12.2.0, Debian 12 AArch64 cross toolchain
-Flags: -O3 -g -std=c11 -fopenmp -mcpu=cortex-a53 -mtune=cortex-a53 -pthread
+Flags: -O3 -g -std=c11 -fopenmp -march=armv8-a+simd -mtune=cortex-a53 -pthread
 Upstream model: https://huggingface.co/jingyaogong/minimind-3o
 Upstream source revision: ccab6d98520ac5ac5d7583a3fa21a65105137e28
 Upstream model SHA256: 21530f9bbc540f461e2c0e29292ad359781d4d984d1e0c994510945f9b0edaab

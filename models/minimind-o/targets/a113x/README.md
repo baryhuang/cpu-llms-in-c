@@ -209,12 +209,28 @@ Thinker prefill. The current system is substantially faster but does not meet
 a 1--3 second conversational latency target.
 
 Earlier 48-step resident turns took 18.916--21.405 seconds and are retained in
-the raw result file as historical measurements. Production now caps the fast
-path at 24 steps. On the final physical-speaker fixture, model generation ended
-at 6,271 ms, 12 of 16 frames were buffered at 8,044 ms, Mimi completed at
-8,659 ms, and playback ended at 9,469 ms. `aplay` returned zero and emitted no
-underrun. The four condition waits (614 ms total) happened behind the 960 ms
-PCM safety buffer; they did not starve ALSA.
+the raw result file as historical measurements. A 24-step fast-path experiment
+reduced latency, but was not production-correct: the same limit bounds both
+text generation and the staggered eight-codebook audio stream, so every turn
+stopped at 16 Mimi frames (1.28 seconds) even when the decoded text was longer.
+The listener therefore heard only the first few words. Production now bounds
+text at 64 steps, then gives the audio codebooks a separate 192-step/15.36
+second drain budget. It exits that budget early as soon as all eight codebooks
+reach EOS. In a fixed-seed Chinese test text reached EOS at step 10, while audio
+correctly continued until total step 56 and emitted 44 frames/3.52 seconds. A
+forced-limit test capped text at 16 steps; it inserted text EOS at step 17 and
+continued to total step 75, producing 61 frames/4.88 seconds with
+`text_limit_hit=true` and `audio_drain_complete=true`. The prior 24-step speaker
+run remains useful as a transport measurement: model generation ended at
+6,271 ms, playback began with 12 buffered frames at 8,044 ms, and `aplay`
+finished without an underrun at 9,469 ms.
+
+A native-C `3 generation threads + 1 overlapping Mimi thread` A/B was also
+rejected. It decoded nine of 44 frames before producer EOS and produced a
+byte-identical WAV, but reduced Thinker/Talker parallel efficiency: generation
+rose from 4.233 to 8.161 seconds and total model time from 12.609 to 15.258
+seconds. The deployed scheduler therefore retains exclusive four-core phases
+rather than trading a visible streaming marker for worse end-to-end latency.
 
 The model is therefore usable as a correctness prototype, but it is not the
 1--3 second immediate-dialog path. The product design should keep two paths:

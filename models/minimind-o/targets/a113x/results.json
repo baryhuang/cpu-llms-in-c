@@ -10,7 +10,7 @@
   "build": {
     "language": "C11",
     "compiler": "GCC 12.2, Debian 12 Linux/AArch64",
-    "flags": "-O3 -mcpu=cortex-a53 -mtune=cortex-a53 -fopenmp -pthread",
+    "flags": "-O3 -march=armv8-a+simd -mtune=cortex-a53 -fopenmp -pthread",
     "python_on_target": false
   },
   "cpu_scaling": {
@@ -219,6 +219,8 @@
     "omp_proc_bind": true,
     "omp_places": "cores",
     "max_live_input_ms": 3000,
+    "max_generation_steps": 64,
+    "audio_drain_steps": 192,
     "mic_capture_gain_db": 8,
     "pcm_playback_percent": 5,
     "pcm_zero_value_silent_despite_alsa_zero_db_metadata": true,
@@ -228,7 +230,30 @@
     "mimi_f32_preexpanded_convolution_weights": "1.49-1.52 s versus 1.22-1.26 s and about 58 MiB more RSS",
     "mimi_q8_activation_block16": "1.24 s with no stable speed gain and changed output peak",
     "mimi_shared_activation_q8_dot2": "1.76 s versus about 1.25 s",
-    "sensevoice_single_position_q8": "2.52-2.62 s versus 2.31-2.44 s for four-position Q8"
+    "sensevoice_single_position_q8": "2.52-2.62 s versus 2.31-2.44 s for four-position Q8",
+    "three_generation_threads_plus_one_mimi_thread": "byte-identical 44-frame WAV and 9 frames decoded before EOS, but generation increased from 4.233 s to 8.161 s and total model time from 12.609 s to 15.258 s"
+  },
+  "complete_response_correction": {
+    "problem": "24 generation steps jointly truncated text and staggered audio to 16 Mimi frames / 1.28 seconds",
+    "production_max_text_steps": 64,
+    "maximum_audio_drain_steps": 192,
+    "fixed_seed_prompt": "请用一句简短的话介绍你自己。",
+    "natural_text_eos_step": 10,
+    "total_steps_at_audio_eos": 56,
+    "audio_frames": 44,
+    "audio_seconds": 3.52,
+    "text": "我是一个语言模型，没有自己的生活。<|im_end|>",
+    "model_ms": 12609,
+    "wav_sha256": "933ee607447f17ff25152bdd42f555dda02453bb336cdb6e0cfbeafb345d9f01",
+    "forced_text_limit_acceptance": {
+      "max_text_steps": 16,
+      "reported_text_steps_including_forced_eos": 17,
+      "total_steps_at_audio_eos": 75,
+      "audio_frames": 61,
+      "audio_seconds": 4.88,
+      "text_limit_hit": true,
+      "audio_drain_complete": true
+    }
   },
   "boot_persistence": {
     "model_directory": "/dev/shm/minimindo-o-native-v1",
