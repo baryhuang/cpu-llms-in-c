@@ -45,6 +45,7 @@ MINIMINDO_OMNI_FORWARD := $(BUILD_DIR)/minimindo-omni-forward
 MINIMINDO_MIMI := $(BUILD_DIR)/minimindo-mimi
 MINIMINDO_SPEECH := $(BUILD_DIR)/minimindo-speech
 MINIMINDO_AUDIO_ENCODER := $(BUILD_DIR)/minimindo-audio-encoder
+MINIMINDO_EMBEDDING_COMPARE := $(BUILD_DIR)/minimindo-embedding-compare
 WHISPER_TURBO := models/whisper-large-v3-turbo
 WHISPER_TURBO_GENERIC := $(WHISPER_TURBO)/targets/generic
 WHISPER_TURBO_A113X := $(WHISPER_TURBO)/targets/a113x
@@ -150,7 +151,8 @@ whisper-small-tools: $(WHISPER_SMALL_ENCODER_CHECK) $(WHISPER_SMALL_ENCODER_BENC
 	$(WHISPER_SMALL_DECODER_CHECK) $(WHISPER_SMALL_TRANSCRIBE)
 
 minimindo-tools: $(MINIMINDO_LAYER_TEST) $(MINIMINDO_THINKER) $(MINIMINDO_CHAT) \
-	$(MINIMINDO_OMNI_FORWARD) $(MINIMINDO_MIMI)
+	$(MINIMINDO_OMNI_FORWARD) $(MINIMINDO_MIMI) \
+	$(MINIMINDO_EMBEDDING_COMPARE)
 
 minimindo-speech: $(MINIMINDO_SPEECH)
 
@@ -353,6 +355,10 @@ $(MINIMINDO_AUDIO_ENCODER): $(MINIMINDO_GENERIC)/minimindo_audio_encoder_cli.c \
 		$(MINIMINDO_GENERIC)/minimindo_audio_encoder.c \
 		$(MINIMINDO_PARALLEL) \
 		-o $@ $(LDFLAGS) $(LDLIBS) -lm
+
+$(MINIMINDO_EMBEDDING_COMPARE): tests/minimindo_embedding_compare.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) -lm
 
 $(MINIMAX_H3_TEST): tests/minimax_h3_test.c \
 	$(MINIMAX_H3_GENERIC)/minimax_h3.c $(MINIMAX_H3_GENERIC)/minimax_h3.h

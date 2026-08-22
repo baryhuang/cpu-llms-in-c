@@ -2,7 +2,7 @@
 set -eu
 
 release_repository=${MINIMINDO_RELEASE_REPOSITORY:-baryhuang/llm-in-c}
-release_tag=${MINIMINDO_RELEASE_TAG:-minimindo-native-a113x-v1.1.0}
+release_tag=${MINIMINDO_RELEASE_TAG:-minimindo-native-a113x-v1.2.0}
 model_release_tag=${MINIMINDO_MODEL_RELEASE_TAG:-minimindo-native-a113x-v1.0.0}
 install_dir=${MINIMINDO_INSTALL_DIR:-/dev/shm/minimindo-o-native-v1}
 release_root=${MINIMINDO_RELEASE_ROOT_URL:-https://github.com/$release_repository/releases/download}
@@ -14,7 +14,7 @@ asset_sha256()
 {
     case "$1" in
         minimindo-speech-a113x)
-            printf '%s\n' 96c18c0d217bc0bd4058e438f045ce48012c75dffac0bde0ec075371a233f7b7 ;;
+            printf '%s\n' 95f7f795f4e54bf1516ab985ca381484c45234ec528607abbbd0bda2e05d4610 ;;
         minimindo-thinker-q8-v1.mmo)
             printf '%s\n' 7a0c78199510275aa25af55fcf6f1f5bd66ca05fdb99db3c18abd28c258a66ab ;;
         minimindo-talker-q8-v1.mmo)
