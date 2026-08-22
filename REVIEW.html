@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gemma 4 E2B bounded-runtime test review</title>
+  <meta name="description" content="Current model-by-target engineering review for llm-in-c.">
+  <title>llm-in-c — model × target engineering review</title>
   <style>
     :root {
       color-scheme: light;
@@ -12,12 +13,12 @@
       --line: #d8ded9;
       --paper: #f4f6f3;
       --panel: #ffffff;
-      --safe: #176b47;
-      --safe-bg: #e8f5ee;
-      --danger: #a73328;
-      --danger-bg: #faece9;
+      --accent: #176b47;
+      --accent-bg: #e8f5ee;
       --warn: #8b5d00;
       --warn-bg: #fff5d6;
+      --reject: #a73328;
+      --reject-bg: #faece9;
       --code: #142019;
     }
     * { box-sizing: border-box; }
@@ -28,331 +29,463 @@
       color: var(--ink);
       font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
-    main { width: min(1460px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 64px; }
+    main { width: min(1220px, calc(100% - 32px)); margin: 0 auto; padding: 34px 0 64px; }
     h1, h2, h3, p { margin-top: 0; }
-    h1 { max-width: 900px; margin-bottom: 8px; font-size: clamp(28px, 4vw, 48px); line-height: 1.05; letter-spacing: -0.045em; }
-    h2 { margin-bottom: 16px; font-size: 21px; letter-spacing: -0.025em; }
+    h1 {
+      max-width: 940px;
+      margin-bottom: 10px;
+      font-size: clamp(30px, 5vw, 54px);
+      line-height: 1.02;
+      letter-spacing: -.05em;
+    }
+    h2 { margin-bottom: 14px; font-size: 22px; letter-spacing: -.025em; }
     h3 { margin-bottom: 8px; font-size: 15px; }
     a { color: inherit; text-underline-offset: 3px; }
-    .lede { color: var(--muted); max-width: 940px; font-size: 16px; }
-    .bar { display: flex; gap: 8px; flex-wrap: wrap; margin: 20px 0 30px; }
+    .lede { max-width: 930px; color: var(--muted); font-size: 16px; }
+    .eyebrow {
+      margin-bottom: 12px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    .bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 30px; }
     .bar a, button {
+      padding: 7px 10px;
       border: 1px solid var(--line);
       border-radius: 5px;
       background: var(--panel);
-      padding: 7px 10px;
+      color: var(--ink);
       font: inherit;
       text-decoration: none;
       cursor: pointer;
     }
-    button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: white; }
-    section { margin-top: 28px; }
-    .panel { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 20px; }
-    .verdict { border-left: 7px solid var(--warn); background: var(--warn-bg); }
-    .verdict strong { display: block; margin-bottom: 7px; font-size: 18px; }
-    .metrics { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
-    .metric { min-height: 112px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 15px; }
-    .metric span { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-    .metric b { display: block; margin-top: 9px; font-size: 24px; line-height: 1.1; }
-    .metric small { display: block; margin-top: 6px; color: var(--muted); }
-    .metrics + h3 { margin-top: 20px; }
+    button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: #fff; }
+    section { margin-top: 30px; }
+    .panel { padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .verdict { border-left: 7px solid var(--accent); background: var(--accent-bg); }
+    .verdict strong { display: block; margin-bottom: 6px; font-size: 19px; }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+    .metric { min-height: 118px; padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
+    .metric span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .055em; text-transform: uppercase; }
+    .metric b { display: block; margin-top: 9px; font-size: 24px; line-height: 1.08; }
+    .metric small { display: block; margin-top: 7px; color: var(--muted); }
     .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #e8ece8; color: #344039; white-space: nowrap; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #f7f9f7; }
+    td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .status {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      background: var(--accent-bg);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .status.legacy { background: var(--warn-bg); color: var(--warn); }
+    .keep { border-left: 6px solid var(--accent); background: var(--accent-bg); }
+    .reject { border-left: 6px solid var(--reject); background: var(--reject-bg); }
+    .decision { padding: 16px 18px; border-radius: 7px; }
+    .decision + .decision { margin-top: 10px; }
+    .decision strong { display: block; margin-bottom: 5px; }
+    blockquote {
+      margin: 12px 0 0;
+      padding: 15px 18px;
+      border-left: 4px solid var(--accent);
+      background: var(--panel);
+      font: 17px/1.55 ui-serif, Georgia, serif;
+    }
     pre {
       margin: 0;
+      padding: 15px;
       overflow: auto;
       border-radius: 6px;
       background: var(--code);
       color: #e9f2eb;
-      padding: 15px;
       font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       white-space: pre-wrap;
     }
     code { font-family: inherit; }
     .note { margin: 10px 0 0; color: var(--muted); font-size: 13px; }
-    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-    table { width: 100%; min-width: 1290px; border-collapse: collapse; font-size: 12px; }
-    th, td { padding: 10px 9px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
-    th { position: sticky; top: 0; z-index: 1; background: #e8ece8; color: #344039; white-space: nowrap; }
-    tbody tr:last-child td { border-bottom: 0; }
-    tbody tr:hover { background: #f7f9f7; }
-    td.obs { min-width: 310px; max-width: 430px; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px; }
-    td.number { font-variant-numeric: tabular-nums; white-space: nowrap; }
-    .tag { display: inline-block; min-width: 58px; border-radius: 999px; padding: 2px 8px; text-align: center; font-weight: 700; }
-    .tag.safe { color: var(--safe); background: var(--safe-bg); }
-    .tag.danger { color: var(--danger); background: var(--danger-bg); }
-    .mismatch { box-shadow: inset 5px 0 0 var(--warn); }
     .filters { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 10px; }
     .source-list { margin: 0; padding-left: 20px; }
     .source-list li + li { margin-top: 7px; }
-    footer { margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    footer { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
     @media (max-width: 900px) {
       .metrics { grid-template-columns: 1fr 1fr; }
       .cols { grid-template-columns: 1fr; }
     }
-    @media (max-width: 520px) {
-      main { width: min(100% - 20px, 1460px); padding-top: 20px; }
+    @media (max-width: 540px) {
+      main { width: calc(100% - 20px); padding-top: 22px; }
       .metrics { grid-template-columns: 1fr; }
       .panel { padding: 15px; }
     }
     @media print {
-      body { background: white; }
+      body { background: #fff; }
       main { width: 100%; padding: 0; }
       .bar, .filters { display: none; }
-      .panel, .metric, .table-wrap { break-inside: avoid; }
-      th { position: static; }
+      .panel, .metric, .decision, .table-wrap { break-inside: avoid; }
     }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>Gemma 4 E2B bounded-runtime test review</h1>
-    <p class="lede">Exact inputs and recorded outputs for the first complete 35-layer C/Q4 task artifact. Measurement date: 2026-08-10.</p>
+    <p class="eyebrow">Current repository review · 2026-08-20</p>
+    <h1>Model-specialized inference, measured on the hardware it ships on.</h1>
+    <p class="lede">The current llm-in-c portfolio spans Apple M3 Pro, NVIDIA Jetson Orin, Rockchip RK3588 and Amlogic A113X. Every headline below is tied to one checkpoint, target and execution path; unlike the previous report, this page is not a review of only the legacy Gemma artifact.</p>
     <nav class="bar" aria-label="Review sections">
-      <a href="#boundary">Input boundary</a>
-      <a href="#method">How it ran</a>
-      <a href="#benchmark">Benchmark</a>
-      <a href="#verification">Verification</a>
-      <a href="#sources">Source files</a>
+      <a href="#portfolio">Model × target matrix</a>
+      <a href="#rk3588">Whisper Turbo / RK3588</a>
+      <a href="#a113x">Whisper Turbo / A113X</a>
+      <a href="#cross-device">Cross-device comparison</a>
+      <a href="#decisions">Optimization decisions</a>
+      <a href="#method">Evidence boundary</a>
+      <a href="#sources">Source records</a>
     </nav>
   </header>
 
-  <section id="boundary" class="panel verdict">
-    <strong>Review conclusion: the runtime does not accept arbitrary text.</strong>
-    It accepts <code>IMAGE [CASE_INDEX|all]</code>. The compiler tokenizes the twelve observations below and writes those token sequences into the model image. At runtime, the second argument selects one stored sequence; it is parsed as an integer or the literal <code>all</code>. There is no text or stdin input path. The application output is one bit: <code>0 = safe</code>, <code>1 = danger</code>.
+  <section class="panel verdict">
+    <strong>Current result: full native inference paths, with target-specific evidence.</strong>
+    The repository owns checkpoint import, packed images, tokenization, model execution and specialized kernels. Shipping LLMC target runtimes are native; Python may be used by an explicitly labeled comparison baseline or by offline compilation and verification. Performance numbers across speech, text and video are intentionally reported in their native units rather than collapsed into one misleading score.
   </section>
 
-  <section id="benchmark" aria-labelledby="benchmark-title">
-    <h2 id="benchmark-title">Benchmark</h2>
-    <p class="note">C/Q4 runtime, two CPU threads. Verification execution is excluded. All durations below are wall-clock seconds.</p>
+  <section aria-labelledby="headline-title">
+    <h2 id="headline-title">Headline results</h2>
     <div class="metrics">
-      <div class="metric"><span>Offline image compilation</span><b>28.246025 s</b><small>275 matrices; 112 token rows</small></div>
-      <div class="metric"><span>Warm classification duration</span><b>823.854355 s</b><small>493 prompt tokens; 0.598407 tok/s</small></div>
-      <div class="metric"><span>Warm extra-decode duration</span><b>19.338979 s</b><small>12 label tokens; 0.620508 tok/s</small></div>
-      <div class="metric"><span>Warm process duration</span><b>843.24 s</b><small>complete 12-case wall time</small></div>
-      <div class="metric"><span>Warm peak RSS</span><b>926 MiB</b><small>948,224 KiB; no swap</small></div>
-      <div class="metric"><span>Cold classification duration</span><b>81.401387 s</b><small>case 0; 43 tokens; 0.528247 tok/s</small></div>
-      <div class="metric"><span>Cold extra-decode duration</span><b>1.736948 s</b><small>case 0; 0.575723 tok/s</small></div>
-      <div class="metric"><span>Cold process duration</span><b>83.16 s</b><small>complete case-0 wall time</small></div>
+      <div class="metric"><span>Qwen3.8 / M3 Pro</span><b>11.95 tok/s</b><small>five-workload adaptive-MTP aggregate; 7.96 tok/s plain</small></div>
+      <div class="metric"><span>MiniMax-H3 / M3 Pro</span><b>4.236×</b><small>480p N-to-N pipeline gain; final duration 2,194.437 s</small></div>
+      <div class="metric"><span>Whisper Turbo / Orin</span><b>7.79 RTF×</b><small>FP16 single-file path; 9.8% over upstream</small></div>
+      <div class="metric"><span>Whisper Turbo / RK3588</span><b>17.933 s</b><small>proprietary RKNPU2, native C++ LLMC; 2.552× over host-copy baseline</small></div>
+      <div class="metric"><span>Whisper Turbo / A113X</span><b>236.934 s</b><small>11 s JFK, Q4 compact, 448.2 MiB RSS, zero swap</small></div>
     </div>
-    <h3>Warm per-case durations</h3>
+  </section>
+
+  <section id="portfolio" aria-labelledby="portfolio-title">
+    <h2 id="portfolio-title">Implemented model × target matrix</h2>
+    <div class="filters" aria-label="Filter model targets">
+      <button type="button" data-filter="all" aria-pressed="true">All targets</button>
+      <button type="button" data-filter="m3" aria-pressed="false">Apple M3 Pro</button>
+      <button type="button" data-filter="orin" aria-pressed="false">Jetson Orin</button>
+      <button type="button" data-filter="rk3588" aria-pressed="false">RK3588</button>
+      <button type="button" data-filter="a113x" aria-pressed="false">A113X</button>
+      <button type="button" data-filter="legacy" aria-pressed="false">Legacy</button>
+    </div>
     <div class="table-wrap">
-      <table>
-        <thead><tr><th># / ID</th><th>Prompt tokens</th><th>Classification duration</th><th>Classification throughput</th><th>Extra-decode duration</th><th>Extra-decode throughput</th></tr></thead>
+      <table id="portfolio-table">
+        <thead>
+          <tr><th>Model</th><th>Target</th><th>Execution path</th><th>Measured result</th><th>Evidence</th><th>Status</th></tr>
+        </thead>
         <tbody>
-          <tr><td>0 / <code>safe_power_isolated</code></td><td>43</td><td>62.786325 s</td><td>0.684863 tok/s</td><td>1.436223 s</td><td>0.696271 tok/s</td></tr>
-          <tr><td>1 / <code>safe_empty_zone</code></td><td>40</td><td>74.900251 s</td><td>0.534044 tok/s</td><td>1.637409 s</td><td>0.610721 tok/s</td></tr>
-          <tr><td>2 / <code>safe_maintenance_lockout</code></td><td>42</td><td>73.677620 s</td><td>0.570051 tok/s</td><td>2.190102 s</td><td>0.456600 tok/s</td></tr>
-          <tr><td>3 / <code>safe_robot_idle</code></td><td>43</td><td>75.826978 s</td><td>0.567080 tok/s</td><td>1.508172 s</td><td>0.663054 tok/s</td></tr>
-          <tr><td>4 / <code>safe_pressure_released</code></td><td>43</td><td>67.169120 s</td><td>0.640175 tok/s</td><td>1.447366 s</td><td>0.690910 tok/s</td></tr>
-          <tr><td>5 / <code>safe_conveyor_clear</code></td><td>43</td><td>70.355746 s</td><td>0.611180 tok/s</td><td>1.673379 s</td><td>0.597593 tok/s</td></tr>
-          <tr><td>6 / <code>danger_person_moving_machine</code></td><td>39</td><td>61.710494 s</td><td>0.631983 tok/s</td><td>1.545119 s</td><td>0.647199 tok/s</td></tr>
-          <tr><td>7 / <code>danger_guard_bypassed</code></td><td>44</td><td>69.734516 s</td><td>0.630964 tok/s</td><td>1.503105 s</td><td>0.665289 tok/s</td></tr>
-          <tr><td>8 / <code>danger_uncontrolled_pressure</code></td><td>38</td><td>59.866422 s</td><td>0.634746 tok/s</td><td>1.702738 s</td><td>0.587289 tok/s</td></tr>
-          <tr><td>9 / <code>danger_robot_entry</code></td><td>38</td><td>66.757389 s</td><td>0.569225 tok/s</td><td>1.468966 s</td><td>0.680751 tok/s</td></tr>
-          <tr><td>10 / <code>danger_exposed_wires</code></td><td>41</td><td>76.568933 s</td><td>0.535465 tok/s</td><td>1.568163 s</td><td>0.637689 tok/s</td></tr>
-          <tr><td>11 / <code>danger_conveyor_reach</code></td><td>39</td><td>64.500561 s</td><td>0.604646 tok/s</td><td>1.658237 s</td><td>0.603050 tok/s</td></tr>
+          <tr data-target="m3">
+            <td>Qwen3.8-27B</td><td>Apple M3 Pro</td><td>C + Metal, affine Q4, FP16 KV, adaptive MTP</td>
+            <td>11.95 aggregate tok/s; 17.59 tok/s long code</td>
+            <td><a href="models/qwen3.8-27b/targets/apple-m3-pro/results.json">results</a> · <a href="models/qwen3.8-27b/targets/apple-m3-pro/REVIEW.html">review</a></td>
+            <td><span class="status">measured</span></td>
+          </tr>
+          <tr data-target="m3">
+            <td>MiniMax-H3</td><td>Apple M3 Pro</td><td>C + Metal H3, exact attention, optimized Video/Audio VAE</td>
+            <td>2,194.437 s at 864×480×124; 4.236× cumulative gain</td>
+            <td><a href="models/minimax-h3/targets/apple-m3-pro/results.json">results</a> · <a href="models/minimax-h3/targets/apple-m3-pro/H3-ATTENTION-QUALITY-REVIEW.html">review</a></td>
+            <td><span class="status">measured</span></td>
+          </tr>
+          <tr data-target="a113x">
+            <td>Qwen3.5-0.8B</td><td>Amlogic A113X</td><td>C11 + NEON, specialized DeltaNet state</td>
+            <td>3.64 prompt tok/s; 2.60 decode tok/s; 488 MiB RSS</td>
+            <td><a href="models/qwen3.5-0.8b/targets/a113x/results.json">results</a> · <a href="models/qwen3.5-0.8b/targets/a113x/GENERATION_REVIEW.html">review</a></td>
+            <td><span class="status">measured</span></td>
+          </tr>
+          <tr data-target="orin">
+            <td>Whisper large-v3</td><td>Jetson Orin Nano</td><td>whisper.cpp + native fused CUDA kernels</td>
+            <td>3.05 RTF× FP16; 6.3% over upstream; 0.301% WER</td>
+            <td><a href="models/whisper-large-v3/targets/jetson-orin/results.json">results</a> · <a href="models/whisper-large-v3/targets/jetson-orin/README.md">target</a></td>
+            <td><span class="status">certified</span></td>
+          </tr>
+          <tr data-target="orin">
+            <td>Whisper large-v3-turbo</td><td>Jetson Orin Nano</td><td>shared patched CUDA runtime</td>
+            <td>7.79 RTF× FP16; 10.26 batch RTF×; 0.301% WER</td>
+            <td><a href="models/whisper-large-v3-turbo/targets/jetson-orin/results.json">results</a> · <a href="models/whisper-large-v3-turbo/targets/jetson-orin/README.md">target</a></td>
+            <td><span class="status">certified</span></td>
+          </tr>
+          <tr data-target="rk3588">
+            <td>Whisper large-v3-turbo</td><td>Rockchip RK3588</td><td>proprietary RKNPU2 + Python-free C++ LLMC zero-copy runtime</td>
+            <td>std30 FP16 17.933 s; encoder 8.725 s; decoder 111.56 ms/token</td>
+            <td><a href="models/whisper-large-v3-turbo/targets/rk3588/results.json">results</a> · <a href="models/whisper-large-v3-turbo/targets/rk3588/README.md">target</a></td>
+            <td><span class="status">measured</span></td>
+          </tr>
+          <tr data-target="a113x">
+            <td>Whisper large-v3-turbo</td><td>Amlogic A113X</td><td>C11 + grouped Q4 NEON + compact window + double-NEON stem</td>
+            <td>236.934 s for 11 s audio; 448.2 MiB RSS; zero swap</td>
+            <td><a href="models/whisper-large-v3-turbo/targets/a113x/results.json">results</a> · <a href="models/whisper-large-v3-turbo/targets/a113x/README.md">target</a></td>
+            <td><span class="status">measured</span></td>
+          </tr>
+          <tr data-target="a113x">
+            <td>Whisper small.en</td><td>Amlogic A113X</td><td>C11 + mixed Q4/Q8 NEON + cached decoder</td>
+            <td>45.047 s for 11 s audio; 251 MiB RSS; 0/22 smoke WER</td>
+            <td><a href="models/whisper-small.en/targets/a113x/results.json">results</a> · <a href="models/whisper-small.en/targets/a113x/benchmarks/jfk-11s/REVIEW.html">review</a></td>
+            <td><span class="status">measured</span></td>
+          </tr>
+          <tr data-target="legacy">
+            <td>Gemma 4 E2B</td><td>generic two-vCPU x86-64</td><td>restricted C/Q4 artifact with compiled test inputs</td>
+            <td>0.598 tok/s; 926 MiB RSS; one-bit output only</td>
+            <td><a href="models/gemma-4-e2b/results.json">results</a> · <a href="models/gemma-4-e2b/README.md">model</a></td>
+            <td><span class="status legacy">legacy boundary</span></td>
+          </tr>
         </tbody>
       </table>
     </div>
-    <p class="note">Classification duration ends after final normalization, two logits, and the one-bit comparison. Extra decode happens after the result and is not required to return it.</p>
+    <p class="note">“Measured” means the target path completed its recorded workload and resource checks. “Certified” additionally denotes the pinned multi-file Whisper quality suite. The Gemma artifact remains useful as history but is not a free-input runtime.</p>
   </section>
 
-  <section class="panel" aria-labelledby="output-title">
-    <h2 id="output-title">What the output actually is</h2>
-    <pre>Current diagnostic path:
-  safe_logit:   FP32
-  danger_logit: FP32
-  decision:     danger_logit &gt; safe_logit ? 1 : 0
+  <section id="rk3588" aria-labelledby="rk3588-title">
+    <h2 id="rk3588-title">Whisper large-v3-turbo on RK3588 NPU</h2>
+    <div class="panel verdict">
+      <strong>Fresh proprietary result: native RKNPU2 C++ zero-copy plus three-core/A76 scheduling.</strong>
+      The same pinned FP16 RKNPU2 graphs and <code>std30.wav</code> were used in both arms. Encoder time falls from 12.840 to 8.725 seconds, decoder step latency from 408.33 to 111.56 ms, and end-to-end time excluding model load from 45.774 to 17.933 seconds. Both arms emit the same 77-token transcript; no 32-file mode was run. The earlier Rocket measurements remain below as a separate, retained open-stack record.
+    </div>
 
-Application output:
-  one bit       0 = safe, 1 = danger
+    <div class="metrics" style="margin-top:10px">
+      <div class="metric"><span>RKNPU2 end to end</span><b>17.933 s</b><small>median of 17.933 / 17.957 / 17.901 s</small></div>
+      <div class="metric"><span>RKNPU2 encoder</span><b>8.725 s</b><small>fixed 30-second window, FP16</small></div>
+      <div class="metric"><span>Decoder step</span><b>111.56 ms</b><small>408.33 ms baseline; 3.660× faster</small></div>
+      <div class="metric"><span>Native peak RSS</span><b>2,064.8 MiB</b><small>51.1% below the Python baseline</small></div>
+    </div>
 
-Exact decision-only rewrite:
-  score = (W_danger - W_safe) · normalized_hidden
-  score &gt; 0 ? 1 : 0</pre>
-    <p class="note">The final soft cap is monotonic, so it does not change which raw projection is larger. The recorded extra decode feeds the selected label token through 35 layers for measurement; it is not required to return the bit.</p>
+    <h3 style="margin-top:20px">Proprietary RKNPU2 result · std30 only</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Arm</th><th>Runtime</th><th class="num">Encoder / 30 s</th><th class="num">Decoder step</th><th class="num">End to end</th><th class="num">Peak RSS</th><th>Output gate</th></tr></thead>
+        <tbody>
+          <tr><td>Baseline</td><td>Python orchestration + proprietary RKNPU2, host-copy KV</td><td class="num">12.840 s</td><td class="num">408.33 ms</td><td class="num">45.774 s</td><td class="num">4,222.1 MiB</td><td>correct, 77 tokens</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>LLMC</strong></td><td><strong>native C++17 + proprietary RKNPU2, zero-copy KV</strong></td><td class="num"><strong>8.725 s</strong></td><td class="num"><strong>111.56 ms</strong></td><td class="num"><strong>17.933 s</strong></td><td class="num"><strong>2,064.8 MiB</strong></td><td>exact transcript match</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">LLMC imports the encoder's two 15.36 MB KV buffers into the decoder by DMA-BUF fd, binds both 4.59 MB self-KV buffers in place, synchronizes only CPU-visible tensors, selects all RK3588 NPU cores and pins the process to Cortex-A76 cores 4–7. Target inference has no Python dependency. The best profile is the median of three adjacent runs.</p>
+
+    <h3 style="margin-top:20px">Requested PDF quantization variants on RKNPU2</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Requested weights</th><th>Toolkit2 2.3.2 result</th><th>RKNPU2 measurement</th></tr></thead>
+        <tbody>
+          <tr><td>FP16</td><td>supported by the pinned precompiled graphs</td><td><strong>measured above</strong></td></tr>
+          <tr><td>q8_0</td><td>invalid <code>quantized_dtype</code>; native w8a8 is activation-quantized and not equivalent</td><td>unsupported exact format</td></tr>
+          <tr><td>q5_0</td><td>no native RK3588 5-bit conversion mode</td><td>unsupported exact format</td></tr>
+          <tr><td>q4_K</td><td>no native groupwise GGML q4_K conversion mode</td><td>unsupported exact format</td></tr>
+          <tr><td>q4_0</td><td>invalid <code>quantized_dtype</code>; distinct w4a16 is also unsupported on RK3588</td><td>unsupported exact format</td></tr>
+          <tr><td>w4a16 · group 32</td><td>official support is RK3576-only; the official RK3588 MatMul probe returns <code>-5</code> for <code>FP16×INT4→FP16</code></td><td>baseline and LLMC both rejected before NPU dispatch; all three cores remained at 0%, so no timing is reported</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Unsupported formats are reported explicitly rather than relabeled. Native w8a8 requires a representative calibration set; no calibrated large-v3-turbo graph was fabricated for this one-file task.</p>
+    <p class="note">The w4a16 capability result was reproduced on 2026-08-21 with the proprietary <code>librknnrt 2.3.2</code>, RKNPU driver <code>v0.9.8</code>, native B/A/C layouts and a canonical 1×64×64 official-SDK positive/negative probe. FP16×FP16 completed correctly; FP16×INT4 was rejected as unsupported on this platform. The full Whisper baseline and LLMC runners fail at the same context-creation boundary, before <code>std30.wav</code> inference can start.</p>
+    <p class="note">The retained capability result applies only to the fused vendor dtype. The separate custom runtime below owns INT4 unpacking, scale application and three-core scheduling, while RKNPU2 receives supported FP16×FP16 shards.</p>
+
+    <h3 style="margin-top:20px">Custom C++ W4 system path · CPU mixed precision + three-core FP16 NPU · std30 only</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Arm</th><th>Execution</th><th class="num">Encoder / 30 s</th><th class="num">Decoder step</th><th class="num">End to end</th><th>Three-core load gate</th><th>Output gate</th></tr></thead>
+        <tbody>
+          <tr><td>Baseline</td><td>native C++ W4 group-32; CPU dequantizes and re-prepares FP16 B every use; N-sharded FP16 MatMul</td><td class="num">67.177 s</td><td class="num">2,403.43 ms</td><td class="num">283.728 s</td><td>encoder max 43/41/41%; decoder max 18/18/18%</td><td>correct, 87 generated tokens</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>LLMC</strong></td><td><strong>native C++ W4 group-32; parallel CPU dequant once, resident FP16 B, 16-aligned N shards on Core0/1/2</strong></td><td class="num"><strong>66.512 s</strong></td><td class="num"><strong>142.81 ms</strong></td><td class="num"><strong>79.596 s</strong></td><td><strong>encoder max 45/44/44%; decoder max 17/18/17%</strong></td><td><strong>exact token match to baseline</strong></td></tr>
+          <tr><td>AOT v3 baseline</td><td>v3 N32/K32 CPU-sequential weight layout; fixed three-worker scheduler; head-parallel attention; weight re-prepare every use</td><td class="num">34.930 s</td><td class="num">1,399.94 ms</td><td class="num">161.158 s</td><td>encoder max 43/45/44%; decoder max 17/16/16%</td><td>correct, 87 generated tokens</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>AOT v3 LLMC median</strong></td><td><strong>nine shape-shared AOT plans; 235 pre-expanded resident weights; fixed Core0/1/2 threads; static head scheduling; cross K/V prepacked once</strong></td><td class="num"><strong>21.796 s</strong></td><td class="num"><strong>230.37 ms</strong></td><td class="num"><strong>42.480 s</strong></td><td><strong>1000-loop gate: Core0/1/2 max 90/90/90%</strong></td><td><strong>three LLMC trials and baseline have identical token IDs</strong></td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>OpenCL W4 hybrid median</strong></td><td><strong>encoder on Core0/1/2; decoder packed INT4 linear and QK/softmax/PV directly on Mali-G610; static shape kernels</strong></td><td class="num"><strong>21.717 s</strong></td><td class="num"><strong>47.41 ms</strong></td><td class="num"><strong>26.213 s</strong></td><td><strong>NPU encoder active on 3 cores; GPU decoder avg 49.83%, max 100%, 4 CUs at 1 GHz</strong></td><td><strong>three adjacent trials exactly match the 87-token baseline</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">The MatMul API rejects combined masks <code>0+1</code> and <code>0+1+2</code>, so the runtime creates three independent contexts, pins one to each core and splits every linear and attention output along N. The retained v2 1×1280×51904 gate completes in 5.351 ms versus 12.305 ms on Core0 alone (2.300×), with CPU/NPU cosine 0.999999978. Retained v2 LLMC is 3.565× faster end to end than its custom-runtime baseline; decoder time improves 16.830×. Both runs use only <code>std30.wav</code> and no target-side Python.</p>
+    <p class="note"><strong>AOT v3 is the appended current result; the two earlier rows remain unchanged as historical measurements.</strong> The v3 builder stores each 32×32 INT4 tile next to its 32 FP32 scales so CPU dequantization reads sequentially. Inference creates no contexts, threads, queues or DMA allocations: one long-lived host thread owns each NPU core, nine shape plans share A/C workspaces, and 1,611,694,080 bytes of expanded B shards remain resident. The three adjacent LLMC trials are 43.776, 42.441 and 42.480 s; their 42.480 s median is 3.794× faster than the fresh 161.158 s v3 baseline and 1.874× faster than the retained 79.596 s LLMC row. It remains 2.369× slower than the 17.933 s fused FP16 graph, because RK3588 still executes the custom W4 path as many FP16 MatMul calls rather than a fused graph.</p>
+    <p class="note"><strong>Execution-scope clarification:</strong> this result is AOT W4 storage followed by initialization-time expansion into resident FP16 weights; packed INT4 never enters the RK3588 NPU. The three NPU cores execute FP16 MatMul shards and do improve the same custom gate from 12.305 ms on Core0 to 5.351 ms on Core0/1/2 (2.300×). The faster 17.933 s control is not single-core: it uses <code>RKNN_NPU_CORE_ALL</code> inside fused vendor graphs. In the 42.480 s custom run, 3,172 linear calls consume 24.628 s and 30,080 attention MatMuls consume 13.682 s; decoder average loads are only 7.88/7.88/7.52%. The remaining gap is fragmented dispatch, host/NPU boundaries and expanded-FP16 bandwidth, so this row must not be described as native NPU W4A16.</p>
+    <p class="note"><strong>Appended Mali-G610 path:</strong> unlike the NPU rows, the decoder GPU kernels directly read the v3 packed INT4 records and apply group-32 scales during multiplication; there is no decoder W4→FP16 weight expansion. Static scope selection keeps encoder linear/attention on the faster three-NPU path and moves decoder linear plus attention to four GPU compute units. The three trials are 26.213, 26.252 and 26.189 s; the 26.213 s median is 1.621× faster end to end than AOT v3 NPU-only, while decoder time falls from 20.733 to 4.267 s (4.859×). Decoder W4 linear alone improves from 18.014 to 3.094 s (5.823×). All formal trials emit identical token IDs. Target execution is native C++/OpenCL with no Python.</p>
+    <p class="note">The tested proprietary Arm OpenCL userspace is <code>g24p0-00eac0</code> on the board's <code>g25p0-00eac0</code> kernel DDK; its private blob SHA-256 is <code>07cc993b…47c6614</code>. The blob is not committed and must be supplied under its vendor license. All-GPU linear (51.118 s) and GPU encoder attention (41.127 s) were measured and rejected; the fixed hybrid is based on those results rather than dynamic scheduling.</p>
+
+    <h3 style="margin-top:20px">Retained open-stack Rocket measurements · PDF variants · std30 only</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Weights</th><th class="num">Baseline encoder</th><th class="num">LLMC encoder</th><th class="num">Encoder gain</th><th class="num">Baseline end to end</th><th class="num">LLMC end to end</th><th>Output gate</th></tr></thead>
+        <tbody>
+          <tr><td>FP16</td><td class="num">17.929 s</td><td class="num"><strong>12.413 s</strong></td><td class="num">30.8%</td><td class="num">26.047 s</td><td class="num"><strong>16.485 s</strong></td><td>normalized words identical</td></tr>
+          <tr><td>q8_0</td><td class="num">18.627 s</td><td class="num"><strong>13.318 s</strong></td><td class="num">28.5%</td><td class="num">24.899 s</td><td class="num"><strong>17.222 s</strong></td><td>normalized words identical</td></tr>
+          <tr><td>q5_0</td><td class="num">18.127 s</td><td class="num"><strong>13.521 s</strong></td><td class="num">25.4%</td><td class="num">23.264 s</td><td class="num"><strong>18.454 s</strong></td><td>normalized words identical</td></tr>
+          <tr><td>q4_K</td><td class="num">17.389 s</td><td class="num"><strong>13.699 s</strong></td><td class="num">21.2%</td><td class="num">21.521 s</td><td class="num"><strong>17.345 s</strong></td><td>same words; quotation punctuation differs</td></tr>
+          <tr><td>q4_0</td><td class="num">19.113 s</td><td class="num"><strong>13.886 s</strong></td><td class="num">27.4%</td><td class="num">24.895 s</td><td class="num"><strong>18.457 s</strong></td><td>normalized words identical</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">These original Rocket rows are retained unchanged. Baseline is the stock Linux 6.18.43 Rocket module at the device-tree 200 MHz clock and ondemand CPU governor. LLMC is the 600 MHz clock/PM/driver-fix path, five Rocket workers, A76 cores 4–7, performance governor and an armv8.2 dotprod/fp16 build. End-to-end is whisper.cpp total minus model load. These are one-run same-file measurements, not variance estimates or corpus WER, and are not substituted for the proprietary RKNPU2 result.</p>
+  </section>
+
+  <section id="a113x" aria-labelledby="a113x-title">
+    <h2 id="a113x-title">Current optimization: Whisper large-v3-turbo on A113X</h2>
+    <div class="panel verdict">
+      <strong>Kept increment: precision-preserving double-precision NEON encoder stem.</strong>
+      Four adjacent convolution frames are vectorized while each lane retains independent FP64 accumulation in the original channel/tap order. The Q4 and Q5 A/B runs emit identical token IDs, printed top logits and final transcripts.
+    </div>
+
+    <div class="metrics" style="margin-top:10px">
+      <div class="metric"><span>Q4 stem</span><b>1.570617×</b><small>24.764284 → 15.767232 s</small></div>
+      <div class="metric"><span>Q4 end to end</span><b>1.051821×</b><small>249.211947 → 236.933801 s</small></div>
+      <div class="metric"><span>Q5 end to end</span><b>1.062333×</b><small>255.093171 → 240.125399 s</small></div>
+      <div class="metric"><span>Compact vs fixed30</span><b>5.587385×</b><small>Q4 final vs original 1,323.840443 s baseline</small></div>
+    </div>
+
+    <h3 style="margin-top:20px">Complete JFK transcription A/B</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Precision</th><th class="num">Generic stem</th><th class="num">Double-NEON stem</th><th class="num">End-to-end gain</th><th class="num">Optimized RSS</th><th>Output gate</th></tr></thead>
+        <tbody>
+          <tr><td>Q4 compact</td><td class="num">249.211947 s</td><td class="num"><strong>236.933801 s</strong></td><td class="num">1.051821×</td><td class="num">458,956 KiB</td><td>IDs, logits and text identical</td></tr>
+          <tr><td>Q5 compact</td><td class="num">255.093171 s</td><td class="num"><strong>240.125399 s</strong></td><td class="num">1.062333×</td><td class="num">556,248 KiB</td><td>IDs, logits and text identical</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top:20px">Fixed-30-second quantization baseline</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Precision</th><th class="num">Image bytes</th><th class="num">JFK 11 s</th><th class="num">std30 27.3 s</th><th class="num">JFK peak RSS</th><th>Decision</th></tr></thead>
+        <tbody>
+          <tr><td>Q4</td><td class="num">447,416,512</td><td class="num">1,323.840443 s</td><td class="num">1,300.079433 s</td><td class="num">496.8 MiB</td><td><strong>deployment default</strong></td></tr>
+          <tr><td>Q5</td><td class="num">547,465,472</td><td class="num">1,280.763373 s</td><td class="num">1,309.349748 s</td><td class="num">591.9 MiB</td><td>no consistent speed benefit</td></tr>
+          <tr><td>Q8</td><td class="num">847,612,352</td><td class="num">1,396.277622 s</td><td class="num">1,271.225039 s</td><td class="num">877.4 MiB</td><td>memory cost not justified</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 id="cross-device" style="margin-top:20px">Cross-device comparison — fresh RK3588 RKNPU2 rows appended</h3>
+    <p class="note">Same Whisper large-v3-turbo model family. Encoder numbers use the fixed 30-second window; end-to-end numbers use the same 27.27-second <code>std30.wav</code> and exclude model loading. Fresh proprietary FP16 and custom W4→FP16 RKNPU2 rows are appended to the existing owner, Rocket and CPU records; no original row or value was removed or changed. Packed formats and runtimes remain target-specific. The two w4a16 capability rows remain as evidence that the fused vendor dtype is unsupported; they do not contradict the measured custom mixed-precision rows.</p>
+    <div class="table-wrap" style="margin-top:10px">
+      <table>
+        <thead><tr><th>Platform</th><th>Execution</th><th>Quantization</th><th class="num">Encoder / fixed 30 s</th><th class="num">std30 end to end</th><th>Recognition</th></tr></thead>
+        <tbody>
+          <tr><td>Jetson Orin Nano</td><td>GPU · llmc</td><td>q4_0 / w4a16-class</td><td class="num">594 ms</td><td class="num"><strong>1.50 s</strong></td><td>correct</td></tr>
+          <tr><td>A311Y3</td><td>NPU · ADLA3</td><td>w4a16</td><td class="num">1,922 ms</td><td class="num">4.50 s</td><td>successful; owner table reports 5.03% WER</td></tr>
+          <tr><td>RK3588</td><td>NPU · proprietary RKNPU2 baseline · Python host orchestration</td><td>FP16</td><td class="num">12,840 ms</td><td class="num">45.774 s</td><td>correct; 77 generated tokens</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · proprietary RKNPU2 LLMC · native C++ zero-copy</strong></td><td>FP16</td><td class="num"><strong>8,725 ms</strong></td><td class="num"><strong>17.933 s</strong></td><td>exact match to fresh baseline</td></tr>
+          <tr><td>RK3588</td><td>NPU · proprietary RKNPU2 baseline capability probe</td><td>w4a16 · group 32</td><td class="num">unsupported</td><td class="num">not run</td><td><code>rknn_matmul_create = -5</code>; no NPU dispatch</td></tr>
+          <tr><td>RK3588</td><td>NPU · proprietary RKNPU2 LLMC capability probe · native C++</td><td>w4a16 · group 32</td><td class="num">unsupported</td><td class="num">not run</td><td>same platform rejection as baseline; NPU cores 0/0/0%</td></tr>
+          <tr><td>RK3588</td><td>native C++ baseline · CPU W4→FP16 + RKNPU2 N-shard Core0/1/2</td><td>W4 group-32 storage; FP16 NPU MatMul</td><td class="num">67,177 ms</td><td class="num">283.728 s</td><td>correct, 87 generated tokens; all three cores active</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>native C++ LLMC · resident FP16 B + RKNPU2 N-shard Core0/1/2</strong></td><td>W4 group-32 storage; FP16 NPU MatMul</td><td class="num"><strong>66,512 ms</strong></td><td class="num"><strong>79.596 s</strong></td><td><strong>exact token match to custom baseline; all three cores active</strong></td></tr>
+          <tr><td>RK3588</td><td>native C++ AOT v3 baseline · fixed Core0/1/2 threads</td><td>W4 group-32 tiled storage; FP16 NPU MatMul</td><td class="num">34,930 ms</td><td class="num">161.158 s</td><td>correct, 87 generated tokens; all three cores active</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>native C++ AOT v3 LLMC · fixed Core0/1/2 threads + static head scheduler</strong></td><td>W4 group-32 tiled storage; FP16 NPU MatMul</td><td class="num"><strong>21,796 ms</strong></td><td class="num"><strong>42.480 s</strong></td><td><strong>3-run median; exact token match to baseline; 1000-loop three-core gate</strong></td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>native C++ hybrid · three-NPU encoder + Mali-G610 packed-W4 decoder</strong></td><td>W4 group-32 tiled storage; GPU directly consumes packed INT4</td><td class="num"><strong>21,717 ms</strong></td><td class="num"><strong>26.213 s</strong></td><td><strong>3-run median; exact 87-token match; GPU 4 CUs, max load 100%</strong></td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>FP16</td><td class="num">17,929 ms</td><td class="num">26.047 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>FP16</td><td class="num"><strong>12,413 ms</strong></td><td class="num"><strong>16.485 s</strong></td><td>complete; normalized words identical</td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>q8_0</td><td class="num">18,627 ms</td><td class="num">24.899 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>q8_0</td><td class="num"><strong>13,318 ms</strong></td><td class="num"><strong>17.222 s</strong></td><td>complete; normalized words identical</td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>q5_0</td><td class="num">18,127 ms</td><td class="num">23.264 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>q5_0</td><td class="num"><strong>13,521 ms</strong></td><td class="num"><strong>18.454 s</strong></td><td>complete; normalized words identical</td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>q4_K</td><td class="num">17,389 ms</td><td class="num">21.521 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>q4_K</td><td class="num"><strong>13,699 ms</strong></td><td class="num"><strong>17.345 s</strong></td><td>complete; quotation punctuation differs</td></tr>
+          <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>q4_0</td><td class="num">19,113 ms</td><td class="num">24.895 s</td><td>complete; normalized words identical</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>q4_0</td><td class="num"><strong>13,886 ms</strong></td><td class="num"><strong>18.457 s</strong></td><td>complete; normalized words identical</td></tr>
+          <tr><td>RK3588</td><td>Legacy RKNNPU2 · owner table</td><td>i8</td><td class="num">7,623 ms</td><td class="num">—</td><td>failed: EOT at decoder step 2</td></tr>
+          <tr><td>RK3588</td><td>Legacy RKNNPU2 · owner table</td><td>fp</td><td class="num">12,008 ms</td><td class="num">not recorded</td><td>correct, 60 decoder steps</td></tr>
+          <tr><td>RK3588</td><td>CPU · 8 cores</td><td>q5</td><td class="num">48,671 ms</td><td class="num">54 s</td><td>correct</td></tr>
+          <tr style="background:var(--accent-bg)"><td><strong>Amlogic A113X</strong></td><td>CPU · 4× Cortex-A53 · C11/NEON</td><td>grouped Q4</td><td class="num"><strong>1,272,397 ms</strong></td><td class="num"><strong>1,300.079433 s</strong></td><td>word-identical to the F32 reference after normalization</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">The legacy RKNN values are retained as historical owner-supplied rows and are not merged with either the fresh proprietary RKNPU2 A/B or the existing five-mode Rocket battery. The comparable A113X row is the measured fixed-30 quantization baseline: 1,300.079433 s is 47.674× real time, before the new stem increment. The current recommended A113X path is compact-window Q4: on 11-second JFK it measures 229.763245 s encoder and 236.933801 s end to end. That compact result is shown separately because the other runtimes above always pad the encoder to 30 seconds.</p>
+
+    <p><strong>Exact compact output:</strong></p>
+    <blockquote>And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.</blockquote>
+    <p class="note">This is a two-file quantization check plus a full JFK optimization gate, not corpus WER certification. At RTF 21.539436, the A113X result is an offline fallback rather than a real-time path.</p>
+  </section>
+
+  <section id="decisions" aria-labelledby="decisions-title">
+    <h2 id="decisions-title">A113X optimization decisions</h2>
+    <div class="decision keep">
+      <strong>KEEP · double-precision NEON stem</strong>
+      The isolated 1,100-frame A/B/B/A mean fell from 28.806828 to 19.074221 seconds (1.510249×), with checksum <code>1635322.4827359049</code> in every run. The gain transferred to full Q4 and Q5 transcription.
+    </div>
+    <div class="decision reject">
+      <strong>REJECT · four-row × four-output GEMM</strong>
+      It was up to 14.8% faster in the short kernel benchmark, but full Q5 compact transcription regressed from 255.093171 to 257.359803 seconds (+0.889%). The implementation was removed from the release source.
+    </div>
+    <div class="decision reject">
+      <strong>REJECT · selecting output tile size from an isolated sweep</strong>
+      Tile 32 beat tile 64 in one four-layer two-row microbenchmark (4.627 vs 4.777 seconds), but the ordering interacted with row reuse. No tile-only change was promoted without an end-to-end win.
+    </div>
   </section>
 
   <section id="method" aria-labelledby="method-title">
-    <h2 id="method-title">How the test was run</h2>
+    <h2 id="method-title">Evidence boundary</h2>
     <div class="cols">
       <div class="panel">
-        <h3>1. Compile the fixed profile</h3>
-        <pre>python3 compiler/compile_gemma4_task_image.py \
-  --checkpoint /path/to/model.safetensors \
-  --config /path/to/config.json \
-  --tokenizer /path/to/tokenizer.json \
-  --profile models/gemma-4-e2b/profile.json \
-  --output hazard-v1.g4task</pre>
+        <h3>What is established</h3>
+        <pre>Target:     ThirdReality TRHub-V3 / Amlogic A113X
+CPU:        4× Cortex-A53 at 1.416 GHz
+Runtime:    C11 + OpenMP + NEON
+Threads:    4, performance governor
+Memory:     2 GB; zero process swap
+Checkpoint: pinned Whisper large-v3-turbo
+Evidence:   target results.json + raw device logs</pre>
       </div>
       <div class="panel">
-        <h3>2. Build and measure all stored cases</h3>
-        <pre>make OMPFLAGS=-fopenmp build/gemma4-task
-/usr/bin/time -v env OMP_NUM_THREADS=2 \
-  build/gemma4-task hazard-v1.g4task all</pre>
+        <h3>What is not claimed</h3>
+        <pre>No real-time claim for A113X large-v3-turbo
+No 32-file corpus WER certification on A113X
+No cross-model throughput ranking
+No transfer of A113X gains to another Arm SoC
+No promotion of microbench-only regressions
+No model weights or generated images in git</pre>
       </div>
     </div>
-  </section>
-
-  <section aria-labelledby="prompt-title">
-    <h2 id="prompt-title">Exact prompt construction</h2>
-    <div class="cols">
-      <div class="panel">
-        <h3>Canonical prompt</h3>
-        <pre>&lt;bos&gt;&lt;|turn&gt;system
-Classify the observation. Reply with exactly safe or danger.&lt;turn|&gt;
-&lt;|turn&gt;user
-[one observation from the table]&lt;turn|&gt;
-&lt;|turn&gt;model
-</pre>
-      </div>
-      <div class="panel">
-        <h3>Recorded case 0 verification output</h3>
-        <pre>{"case":0,"tokens":43,"expected":0,"predicted":0,
- "safe_logit":4.65898371,"danger_logit":-13.1987514}</pre>
-      </div>
-    </div>
-    <p class="note">Labels are single tokenizer tokens: <code>safe</code> = 12977 and <code>danger</code> = 32667. The profile contains 112 unique token rows after tokenization.</p>
-  </section>
-
-  <section aria-labelledby="cli-title">
-    <h2 id="cli-title">Input-boundary example</h2>
-    <div class="cols">
-      <div class="panel">
-        <h3>Accepted</h3>
-        <pre>build/gemma4-task hazard-v1.g4task 0
-build/gemma4-task hazard-v1.g4task all</pre>
-      </div>
-      <div class="panel">
-        <h3>Rejected before inference</h3>
-        <pre>build/gemma4-task hazard-v1.g4task \
-  "A person is inside the hazard zone"
-
-case index is outside the image</pre>
-      </div>
-    </div>
-    <p class="note">This follows directly from the runtime parser: any second argument other than <code>all</code> must parse completely as an in-range integer case index.</p>
-  </section>
-
-  <section id="verification" aria-labelledby="verification-title">
-    <h2 id="verification-title">Verification</h2>
-    <p class="note">Output and numerical checks only. These results and the BF16 execution duration are excluded from the C/Q4 benchmark.</p>
-    <div class="metrics">
-      <div class="metric"><span>Q4 / written labels</span><b>12 / 12</b><small>6 safe, 6 danger</small></div>
-      <div class="metric"><span>BF16 / written labels</span><b>11 / 12</b><small>one false positive</small></div>
-      <div class="metric"><span>Q4 / BF16 agreement</span><b>11 / 12</b><small>case 1 crossed the boundary</small></div>
-      <div class="metric"><span>BF16 verification duration</span><b>24.875661 s</b><small>26.67 s process wall; batched NumPy</small></div>
-    </div>
-    <h3>Verification inputs and outputs</h3>
-    <div class="filters" aria-label="Filter test cases">
-      <button type="button" data-filter="all" aria-pressed="true">All 12</button>
-      <button type="button" data-filter="mismatch" aria-pressed="false">Q4/BF16 mismatch</button>
-      <button type="button" data-filter="safe" aria-pressed="false">Expected safe</button>
-      <button type="button" data-filter="danger" aria-pressed="false">Expected danger</button>
-    </div>
-    <div class="table-wrap">
-      <table id="verification-table">
-        <thead>
-          <tr>
-            <th># / ID</th><th>Observation</th><th>Expected</th><th>BF16</th><th>Q4</th>
-            <th>BF16 logits<br>safe / danger</th><th>Q4 logits<br>safe / danger</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr data-expected="safe" data-mismatch="false">
-            <td>0<br><code>safe_power_isolated</code></td><td class="obs">The machine is stopped, electrical power is isolated, and the safety guard is closed.</td>
-            <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">2.1276 / -10.0733</td><td class="number">4.6590 / -13.1988</td>
-          </tr>
-          <tr class="mismatch" data-expected="safe" data-mismatch="true">
-            <td>1<br><code>safe_empty_zone</code></td><td class="obs">The hazard zone is empty and the locked gate remains closed during operation.</td>
-            <td><span class="tag safe">safe</span></td><td><span class="tag danger">danger</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">13.8178 / 19.1788</td><td class="number">14.9666 / 12.5546</td>
-          </tr>
-          <tr data-expected="safe" data-mismatch="false">
-            <td>2<br><code>safe_maintenance_lockout</code></td><td class="obs">Maintenance is in progress with lockout and tagout applied and zero stored energy verified.</td>
-            <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">2.1843 / -11.2548</td><td class="number">6.5092 / -10.2359</td>
-          </tr>
-          <tr data-expected="safe" data-mismatch="false">
-            <td>3<br><code>safe_robot_idle</code></td><td class="obs">The robot is in a verified idle state and no person is inside its fenced workspace.</td>
-            <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">3.0198 / -16.1828</td><td class="number">5.7938 / -13.9427</td>
-          </tr>
-          <tr data-expected="safe" data-mismatch="false">
-            <td>4<br><code>safe_pressure_released</code></td><td class="obs">The pressure vessel is isolated, depressurized, and confirmed at zero pressure before access.</td>
-            <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">2.0271 / -11.2036</td><td class="number">5.0694 / -11.2337</td>
-          </tr>
-          <tr data-expected="safe" data-mismatch="false">
-            <td>5<br><code>safe_conveyor_clear</code></td><td class="obs">The conveyor is stopped and cleared, and its emergency stop has been tested before inspection.</td>
-            <td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td><td><span class="tag safe">safe</span></td>
-            <td class="number">3.2492 / -10.3662</td><td class="number">6.6360 / -9.4083</td>
-          </tr>
-          <tr data-expected="danger" data-mismatch="false">
-            <td>6<br><code>danger_person_moving_machine</code></td><td class="obs">A person is inside the hazard zone while the machine is moving.</td>
-            <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-18.4487 / 12.2356</td><td class="number">-6.4855 / 13.7035</td>
-          </tr>
-          <tr data-expected="danger" data-mismatch="false">
-            <td>7<br><code>danger_guard_bypassed</code></td><td class="obs">The safety guard is open and its interlock has been bypassed while the motor is energized.</td>
-            <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-17.8402 / 15.1991</td><td class="number">-9.8358 / 10.8254</td>
-          </tr>
-          <tr data-expected="danger" data-mismatch="false">
-            <td>8<br><code>danger_uncontrolled_pressure</code></td><td class="obs">A worker is loosening a fitting while the line remains pressurized.</td>
-            <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-13.3689 / 12.8202</td><td class="number">-7.2562 / 11.2444</td>
-          </tr>
-          <tr data-expected="danger" data-mismatch="false">
-            <td>9<br><code>danger_robot_entry</code></td><td class="obs">A worker entered the robot cell while automatic motion is enabled.</td>
-            <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-4.9891 / 14.6633</td><td class="number">-1.3563 / 12.3935</td>
-          </tr>
-          <tr data-expected="danger" data-mismatch="false">
-            <td>10<br><code>danger_exposed_wires</code></td><td class="obs">Exposed live conductors are within reach and electrical power has not been isolated.</td>
-            <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-17.9172 / 14.6793</td><td class="number">-9.1719 / 12.9716</td>
-          </tr>
-          <tr data-expected="danger" data-mismatch="false">
-            <td>11<br><code>danger_conveyor_reach</code></td><td class="obs">An operator is reaching into a running conveyor to remove a jam.</td>
-            <td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td><td><span class="tag danger">danger</span></td>
-            <td class="number">-17.6443 / 13.6259</td><td class="number">-7.1755 / 13.5782</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <p class="note">BF16 is an independent NumPy execution of the pinned BF16 weights and model equations, not a Transformers runtime measurement. Q4 is the generated image executed by the C runtime.</p>
+    <p class="note">The Jetson Whisper targets use a broader pinned LibriSpeech suite. The A113X optimization gate is deliberately narrower because a 32-file run is disproportionately expensive on this device.</p>
   </section>
 
   <section id="sources" class="panel" aria-labelledby="sources-title">
-    <h2 id="sources-title">Review sources</h2>
+    <h2 id="sources-title">Primary source records</h2>
     <ul class="source-list">
-      <li><a href="models/gemma-4-e2b/profile.json">Exact input profile</a></li>
-      <li><a href="models/gemma-4-e2b/results.json">Unrounded result JSON</a></li>
-      <li><a href="compiler/compile_gemma4_task_image.py">Offline compiler</a></li>
-      <li><a href="compiler/evaluate_gemma4_task_reference.py">BF16 reference evaluator and canonical prompt</a></li>
-      <li><a href="models/gemma-4-e2b/targets/generic/gemma4_task.c">C runtime and case-index parser</a></li>
-      <li><a href="models/gemma-4-e2b/pins.json">Checkpoint, tokenizer, and reference pins</a></li>
+      <li><a href="README.md">Repository overview and model × target index</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/a113x/results.json">Whisper Turbo / A113X machine-readable results</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/a113x/README.md">Whisper Turbo / A113X methodology and optimization ledger</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/a113x/benchmarks/device/compact-jfk-neon-stem-q4.log">Optimized Q4 complete stdout record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/a113x/benchmarks/device/compact-jfk-neon-stem-q4.time">Optimized Q4 process resource record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/a113x/benchmarks/device/std30-q4.log">A113X fixed-30 std30 comparison record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/jetson-orin/results.json">Jetson and reviewer-supplied cross-device record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/a113x/whisper_turbo_frontend.c">A113X double-precision NEON stem implementation</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/results.json">RK3588 proprietary RKNPU2 machine-readable results</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/README.md">RK3588 proprietary RKNPU2 methodology and retained Rocket appendix</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/baseline-python-copy-std30.log">RK3588 proprietary RKNPU2 baseline record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/llmc-native-all-performance-std30.log">RK3588 native C++ LLMC median record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/rk3588-w4a16-capability-20260821.log">RK3588 proprietary RKNPU2 w4a16 on-device capability record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/w4a16-package-validation-20260821.log">RK3588 w4a16 package and std30 payload validation record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/matmul-parallel3-resident-gate.log">RK3588 custom W4→FP16 three-core MatMul correctness record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/std30-w4fp16-parallel3-baseline.log">RK3588 custom W4→FP16 three-core baseline std30 record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/std30-w4fp16-parallel3-llmc.log">RK3588 custom W4→FP16 three-core LLMC std30 record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/aot-v3/matmul-v3-final-thread-stress.log">RK3588 AOT v3 persistent-thread 1000-loop correctness and load gate</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/aot-v3/std30-w4aot-v3-final-baseline.log">RK3588 AOT v3 baseline std30 record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/aot-v3/std30-w4aot-v3-final-llmc-run3.log">RK3588 AOT v3 LLMC median std30 record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/opencl/w4a16/final/std30-hybrid-run1.log">RK3588 Mali-G610 packed-W4 hybrid median std30 record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/opencl/w4a16/final/matmul-shapes.log">RK3588 Mali-G610 packed-W4 four-shape correctness and performance gate</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/opencl/w4a16/final/device-environment.log">RK3588 Mali-G610 OpenCL platform and driver evidence</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/native/whisper_rknpu2_llmc.cc">RK3588 Python-free native RKNPU2 implementation</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/native/whisper_rknpu2_w4a16.cc">RK3588 custom W4 mixed-precision three-core scheduler</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/native/opencl_w4a16.cc">RK3588 native packed-W4 Mali-G610 kernels and shape scheduler</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/native/opencl_attention.cc">RK3588 native Mali-G610 decoder attention kernels</a></li>
     </ul>
   </section>
 
-  <footer>Bounded-profile smoke measurement. Do not interpret 12/12 as a safety-performance claim.</footer>
+  <footer>Review updated 2026-08-21. Every result belongs to the linked checkpoint, runtime, target and workload; raw records take precedence over rounded display values.</footer>
 </main>
 <script>
   const buttons = [...document.querySelectorAll('[data-filter]')];
-  const rows = [...document.querySelectorAll('#verification-table tbody tr')];
+  const rows = [...document.querySelectorAll('#portfolio-table tbody tr')];
   for (const button of buttons) {
     button.addEventListener('click', () => {
       const filter = button.dataset.filter;
       for (const item of buttons) item.setAttribute('aria-pressed', String(item === button));
-      for (const row of rows) {
-        const visible = filter === 'all' ||
-          (filter === 'mismatch' && row.dataset.mismatch === 'true') ||
-          row.dataset.expected === filter;
-        row.hidden = !visible;
-      }
+      for (const row of rows) row.hidden = filter !== 'all' && row.dataset.target !== filter;
     });
   }
 </script>

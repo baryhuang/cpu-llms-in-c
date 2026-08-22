@@ -1,0 +1,5 @@
+section=benchmark model=whisper-large-v3-turbo image_version=4 input_frames=300 output_frames=150 layers=4 repetitions=4 image_map_seconds=0.005971 duration_seconds=35.052957 mean_seconds=8.763239 stem_seconds=4.691816 final_norm_seconds=0.000000 workspace_bytes=10754400 checksum=823732.5751788225
+section=benchmark layer=0 duration_seconds=1.000377
+section=benchmark layer=1 duration_seconds=1.016653
+section=benchmark layer=2 duration_seconds=1.025802
+section=benchmark layer=3 duration_seconds=1.026276

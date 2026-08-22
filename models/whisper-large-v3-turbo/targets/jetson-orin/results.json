@@ -79,7 +79,14 @@
     "rk3588_npu_i8_ms": 7623,
     "rk3588_npu_fp_ms": 12008,
     "rk3588_cpu_q5_ms": 48671,
-    "note": "A311Y3/RK3588 figures from the owner's 2026-08-14/15 three-way measurement page; WER not comparable across rows (different test audio)"
+    "rk3588_rocket_llmc_fp16_ms": 12413,
+    "rk3588_rocket_llmc_q8_0_ms": 13318,
+    "rk3588_rocket_llmc_q5_0_ms": 13521,
+    "rk3588_rocket_llmc_q4_k_ms": 13699,
+    "rk3588_rocket_llmc_q4_0_ms": 13886,
+    "rk3588_rknpu2_baseline_fp16_ms": 12840,
+    "rk3588_rknpu2_llmc_fp16_ms": 8725,
+    "note": "A311Y3 and legacy RKNN figures came from the owner's 2026-08-14/15 page. Fresh 2026-08-20 records append both the proprietary RKNPU2 FP16 A/B and the separate Rocket battery; no historical row is replaced. Quality scope is one exact std30 transcript, not corpus WER."
   },
   "increment7_per_model_f32out_gate": {
     "date": "2026-08-19",
@@ -108,22 +115,36 @@
       "w4a16 (q4_0)": {
         "jetson_stock": 1.56,
         "jetson_llmc": 1.5,
-        "a311y3_npu": 4.5
+        "a311y3_npu": 4.5,
+        "rk3588_rocket_baseline": 24.895,
+        "rk3588_rocket_llmc": 18.457
       },
       "i8 (q8_0)": {
         "jetson_stock": 1.63,
         "jetson_llmc": 1.53,
-        "rk3588_npu": "7.62 (recognition collapsed)"
+        "rk3588_npu": "7.62 (legacy RKNN route; recognition collapsed)",
+        "rk3588_rocket_baseline": 24.899,
+        "rk3588_rocket_llmc": 17.222
       },
       "q5 (q5_0)": {
         "jetson_stock": 1.56,
         "jetson_llmc": 1.51,
-        "rk3588_cpu_8core": 54.0
+        "rk3588_cpu_8core": 54.0,
+        "rk3588_rocket_baseline": 23.264,
+        "rk3588_rocket_llmc": 18.454
       },
       "fp16": {
         "jetson_stock": 1.97,
         "jetson_llmc": 2.08,
-        "rk3588_npu": 12.0
+        "rk3588_npu": "12.0 (legacy RKNN route)",
+        "rk3588_rocket_baseline": 26.047,
+        "rk3588_rocket_llmc": 16.485,
+        "rk3588_rknpu2_baseline": 45.774,
+        "rk3588_rknpu2_llmc_native": 17.933
+      },
+      "q4_k": {
+        "rk3588_rocket_baseline": 21.521,
+        "rk3588_rocket_llmc": 17.345
       }
     },
     "jfk_11s": {
@@ -135,7 +156,9 @@
       "jetson_llmc": "587-594",
       "jetson_stock": "628-673",
       "a311y3": 1921,
-      "rk3588_npu": "7623 (i8) / 12008 (fp16)",
+      "rk3588_npu": "legacy RKNN: 7623 (i8) / 12008 (fp16)",
+      "rk3588_rocket_llmc": "12413 (fp16) / 13318 (q8_0) / 13521 (q5_0) / 13699 (q4_K) / 13886 (q4_0)",
+      "rk3588_rknpu2_fresh": "12840 (FP16 host-copy baseline) / 8725 (FP16 native C++ LLMC)",
       "rk3588_cpu": 48671,
       "note": "encoder pads to a fixed 30s window - time is audio-length-invariant (verified on both devices)"
     },

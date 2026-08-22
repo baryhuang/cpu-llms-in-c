@@ -1,0 +1,23 @@
+date=2026-08-20T20:07:06-07:00
+hostname=caremojo-hub-84f8f312
+board=Orange Pi 5 Plus
+kernel=6.1.115-vendor-rk35xx
+rknpu_driver=RKNPU driver: v0.9.8
+rknn_runtime=librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+runtime_sha256=d31fc19c85b85f6091b2bd0f6af9d962d5264a4e410bfb536402ec92bac738e8
+encoder_sha256=987ebf7db28d6bef11d57fe0b8e316e2c6997d6a07f0ef3bab8dc12978625db2
+decoder_sha256=663b2200922115a4a94a3f582a14b6b920af229d20075fa006e6c67dd76082e6
+audio_sha256=659b371dc691312d8c5b4b2901e0d0a925d9ad0567aa51c48e1734f5d2429a2d
+
+Post-benchmark restored governors:
+cpu_governors=ondemand ondemand ondemand
+npu_governor=rknpu_ondemand
+dmc_governor=dmc_ondemand
+npu_freq_hz=1000000000
+
+Memory after benchmark:
+Mem: 7.7 GiB total, 346 MiB used, 7.4 GiB available
+Swap: 3.9 GiB total, 1.0 MiB used
+
+Root filesystem after benchmark:
+/dev/mmcblk1p1 15G total, 9.7G used, 4.3G available, 70% used

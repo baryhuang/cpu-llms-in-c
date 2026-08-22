@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "model": {
+    "name": "OpenAI Whisper large-v3-turbo",
+    "repository": "openai/whisper",
+    "compiler_checkpoint": {
+      "repository": "openai/whisper-large-v3-turbo",
+      "revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+      "files": {
+        "model.safetensors": {
+          "bytes": 1617824864,
+          "sha256": "542566a422ae4f3fd23f1ba11add198fca01bbf82e66e6a2857b3f608b1eb9d1",
+          "dtype": "F16"
+        },
+        "config.json": {
+          "bytes": 1256,
+          "sha256": "c5b526b3e3cd64cd8940dabb45e8ba726629e22d8ed389c29b552f9140daf04a"
+        },
+        "tokenizer.json": {
+          "bytes": 2710337,
+          "sha256": "297b13372ac43916285644fb9687add3cc62ee2a1adb60da3dc25cc94c1871fd"
+        },
+        "generation_config.json": {
+          "bytes": 3772,
+          "sha256": "cce11bfe3aaa6ae9e072ea2637caaec8795e68d9b67e655a5af16ee509681a4c"
+        }
+      },
+      "role": "framework-free compiler input; F16 weights upcast exactly to F32 at pack time"
+    },
+    "reference_files": {
+      "whisper/assets/mel_filters.npz": "7450ae70723a5ef9d341e3cee628c7cb0177f36ce42c44b7ed2bf3325f0f6d4c"
+    },
+    "architecture": {
+      "n_mels": 128,
+      "audio_context": 1500,
+      "audio_state": 1280,
+      "audio_heads": 20,
+      "audio_mlp": 5120,
+      "audio_layers": 32,
+      "text_context": 448,
+      "text_state": 1280,
+      "text_heads": 20,
+      "text_mlp": 5120,
+      "text_layers": 4,
+      "vocabulary": 51866,
+      "special_tokens": {
+        "endoftext": 50257,
+        "startoftranscript": 50258,
+        "language_en": 50259,
+        "transcribe": 50360,
+        "notimestamps": 50364,
+        "timestamp_begin": 50365
+      }
+    }
+  }
+}

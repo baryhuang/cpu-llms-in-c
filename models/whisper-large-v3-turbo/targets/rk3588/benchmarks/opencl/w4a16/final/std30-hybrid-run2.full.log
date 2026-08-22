@@ -1,0 +1,96 @@
+arm_release_ver: g24p0-00eac0, rk_so_ver: 10
+runtime: llmc-native-cpp-npu-encoder-opencl-w4-decoder-attention
+quantization: npu-expanded-fp16-encoder-gpu-packed-w4-decoder
+linear_backend: hybrid
+attention_backend: hybrid
+gpu_device: Mali-G610 r0p0
+gpu_compute_units: 4
+mode: llmc
+audio_seconds: 27.270
+model_init_ms: 2271.430
+preprocess_ms: 86.485
+encoder_ms: 21750.715
+decoder_steps: 90
+decoder_total_ms: 4271.347
+avg_decoder_step_ms: 47.459
+inference_ms: 26251.938
+generated_tokens: 87
+w4_linear_runs: 3172
+fp16_attention_matmul_runs: 1280
+attention_host_dispatches: 752
+baseline_weight_uploads: 0
+aot_linear_plans: 9
+aot_prepared_weights: 243
+aot_resident_weight_bytes: 1402378240
+w4_linear_wall_ms: 9630.706
+gpu_w4_kernel_ms: 2745.336
+gpu_w4_transfer_ms: 6.390
+attention_wall_ms: 12443.518
+gpu_attention_qk_ms: 386.484
+gpu_attention_softmax_ms: 12.728
+gpu_attention_pv_ms: 333.581
+gpu_attention_transfer_ms: 219.113
+encoder_w4_linear_wall_ms: 6535.452
+decoder_w4_linear_wall_ms: 3095.254
+encoder_attention_wall_ms: 11302.648
+decoder_attention_wall_ms: 1140.870
+npu_scheduler: parallel3
+npu_sharding: output-columns-N-aligned32
+attention_scheduler: encoder-NPU-static-head-decoder-OpenCL-three-kernel
+npu_worker_model: one-persistent-thread-per-core
+npu_configured_cores: 3
+npu_load_source: /sys/kernel/debug/rknpu/load
+npu_load_sample_interval_ms: 10
+npu_load_status: sampled
+npu_encoder_load_samples: 2160
+npu_encoder_core0_avg_load_pct: 24.48
+npu_encoder_core0_max_load_pct: 32
+npu_encoder_core1_avg_load_pct: 24.02
+npu_encoder_core1_max_load_pct: 31
+npu_encoder_core2_avg_load_pct: 23.38
+npu_encoder_core2_max_load_pct: 31
+npu_decoder_load_samples: 447
+npu_decoder_core0_avg_load_pct: 6.73
+npu_decoder_core0_max_load_pct: 31
+npu_decoder_core1_avg_load_pct: 6.51
+npu_decoder_core1_max_load_pct: 30
+npu_decoder_core2_avg_load_pct: 6.51
+npu_decoder_core2_max_load_pct: 30
+npu_observed_active_cores: 3
+gpu_load_source: /sys/devices/platform/fb000000.gpu/devfreq/fb000000.gpu/load
+gpu_load_sample_interval_ms: 5
+gpu_load_status: sampled
+gpu_encoder_load_samples: 4283
+gpu_encoder_avg_load_pct: 0.00
+gpu_encoder_max_load_pct: 0
+gpu_encoder_max_frequency_hz: 1000000000
+gpu_decoder_load_samples: 888
+gpu_decoder_avg_load_pct: 49.77
+gpu_decoder_max_load_pct: 100
+gpu_decoder_max_frequency_hz: 1000000000
+token_ids: 50258 50259 50360 50364 18200 765 8752 281 1080 1081 30153 372 264 39283 13 440 3669 2128 292 281 264 5522 42853 295 8085 11 295 597 436 632 1027 257 499 317 2069 17225 281 12044 264 18365 295 264 2037 14742 13 440 5522 11 294 2736 11 9185 264 3669 281 257 44185 11 597 390 281 312 2212 264 958 786 13 9694 645 23270 294 3564 264 14742 5315 1830 720 4671 13 509 486 312 10455 365 385 30 286 1009 669 13 50257
+text:
+Concord returned to its place amidst the tents. The English forwarded to the French baskets of flowers, of which they had made a plentiful provision to greet the arrival of the young princess. The French, in return, invited the English to a supper, which was to be given the next day. Congratulations were poured in upon the princess everywhere during her journey. You will be frank with me? I always am.
+	Command being timed: "/root/whisper-gpu-test/run_opencl_w4a16_std30.sh /root/whisper-gpu-test /root/whisper-w4aot-v3"
+	User time (seconds): 39.03
+	System time (seconds): 2.68
+	Percent of CPU this job got: 140%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:29.62
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2373088
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 14
+	Minor (reclaiming a frame) page faults: 51028
+	Voluntary context switches: 45147
+	Involuntary context switches: 197
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

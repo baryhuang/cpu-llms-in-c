@@ -1,0 +1,36 @@
+audio_seconds: 27.27
+generated_tokens: 77
+model_init_ms: 2358.30
+preprocess_ms: 80.91
+encoder_ms: 8802.52
+decoder_steps: 80
+avg_decoder_step_ms: 128.86
+inference_ms: 19933.47
+zero_copy_decoder: true
+runtime: native-cpp
+core_mask: all
+text:
+concord returned to its place amidst the tents the english forwarded to the french baskets of flowers of which they had made a plentiful provision to greet the arrival of the young princess the french in return invited the english to a supper which was to be given the next day congratulations were poured in upon the princess everywhere during her journey you will be frank with me i always am
+	Command being timed: "native-build/whisper_rknpu2_llmc encoder_with_kv.rknn decoder_static_kv.rknn vocab.json std30.wav --core-mask all"
+	User time (seconds): 1.76
+	System time (seconds): 4.79
+	Percent of CPU this job got: 27%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:23.69
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2114376
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 3943
+	Voluntary context switches: 6792
+	Involuntary context switches: 134
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

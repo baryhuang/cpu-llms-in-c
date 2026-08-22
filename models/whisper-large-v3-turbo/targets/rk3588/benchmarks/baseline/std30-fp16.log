@@ -1,0 +1,58 @@
+load_backend: loaded CPU backend from /root/whisper-rk3588/whisper.cpp/build/bin/libggml-cpu.so
+load_backend: loaded ROCKET backend from /root/whisper-rk3588/ggml-rocket/build-dl-whisper-source/libggml-rocket.so
+whisper_init_from_file_with_params_no_state: loading model from 'whisper.cpp/models/ggml-large-v3-turbo.bin'
+whisper_init_with_params_no_state: use gpu    = 1
+whisper_init_with_params_no_state: flash attn = 1
+whisper_init_with_params_no_state: gpu_device = 0
+whisper_init_with_params_no_state: dtw        = 0
+whisper_init_with_params_no_state: devices    = 2
+whisper_init_with_params_no_state: backends   = 2
+whisper_model_load: loading model
+whisper_model_load: n_vocab       = 51866
+whisper_model_load: n_audio_ctx   = 1500
+whisper_model_load: n_audio_state = 1280
+whisper_model_load: n_audio_head  = 20
+whisper_model_load: n_audio_layer = 32
+whisper_model_load: n_text_ctx    = 448
+whisper_model_load: n_text_state  = 1280
+whisper_model_load: n_text_head   = 20
+whisper_model_load: n_text_layer  = 4
+whisper_model_load: n_mels        = 128
+whisper_model_load: ftype         = 1
+whisper_model_load: qntvr         = 0
+whisper_model_load: type          = 5 (large v3)
+whisper_model_load: adding 1609 extra tokens
+whisper_model_load: n_langs       = 100
+whisper_model_load:          CPU total size =  1623.92 MB
+whisper_model_load: model size    = 1623.92 MB
+whisper_backend_init_gpu: device 0: CPU (type: 0)
+whisper_backend_init_gpu: device 1: ROCKET (type: 3)
+whisper_backend_init_gpu: no GPU found
+whisper_backend_init: using ROCKET backend
+whisper_init_state: kv self size  =   10.49 MB
+whisper_init_state: kv cross size =   31.46 MB
+whisper_init_state: kv pad  size  =    7.86 MB
+whisper_init_state: compute buffer (conv)   =   36.15 MB
+whisper_init_state: compute buffer (encode) =   55.35 MB
+whisper_init_state: compute buffer (cross)  =    9.27 MB
+whisper_init_state: compute buffer (decode) =   99.12 MB
+read_audio_data: reading audio data from 'std30.wav' ...
+read_audio_data: trying to decode with miniaudio
+
+system_info: n_threads = 4 / 8 | WHISPER : COREML = 0 | OPENVINO = 0 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | DOTPROD = 1 | OPENMP = 1 | 
+
+main: processing 'std30.wav' (436320 samples, 27.3 sec), 4 threads, 1 processors, 5 beams + best of 5, lang = en, task = transcribe, timestamps = 0 ...
+
+
+ Concord returned to its place amidst the tents. The English forwarded to the French baskets of flowers, of which they had made a plentiful provision to greet the arrival of the young princess. The French, in return, invited the English to a supper, which was to be given the next day. Congratulations were poured in upon the princess everywhere during her journey. "You will be frank with me? I always am."
+whisper_print_timings:     load time =  1209.50 ms
+whisper_print_timings:     fallbacks =   0 p /   0 h
+whisper_print_timings:      mel time =   169.13 ms
+whisper_print_timings:   sample time =   501.95 ms /   435 runs (     1.15 ms per run)
+whisper_print_timings:   encode time = 17929.30 ms /     1 runs ( 17929.30 ms per run)
+whisper_print_timings:   decode time =     0.00 ms /     1 runs (     0.00 ms per run)
+whisper_print_timings:   batchd time =  7373.40 ms /   434 runs (    16.99 ms per run)
+whisper_print_timings:   prompt time =     0.00 ms /     1 runs (     0.00 ms per run)
+whisper_print_timings:    total time = 27256.89 ms
+ROCKET profile total(ms): pack=5555 (packA=629 packB=1332) gen=47 sync=563 submit=87 wait=26187 read=798  over 1000 job-batches
+ROCKET convert total(ms): pack_act=435 (200 calls, 568M elems) weight_dequant=0 (0 calls, 0M elems) unpack_out=295 (200 calls, 568M elems)

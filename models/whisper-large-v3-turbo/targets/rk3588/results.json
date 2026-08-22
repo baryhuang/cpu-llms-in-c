@@ -1,0 +1,426 @@
+{
+  "target": "rk3588-rknpu2",
+  "model": "whisper-large-v3-turbo",
+  "date": "2026-08-21",
+  "scope": "owner-directed std30.wav only; no 32-file mode and no corpus WER claim",
+  "machine": {
+    "board": "Orange Pi 5 Plus",
+    "hostname": "caremojo-hub-84f8f312",
+    "soc": "Rockchip RK3588",
+    "cpu": "4x Cortex-A76 up to 2.256 GHz + 4x Cortex-A55 up to 1.8 GHz",
+    "memory": "7.7 GiB RAM; 3.9 GiB zram",
+    "npu": "3-core RK3588 NPU through the proprietary RKNPU2 stack",
+    "os": "Armbian Debian trixie, Linux 6.1.115-vendor-rk35xx",
+    "driver": "RKNPU driver v0.9.8",
+    "runtime": "librknnrt 2.3.2 (429f97ae6b@2025-04-09T09:09:27)",
+    "runtime_sha256": "d31fc19c85b85f6091b2bd0f6af9d962d5264a4e410bfb536402ec92bac738e8"
+  },
+  "pins": {
+    "rknn_model": {
+      "repository": "happyme531/whisper-large-v3-turbo-RKNN2",
+      "revision": "791cf8c7152a3882fc3fb7d3fb8d6718dfbea889",
+      "license": "AGPL-3.0"
+    },
+    "rknn_toolkit2": {
+      "version": "2.3.2",
+      "revision": "42aa1d426c0a9e0869b6374edba009f7208a1926"
+    },
+    "rknn_model_zoo": {
+      "revision": "bad6c7334531becaf90a561988519b7bec34d0ab"
+    }
+  },
+  "audio": {
+    "name": "std30.wav",
+    "reported_duration_seconds": 27.27,
+    "format": "16 kHz mono WAV, 436320 samples",
+    "sha256": "659b371dc691312d8c5b4b2901e0d0a925d9ad0567aa51c48e1734f5d2429a2d",
+    "encoder_window_seconds": 30
+  },
+  "models": {
+    "encoder": {
+      "file": "encoder_with_kv.rknn",
+      "bytes": 1380111287,
+      "sha256": "987ebf7db28d6bef11d57fe0b8e316e2c6997d6a07f0ef3bab8dc12978625db2",
+      "input": "float16 [1,128,3000]",
+      "kv_outputs": "2 x float16 [1,4,20,1500,64]"
+    },
+    "decoder": {
+      "file": "decoder_static_kv.rknn",
+      "bytes": 456033863,
+      "sha256": "663b2200922115a4a94a3f582a14b6b920af229d20075fa006e6c67dd76082e6",
+      "self_kv": "2 x float16 [1,4,20,448,64]",
+      "logits": "float16 [1,1,51866]"
+    }
+  },
+  "quantization_matrix": {
+    "source_labels": ["FP16", "q8_0", "q5_0", "q4_K", "q4_0", "w4a16"],
+    "fp16": {
+      "rknpu2_status": "supported and measured",
+      "note": "precompiled RKNPU2 graph uses float16 tensor I/O"
+    },
+    "q8_0": {
+      "rknpu2_status": "unsupported exact format",
+      "note": "GGML q8_0 is rejected as an invalid Toolkit2 2.3.2 quantized_dtype; native w8a8 also quantizes activations and requires calibration, so it is not relabeled"
+    },
+    "q5_0": {
+      "rknpu2_status": "unsupported exact format",
+      "note": "Toolkit2 2.3.2 has no native RK3588 5-bit graph-conversion mode"
+    },
+    "q4_K": {
+      "rknpu2_status": "unsupported exact format",
+      "note": "Toolkit2 2.3.2 has no native RK3588 groupwise GGML q4_K graph-conversion mode"
+    },
+    "q4_0": {
+      "rknpu2_status": "unsupported exact format",
+      "note": "Toolkit2 2.3.2 rejects q4_0; its distinct w4a16 mode is also unsupported on RK3588"
+    },
+    "w4a16_runtime_probe": {
+      "date": "2026-08-21",
+      "format": "symmetric INT4 weights, group size 32, FP16 activations and FP16 output",
+      "package_validation": "passed: 202 encoder and 41 decoder W4 tensors",
+      "official_sdk_positive_control": "FP16 x FP16, M=1 K=64 N=64: passed",
+      "official_sdk_w4a16": "rknn_matmul_create returned -5: RKNN_FLOAT16_MM_INT4_TO_FLOAT16 unsupported on this platform",
+      "baseline": "rejected at context creation before NPU dispatch",
+      "llmc": "rejected at context creation before NPU dispatch",
+      "npu_core_load_before_after_percent": [0, 0, 0],
+      "timing": null,
+      "reason": "Rockchip upstream 2.3.2 documents W4A16 for RK3576; RK3588 documents INT4 x INT4 to INT16 only",
+      "record": "benchmarks/rknpu2/w4a16/rk3588-w4a16-capability-20260821.log"
+    },
+    "custom_w4_fp16_system_path": {
+      "status": "supported and measured",
+      "weight_storage": "signed INT4, group size 32",
+      "cpu_role": "unpack INT4 and apply group scales into aligned FP16 output-column shards",
+      "npu_role": "RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT16 only",
+      "scheduler": "retained v2 used 16-aligned N sharding; appended AOT v3 uses 32-aligned N sharding, with three independent contexts pinned to Core0, Core1 and Core2",
+      "combined_mask_result": "Core0+1 and Core0+1+2 rejected with -1; RKNN_NPU_CORE_ALL executes on one core",
+      "quality": "baseline and LLMC generated identical 87-token sequences on std30.wav"
+    },
+    "native_toolkit_checks": {
+      "w8a8": "configuration accepted; not benchmarked because no calibrated large-v3-turbo graph was produced",
+      "w8a16": "rejected as unsupported on rk3588",
+      "w4a16": "rejected as unsupported on rk3588",
+      "w16a16i": "configuration accepted; not a PDF weight variant",
+      "w16a16i_dfp": "configuration accepted; not a PDF weight variant"
+    },
+    "record": "benchmarks/rknpu2/toolkit-2.3.2-quantization-support.log"
+  },
+  "methodology": {
+    "baseline": "community Python runner using RKNPU2 for all model operators; host-copy encoder and decoder KV path (--no-zero-copy-decoder); ondemand CPU, rknpu_ondemand NPU and dmc_ondemand memory governors",
+    "llmc": "Python-free C++17 target runtime using the RKNPU2 C API; DMA-BUF encoder KV handoff; in-place self-KV; selective cache synchronization; all-core NPU mask; taskset 4-7; CPU/NPU/DMC performance governors during the run",
+    "encoder": "time from synchronized fixed-30-second feature input through encoder rknn_run completion",
+    "decoder": "mean over 80 RKNPU2 decoder steps (4 prompt plus 76 generated-token follow-up steps)",
+    "end_to_end": "inference path from WAV read and feature extraction through final EOT; model loading excluded",
+    "quality": "exact transcript comparison on std30.wav; no reference corpus was run",
+    "repeat_policy": "one baseline; three adjacent best-profile LLMC runs of the same std30.wav; report the LLMC median"
+  },
+  "runs": {
+    "rknpu2_fp16": {
+      "baseline": {
+        "runner": "Python community runner",
+        "zero_copy_decoder": false,
+        "generated_tokens": 77,
+        "encoder_ms": 12839.54,
+        "avg_decoder_step_ms": 408.33,
+        "e2e_ms": 45774.08,
+        "peak_rss_kib": 4323460
+      },
+      "llmc_median": {
+        "runner": "native C++17 LLMC runner",
+        "zero_copy_decoder": true,
+        "npu_core_mask": "all",
+        "cpu_affinity": "4-7",
+        "governors": "CPU/NPU/DMC performance during measurement; restored after each battery",
+        "generated_tokens": 77,
+        "decoder_steps": 80,
+        "preprocess_ms": 80.89,
+        "encoder_ms": 8725.34,
+        "avg_decoder_step_ms": 111.56,
+        "e2e_ms": 17933.30,
+        "peak_rss_kib": 2114376
+      },
+      "llmc_trials": [
+        {"encoder_ms": 8725.34, "avg_decoder_step_ms": 111.56, "e2e_ms": 17933.30},
+        {"encoder_ms": 8745.94, "avg_decoder_step_ms": 111.59, "e2e_ms": 17956.62},
+        {"encoder_ms": 8709.83, "avg_decoder_step_ms": 111.34, "e2e_ms": 17900.97}
+      ],
+      "gains": {
+        "encoder_percent": 32.043,
+        "decoder_step_percent": 72.679,
+        "e2e_percent": 60.822,
+        "peak_rss_percent": 51.095,
+        "encoder_speedup": 1.472,
+        "decoder_step_speedup": 3.660,
+        "e2e_speedup": 2.552
+      }
+    },
+    "custom_w4_fp16_parallel3": {
+      "matmul_gate": {
+        "shape_mkn": [1, 1280, 51904],
+        "core0_ms": 12.305,
+        "parallel3_ms": 5.351,
+        "speedup": 2.300,
+        "cpu_npu_cosine": 0.999999978,
+        "active_cores": 3
+      },
+      "baseline": {
+        "runner": "native C++17 custom W4-to-FP16 runtime",
+        "npu_scheduler": "parallel3 N-sharding",
+        "generated_tokens": 87,
+        "decoder_steps": 90,
+        "encoder_ms": 67177.078,
+        "decoder_total_ms": 216308.245,
+        "avg_decoder_step_ms": 2403.425,
+        "e2e_ms": 283728.328,
+        "npu_encoder_max_load_percent": [43, 41, 41],
+        "npu_decoder_max_load_percent": [18, 18, 18]
+      },
+      "llmc": {
+        "runner": "native C++17 custom W4-to-FP16 runtime with resident decoder B shards",
+        "npu_scheduler": "parallel3 N-sharding",
+        "generated_tokens": 87,
+        "decoder_steps": 90,
+        "encoder_ms": 66512.003,
+        "decoder_total_ms": 12852.948,
+        "avg_decoder_step_ms": 142.811,
+        "e2e_ms": 79596.454,
+        "npu_encoder_max_load_percent": [45, 44, 44],
+        "npu_decoder_max_load_percent": [17, 18, 17]
+      },
+      "gains": {
+        "matmul_speedup": 2.300,
+        "decoder_speedup": 16.829,
+        "e2e_speedup": 3.565
+      }
+    },
+    "custom_w4_fp16_parallel3_aot_v3": {
+      "status": "current appended result; retained v2 measurements remain unchanged",
+      "scope": {
+        "native_npu_w4a16": false,
+        "accurate_label": "AOT W4 storage -> initialization-time FP16 expansion -> three-core RKNPU2 FP16 MatMul",
+        "packed_int4_enters_npu": false,
+        "npu_role": "execute supported FP16 x FP16 -> FP16 MatMul shards",
+        "comparison_note": "the 17.933 s FP16 result uses RKNN_NPU_CORE_ALL inside fused precompiled encoder/decoder graphs; it is not a one-core control"
+      },
+      "packages": {
+        "layout": "version 3: N32 outer, K32 inner; each 640-byte record stores 32 FP32 scales followed by packed 32x32 signed INT4",
+        "encoder": {
+          "bytes": 409684160,
+          "sha256": "6fdbc0d6ab97404b14487b06bf938bcbde12dc9879c4ecfeea59ce36ba3a5b1b"
+        },
+        "decoder": {
+          "bytes": 241173248,
+          "sha256": "18cad5ac4d4fcd331dc49d25cff6984c9df1339d8659320ff8710ac29c8bc2e4"
+        }
+      },
+      "runtime": {
+        "language": "C++17 target inference; Python is offline package build only",
+        "worker_model": "one persistent host thread per NPU core",
+        "scheduler": "three fixed task slots; no inference-time thread, queue, promise, context or DMA allocation",
+        "linear": "32-aligned output-N sharding across Core0/Core1/Core2; nine shape-shared AOT plans; 235 resident weights",
+        "attention": "complete heads statically assigned by head modulo 3; one host dispatch per attention block",
+        "cross_attention": "encoder K/V transposed and packed once for decoder reuse",
+        "aot_resident_weight_bytes": 1611694080
+      },
+      "thread_stress_gate": {
+        "shape_mkn": [1, 1280, 51904],
+        "runs": 1000,
+        "npu_jobs": 3000,
+        "avg_three_core_matmul_ms": 4.730,
+        "cpu_npu_cosine": 0.999999978,
+        "cpu_reference_max_abs_error": 0.000485539,
+        "dynamic_fp16_rebind_cosine": 0.999999977,
+        "npu_max_load_percent": [90, 90, 90],
+        "crash": false
+      },
+      "baseline": {
+        "runner": "same native C++17 binary; W4 weights re-expanded and re-prepared on every linear use",
+        "npu_scheduler": "persistent-thread parallel3 N-sharding",
+        "generated_tokens": 87,
+        "decoder_steps": 90,
+        "encoder_ms": 34930.022,
+        "decoder_total_ms": 125994.137,
+        "avg_decoder_step_ms": 1399.935,
+        "e2e_ms": 161158.443,
+        "peak_rss_kib": 948320,
+        "npu_encoder_max_load_percent": [43, 45, 44],
+        "npu_decoder_max_load_percent": [17, 16, 16]
+      },
+      "llmc_median": {
+        "runner": "native C++17 AOT W4 v3 runtime",
+        "npu_scheduler": "persistent-thread parallel3 N-sharding plus static head scheduling",
+        "generated_tokens": 87,
+        "decoder_steps": 90,
+        "encoder_ms": 21796.097,
+        "decoder_total_ms": 20733.231,
+        "avg_decoder_step_ms": 230.369,
+        "e2e_ms": 42479.700,
+        "peak_rss_kib": 2582468,
+        "active_npu_cores": 3,
+        "w4_linear_runs": 3172,
+        "attention_matmul_runs": 30080,
+        "attention_host_dispatches": 752,
+        "w4_linear_wall_ms": 24628.302,
+        "attention_wall_ms": 13682.134,
+        "encoder_npu_avg_load_percent": [24.77, 24.54, 23.82],
+        "decoder_npu_avg_load_percent": [7.88, 7.88, 7.52]
+      },
+      "llmc_trials": [
+        {"encoder_ms": 21940.541, "decoder_total_ms": 21082.896, "avg_decoder_step_ms": 234.254, "e2e_ms": 43775.668, "peak_rss_kib": 2582776},
+        {"encoder_ms": 21796.097, "decoder_total_ms": 20410.385, "avg_decoder_step_ms": 226.782, "e2e_ms": 42440.521, "peak_rss_kib": 2581864},
+        {"encoder_ms": 21512.334, "decoder_total_ms": 20733.231, "avg_decoder_step_ms": 230.369, "e2e_ms": 42479.700, "peak_rss_kib": 2582468}
+      ],
+      "gains": {
+        "encoder_speedup": 1.603,
+        "decoder_speedup": 6.077,
+        "decoder_step_speedup": 6.077,
+        "e2e_speedup": 3.794,
+        "versus_retained_v2_llmc_speedup": 1.874,
+        "e2e_slowdown_versus_fused_fp16": 2.369
+      },
+      "quality": "baseline and all three LLMC trials produced identical 87-token sequences"
+    },
+    "opencl_w4a16_hybrid": {
+      "status": "current appended GPU result; every earlier NPU and CPU measurement remains unchanged",
+      "scope": {
+        "encoder_linear": "AOT W4 expanded once to resident FP16; RKNPU2 Core0/Core1/Core2",
+        "encoder_attention": "RKNPU2 fixed head round-robin across three cores",
+        "decoder_linear": "Mali-G610 directly reads packed INT4 N32/K32 weights with FP16 activations and FP32 accumulation",
+        "decoder_attention": "Mali-G610 QK, in-place softmax and PV OpenCL kernels",
+        "target_python": false
+      },
+      "opencl_environment": {
+        "platform": "ARM Platform OpenCL 3.0 v1.g24p0-00eac0",
+        "device": "Mali-G610 r0p0",
+        "compute_units": 4,
+        "maximum_clock_hz": 1000000000,
+        "fp16_extension": "cl_khr_fp16",
+        "kernel_ddk": "g25p0-00eac0",
+        "userspace_blob": "libmali Valhall G610 g24p0-00eac0; proprietary and not committed",
+        "userspace_blob_sha256": "07cc993b13d6591161b0a12a270c75e06f25d56437016c6fbff8ea36e47c6614"
+      },
+      "runtime": {
+        "language": "native C++17 plus embedded OpenCL C; no target Python",
+        "linear_scheduler": "static by scope and shape; encoder=NPU, decoder N<=5120=four-way K split, decoder vocab=eight outputs per work-item",
+        "attention_scheduler": "encoder=NPU; decoder=three OpenCL kernels",
+        "shape_plans": 9,
+        "prepared_weights": 243,
+        "resident_weight_bytes": 1402378240,
+        "w4_linear_runs": 3172,
+        "encoder_npu_attention_matmul_runs": 1280,
+        "attention_blocks": 752,
+        "decoder_gpu_attention_blocks": 720
+      },
+      "matmul_gates": [
+        {"shape_mkn": [1, 1280, 1280], "loops": 100, "kernel_mean_ms": 0.440614, "kernel_median_ms": 0.440581, "max_abs_error": 0.00000918, "correctness": "passed"},
+        {"shape_mkn": [1, 1280, 5120], "loops": 100, "kernel_mean_ms": 1.506494, "kernel_median_ms": 1.527666, "max_abs_error": 0.00002345, "correctness": "passed"},
+        {"shape_mkn": [1, 5120, 1280], "loops": 100, "kernel_mean_ms": 1.729201, "kernel_median_ms": 1.727489, "max_abs_error": 0.00002201, "correctness": "passed"},
+        {"shape_mkn": [1, 1280, 51904], "loops": 100, "kernel_mean_ms": 8.445812, "kernel_median_ms": 8.423296, "max_abs_error": 0.00002687, "correctness": "passed"}
+      ],
+      "llmc_median": {
+        "encoder_ms": 21716.948,
+        "decoder_total_ms": 4267.066,
+        "avg_decoder_step_ms": 47.412,
+        "e2e_ms": 26213.291,
+        "decoder_w4_linear_wall_ms": 3093.564,
+        "decoder_attention_wall_ms": 1138.889,
+        "gpu_w4_kernel_ms": 2748.392,
+        "gpu_attention_qk_ms": 386.496,
+        "gpu_attention_softmax_ms": 12.710,
+        "gpu_attention_pv_ms": 336.157,
+        "peak_rss_kib": 2373996,
+        "gpu_decoder_avg_load_percent": 49.83,
+        "gpu_decoder_max_load_percent": 100,
+        "gpu_decoder_max_frequency_hz": 1000000000,
+        "npu_encoder_avg_load_percent": [24.69, 24.36, 23.61],
+        "active_npu_cores": 3,
+        "generated_tokens": 87,
+        "decoder_steps": 90
+      },
+      "llmc_trials": [
+        {"encoder_ms": 21716.948, "decoder_total_ms": 4267.066, "avg_decoder_step_ms": 47.412, "e2e_ms": 26213.291, "peak_rss_kib": 2375680},
+        {"encoder_ms": 21750.715, "decoder_total_ms": 4271.347, "avg_decoder_step_ms": 47.459, "e2e_ms": 26251.938, "peak_rss_kib": 2373088},
+        {"encoder_ms": 21702.329, "decoder_total_ms": 4256.834, "avg_decoder_step_ms": 47.298, "e2e_ms": 26189.167, "peak_rss_kib": 2373996}
+      ],
+      "gains_versus_three_npu_aot_v3": {
+        "encoder_speedup": 1.004,
+        "decoder_speedup": 4.859,
+        "decoder_step_speedup": 4.859,
+        "decoder_linear_speedup": 5.823,
+        "decoder_attention_speedup": 2.357,
+        "e2e_speedup": 1.621,
+        "e2e_reduction_percent": 38.292,
+        "e2e_slowdown_versus_fused_fp16": 1.462
+      },
+      "rejected_schedules": [
+        {"schedule": "all W4 linear on GPU, NPU attention", "encoder_ms": 42967.351, "e2e_ms": 51118.072, "decision": "reject: encoder batched W4 slower than three-NPU AOT"},
+        {"schedule": "NPU encoder linear, GPU attention for encoder and decoder", "encoder_ms": 33043.678, "e2e_ms": 41126.937, "decision": "reject: encoder PV kernel consumed 16149.896 ms"}
+      ],
+      "quality": "all three formal trials and rejected-schedule trials emitted the exact same 87-token sequence as the AOT v3 baseline"
+    }
+  },
+  "tuning": {
+    "native_auto_core_ondemand": {
+      "encoder_ms": 12393.52,
+      "avg_decoder_step_ms": 143.21,
+      "e2e_ms": 24736.33,
+      "decision": "keep native zero-copy, continue NPU-core tuning"
+    },
+    "native_all_core_ondemand": {
+      "encoder_ms": 8802.52,
+      "avg_decoder_step_ms": 128.86,
+      "e2e_ms": 19933.47,
+      "decision": "keep all-core mask"
+    },
+    "native_all_core_performance": {
+      "encoder_ms_median": 8725.34,
+      "avg_decoder_step_ms_median": 111.56,
+      "e2e_ms_median": 17933.30,
+      "decision": "final profile"
+    }
+  },
+  "optimization": {
+    "kept": [
+      "pure C++17 inference runtime with no Python dependency",
+      "DMA-BUF import of both 15.36 MB encoder KV outputs into the decoder context",
+      "in-place 4.59 MB key and value self-cache bindings across decoder steps",
+      "disabled global input/output cache flushes with explicit sync only for features, token, position and logits",
+      "RKNN_NPU_CORE_ALL for encoder and decoder",
+      "Cortex-A76 affinity plus CPU, NPU and DMC performance governors during measurement"
+    ],
+    "restoration": "all three governors returned to ondemand/rknpu_ondemand/dmc_ondemand after each tuned battery"
+  },
+  "quality": {
+    "exact_transcript_match": true,
+    "transcript_line_sha256_with_lf": "0b1933a3fe1ea20c0222a24c3a0434d2e33aec4fe3816bcdf7283446d4907442",
+    "result": "baseline and all five native tuning/final runs produced the same 77-token English transcript"
+  },
+  "exploratory_open_stack_appendix": {
+    "status": "not used for the proprietary RKNPU2 headline or cross-device row",
+    "runtime": "mainline Rocket plus whisper.cpp/GGML",
+    "reason_retained": "records the earlier feasibility work and exact PDF GGML formats",
+    "best_fp16": {"encoder_ms": 12412.71, "e2e_ms": 16484.59},
+    "records": "benchmarks/baseline/, benchmarks/llmc/ and benchmarks/tuning/"
+  },
+  "records": {
+    "baseline": "benchmarks/rknpu2/baseline-python-copy-std30.log",
+    "llmc_trials": "benchmarks/rknpu2/llmc-native-all-performance-std30*.log",
+    "native_tuning": "benchmarks/rknpu2/llmc-native-auto-std30.log and llmc-native-all-std30.log",
+    "tensor_layout": "benchmarks/rknpu2/model-tensors.log",
+    "quantization_support": "benchmarks/rknpu2/toolkit-2.3.2-quantization-support.log",
+    "w4a16_runtime_capability": "benchmarks/rknpu2/w4a16/rk3588-w4a16-capability-20260821.log",
+    "w4a16_package_validation": "benchmarks/rknpu2/w4a16/w4a16-package-validation-20260821.log",
+    "w4_fp16_parallel3_matmul_gate": "benchmarks/rknpu2/w4a16/matmul-parallel3-resident-gate.log",
+    "w4_fp16_parallel3_baseline": "benchmarks/rknpu2/w4a16/std30-w4fp16-parallel3-baseline.log",
+    "w4_fp16_parallel3_llmc": "benchmarks/rknpu2/w4a16/std30-w4fp16-parallel3-llmc.log",
+    "w4_aot_v3_thread_stress": "benchmarks/rknpu2/w4a16/aot-v3/matmul-v3-final-thread-stress.log",
+    "w4_aot_v3_baseline": "benchmarks/rknpu2/w4a16/aot-v3/std30-w4aot-v3-final-baseline.log",
+    "w4_aot_v3_llmc_trials": "benchmarks/rknpu2/w4a16/aot-v3/std30-w4aot-v3-final-llmc*.log",
+    "opencl_w4a16_hybrid_trials": "benchmarks/opencl/w4a16/final/std30-hybrid-run*.log",
+    "opencl_w4a16_matmul_gates": "benchmarks/opencl/w4a16/final/matmul-shapes.log",
+    "opencl_environment": "benchmarks/opencl/w4a16/final/device-environment.log",
+    "opencl_rejected_schedules": "benchmarks/opencl/w4a16/experiments/",
+    "native_source": "native/whisper_rknpu2_llmc.cc",
+    "native_tuned_runner": "native/run_std30_tuned.sh"
+  }
+}

@@ -43,6 +43,13 @@ MINIMINDO_OMNI_FORWARD := $(BUILD_DIR)/minimindo-omni-forward
 MINIMINDO_MIMI := $(BUILD_DIR)/minimindo-mimi
 MINIMINDO_SPEECH := $(BUILD_DIR)/minimindo-speech
 MINIMINDO_AUDIO_ENCODER := $(BUILD_DIR)/minimindo-audio-encoder
+WHISPER_TURBO := models/whisper-large-v3-turbo
+WHISPER_TURBO_GENERIC := $(WHISPER_TURBO)/targets/generic
+WHISPER_TURBO_A113X := $(WHISPER_TURBO)/targets/a113x
+WHISPER_TURBO_ENCODER_BENCH := $(BUILD_DIR)/whisper-turbo-encoder-bench
+WHISPER_TURBO_A113X_ENCODER_BENCH := $(BUILD_DIR)/whisper-turbo-encoder-bench-a113x
+WHISPER_TURBO_TRANSCRIBE := $(BUILD_DIR)/whisper-turbo-transcribe
+WHISPER_TURBO_A113X_TRANSCRIBE := $(BUILD_DIR)/whisper-turbo-transcribe-a113x
 QWEN38_M3 := models/qwen3.8-27b/targets/apple-m3-pro
 QWEN38_COMPILER := compiler/qwen3.8-27b/apple-m3-pro
 QWEN38_M3_AIR := $(BUILD_DIR)/qwen38-m3-q4.air
@@ -126,7 +133,7 @@ MINIMAX_H3_M3_E2E_OBJECT := $(BUILD_DIR)/minimax-h3-m3-e2e.o
 MINIMAX_H3_M3_E2E_CLI_OBJECT := $(BUILD_DIR)/minimax-h3-m3-e2e-cli.o
 MINIMAX_H3_M3_E2E := $(BUILD_DIR)/minimax-h3-m3-e2e
 
-.PHONY: all a113x clean fixture linux-tools minimindo-tools minimax-h3-m3-attention-bench minimax-h3-m3-dense-attention-bench minimax-h3-m3-rope-bench minimax-h3-m3-vae-gemm-bench minimax-h3-m3-vae-attention-bench minimax-h3-m3-gemm-bench minimax-h3-m3-q8-gemm-bench minimax-h3-m3-pipeline-archive minimax-h3-m3-e2e minimax-h3-tools qwen38-m3-bench qwen38-m3-deltanet-bench qwen38-m3-layer-bench qwen38-m3-attention-bench qwen38-m3-decode qwen38-m3-generate qwen38-m3-chat qwen38-m3-api-state-test qwen38-m3-prefill-parity-test qwen38-tools test whisper-small-tools
+.PHONY: all a113x clean fixture linux-tools minimindo-tools minimindo-speech minimindo-audio-encoder minimax-h3-m3-attention-bench minimax-h3-m3-dense-attention-bench minimax-h3-m3-rope-bench minimax-h3-m3-vae-gemm-bench minimax-h3-m3-vae-attention-bench minimax-h3-m3-gemm-bench minimax-h3-m3-q8-gemm-bench minimax-h3-m3-pipeline-archive minimax-h3-m3-e2e minimax-h3-tools qwen38-m3-bench qwen38-m3-deltanet-bench qwen38-m3-layer-bench qwen38-m3-attention-bench qwen38-m3-decode qwen38-m3-generate qwen38-m3-chat qwen38-m3-api-state-test qwen38-m3-prefill-parity-test qwen38-tools test whisper-small-tools whisper-turbo-tools
 
 all: $(GEMMA4_LAYER_TEST) $(GEMMA4_TASK)
 
@@ -134,7 +141,8 @@ linux-tools: $(TARGET_PROBE)
 
 a113x: $(QWEN35_A113X_TASK) $(WHISPER_SMALL_A113X_BENCH) \
 	$(WHISPER_SMALL_A113X_CHECK) $(WHISPER_SMALL_A113X_TRANSCRIBE) \
-	$(WHISPER_SMALL_A113X_DECODER_CHECK)
+	$(WHISPER_SMALL_A113X_DECODER_CHECK) $(WHISPER_TURBO_A113X_ENCODER_BENCH) \
+	$(WHISPER_TURBO_A113X_TRANSCRIBE)
 
 whisper-small-tools: $(WHISPER_SMALL_ENCODER_CHECK) $(WHISPER_SMALL_ENCODER_BENCH) \
 	$(WHISPER_SMALL_DECODER_CHECK) $(WHISPER_SMALL_TRANSCRIBE)
@@ -145,6 +153,8 @@ minimindo-tools: $(MINIMINDO_LAYER_TEST) $(MINIMINDO_THINKER) $(MINIMINDO_CHAT) 
 minimindo-speech: $(MINIMINDO_SPEECH)
 
 minimindo-audio-encoder: $(MINIMINDO_AUDIO_ENCODER)
+
+whisper-turbo-tools: $(WHISPER_TURBO_ENCODER_BENCH) $(WHISPER_TURBO_TRANSCRIBE)
 
 qwen38-m3-bench: $(QWEN38_M3_BENCH) $(QWEN38_M3_METALLIB)
 	$(QWEN38_M3_BENCH) $(QWEN38_M3_METALLIB)
@@ -721,6 +731,65 @@ $(WHISPER_SMALL_A113X_TRANSCRIBE): $(WHISPER_SMALL)/commands/whisper_small_trans
 		$(WHISPER_SMALL_GENERIC)/whisper_small_frontend.c \
 		$(WHISPER_SMALL_A113X)/whisper_small_decoder.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
 
+$(WHISPER_TURBO_TRANSCRIBE): $(WHISPER_TURBO)/commands/whisper_turbo_transcribe.c \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_image.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_image.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_encoder.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_encoder.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_frontend.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_frontend.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_decoder.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_decoder.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_quant.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(WHISPER_TURBO_GENERIC) \
+		$(WHISPER_TURBO)/commands/whisper_turbo_transcribe.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_image.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_encoder.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_frontend.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_decoder.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
+$(WHISPER_TURBO_ENCODER_BENCH): $(WHISPER_TURBO)/benchmarks/whisper_turbo_encoder_bench.c \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_image.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_image.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_encoder.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_encoder.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_frontend.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_frontend.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_decoder.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_decoder.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_quant.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -I$(WHISPER_TURBO_GENERIC) \
+		$(WHISPER_TURBO)/benchmarks/whisper_turbo_encoder_bench.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_image.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_encoder.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_frontend.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_decoder.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
+$(WHISPER_TURBO_A113X_TRANSCRIBE): $(WHISPER_TURBO)/commands/whisper_turbo_transcribe.c \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_image.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_image.h \
+	$(WHISPER_TURBO_A113X)/whisper_turbo_encoder.c $(WHISPER_TURBO_A113X)/whisper_turbo_a113x_kernels.h \
+	$(WHISPER_TURBO_A113X)/whisper_turbo_frontend.c \
+	$(WHISPER_TURBO_A113X)/whisper_turbo_decoder.c \
+	$(WHISPER_TURBO_A113X)/whisper_turbo_a113x_decoder_kernels.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_decoder.h $(WHISPER_TURBO_GENERIC)/whisper_turbo_quant.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
+		-I$(WHISPER_TURBO_GENERIC) $(WHISPER_TURBO)/commands/whisper_turbo_transcribe.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_image.c \
+		$(WHISPER_TURBO_A113X)/whisper_turbo_encoder.c \
+		$(WHISPER_TURBO_A113X)/whisper_turbo_frontend.c \
+		$(WHISPER_TURBO_A113X)/whisper_turbo_decoder.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
+$(WHISPER_TURBO_A113X_ENCODER_BENCH): \
+	$(WHISPER_TURBO)/benchmarks/whisper_turbo_encoder_bench.c \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_image.c $(WHISPER_TURBO_GENERIC)/whisper_turbo_image.h \
+	$(WHISPER_TURBO_A113X)/whisper_turbo_encoder.c $(WHISPER_TURBO_A113X)/whisper_turbo_a113x_kernels.h \
+	$(WHISPER_TURBO_A113X)/whisper_turbo_frontend.c \
+	$(WHISPER_TURBO_A113X)/whisper_turbo_decoder.c \
+	$(WHISPER_TURBO_A113X)/whisper_turbo_a113x_decoder_kernels.h \
+	$(WHISPER_TURBO_GENERIC)/whisper_turbo_decoder.h $(WHISPER_TURBO_GENERIC)/whisper_turbo_quant.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OMPFLAGS) -mcpu=cortex-a53 -mtune=cortex-a53 \
+		-I$(WHISPER_TURBO_GENERIC) $(WHISPER_TURBO)/benchmarks/whisper_turbo_encoder_bench.c \
+		$(WHISPER_TURBO_GENERIC)/whisper_turbo_image.c \
+		$(WHISPER_TURBO_A113X)/whisper_turbo_encoder.c \
+		$(WHISPER_TURBO_A113X)/whisper_turbo_frontend.c \
+		$(WHISPER_TURBO_A113X)/whisper_turbo_decoder.c -o $@ $(LDFLAGS) $(OMPFLAGS) -lm
+
 $(WHISPER_SMALL_A113X_DECODER_CHECK): $(WHISPER_SMALL)/validation/whisper_small_decoder_check.c \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_image.c $(WHISPER_SMALL_GENERIC)/whisper_small_image.h \
 	$(WHISPER_SMALL_GENERIC)/whisper_small_encoder.c \
@@ -1010,7 +1079,9 @@ clean:
 		$(WHISPER_SMALL_ENCODER_BENCH) $(WHISPER_SMALL_A113X_BENCH) \
 		$(WHISPER_SMALL_A113X_CHECK) $(WHISPER_SMALL_DECODER_CHECK) \
 		$(WHISPER_SMALL_A113X_DECODER_CHECK) $(WHISPER_SMALL_TRANSCRIBE) \
-		$(WHISPER_SMALL_A113X_TRANSCRIBE) $(QWEN38_M3_AIR) \
+		$(WHISPER_SMALL_A113X_TRANSCRIBE) $(WHISPER_TURBO_TRANSCRIBE) \
+		$(WHISPER_TURBO_ENCODER_BENCH) $(WHISPER_TURBO_A113X_ENCODER_BENCH) \
+		$(WHISPER_TURBO_A113X_TRANSCRIBE) $(QWEN38_M3_AIR) \
 		$(QWEN38_M3_DELTANET_AIR) $(QWEN38_M3_METALLIB) \
 		$(QWEN38_M3_LAYER_AIR) \
 		$(QWEN38_M3_ATTENTION_AIR) \

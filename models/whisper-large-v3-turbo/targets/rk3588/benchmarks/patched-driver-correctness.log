@@ -1,0 +1,17 @@
+Test project /root/whisper-rk3588/rocket-userspace/build
+    Start 34: encoder_block_rocket
+1/6 Test #34: encoder_block_rocket ...............   Passed    0.77 sec
+    Start 43: matmul_int8_dequant_rocket
+2/6 Test #43: matmul_int8_dequant_rocket .........   Passed    0.01 sec
+    Start 45: matmul_correctness_matrix_rocket
+3/6 Test #45: matmul_correctness_matrix_rocket ...   Passed    0.13 sec
+    Start 51: matmul_int4_tiled_rocket
+4/6 Test #51: matmul_int4_tiled_rocket ...........   Passed    4.22 sec
+    Start 52: matmul_int4_groupwise_rocket
+5/6 Test #52: matmul_int4_groupwise_rocket .......   Passed    0.12 sec
+    Start 63: matmul_int4_prepacked_rocket
+6/6 Test #63: matmul_int4_prepacked_rocket .......   Passed    2.06 sec
+
+100% tests passed, 0 tests failed out of 6
+
+Total Test time (real) =   7.31 sec

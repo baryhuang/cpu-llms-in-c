@@ -1,0 +1,113 @@
+2026-08-20T17:58:25,265814618-07:00
+caremojo-hub-84f8f312
+Xunlong Orange Pi 5 Plus
+Linux caremojo-hub-84f8f312 6.18.43-current-rockchip64 #4 SMP PREEMPT Thu Aug  6 17:27:09 UTC 2026 aarch64 GNU/Linux
+Architecture:                            aarch64
+CPU op-mode(s):                          32-bit, 64-bit
+Byte Order:                              Little Endian
+CPU(s):                                  8
+On-line CPU(s) list:                     0-7
+Vendor ID:                               ARM
+Model name:                              Cortex-A55
+Model:                                   0
+Thread(s) per core:                      1
+Core(s) per socket:                      4
+Socket(s):                               1
+Stepping:                                r2p0
+Frequency boost:                         disabled
+CPU(s) scaling MHz:                      100%
+CPU max MHz:                             1800.0000
+CPU min MHz:                             408.0000
+BogoMIPS:                                48.00
+Flags:                                   fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+Model name:                              Cortex-A76
+Model:                                   0
+Thread(s) per core:                      1
+Core(s) per socket:                      4
+Socket(s):                               1
+Stepping:                                r4p0
+CPU(s) scaling MHz:                      100%
+CPU max MHz:                             2400.0000
+CPU min MHz:                             408.0000
+BogoMIPS:                                48.00
+Flags:                                   fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+L1d cache:                               384 KiB (8 instances)
+L1i cache:                               384 KiB (8 instances)
+L2 cache:                                2.5 MiB (8 instances)
+L3 cache:                                3 MiB (1 instance)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-7
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; CSV2, BHB
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+               total        used        free      shared  buff/cache   available
+Mem:           7.6Gi       470Mi       2.6Gi        10Mi       4.8Gi       7.1Gi
+Swap:          3.8Gi          0B       3.8Gi
+rocket parameters
+rocket_autosuspend_ms=1000
+rocket_npu_clk_hz=600000000
+rocket_npu_uv=0
+cpufreq
+policy0 governor=performance
+ min=408000
+ max=1800000
+policy4 governor=performance
+ min=408000
+ max=2400000
+policy6 governor=performance
+ min=408000
+ max=2400000
+device
+crw-rw---- 1 root render 261, 0 Aug 20 17:49 /dev/accel/accel0
+pins
+rocket-userspace 45b913aeb9911ebe61bfdc276319200f489a5326
+ggml-rocket 09a189ed4964dd8f9812c252cedb570fc3be56da
+whisper.cpp 4834a2327d008ace3ec5a9ed00f51454bcabbc1c
+patches 378f760ace36341f0a0125946f7ea3cb35f47d7a
+linux_source 09e26a2783b34d2804b5939a546c6e9291337cab
+audio
+659b371dc691312d8c5b4b2901e0d0a925d9ad0567aa51c48e1734f5d2429a2d  std30.wav
+models
+1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69  whisper.cpp/models/ggml-large-v3-turbo.bin
+317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1  whisper.cpp/models/ggml-large-v3-turbo-q8_0.bin
+e3c39fd7848fc7e6f64549fd9868f5cbb2929f603274a7cc71459e9f0c18718e  whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin
+955e829343b811004a12daaf60f1f7037d72e53555700c04546d49b426a3db84  whisper.cpp/models/ggml-large-v3-turbo-q4_k.bin
+9d45b294523db2e458a19bfe42c8597bb5f02948bd87a1ac05e77970d362d6ff  whisper.cpp/models/ggml-large-v3-turbo-q4_0.bin
+whisper.cpp/models/ggml-large-v3-turbo.bin 1624555275
+whisper.cpp/models/ggml-large-v3-turbo-q8_0.bin 874188075
+whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin 574041195
+whisper.cpp/models/ggml-large-v3-turbo-q4_k.bin 473992235
+whisper.cpp/models/ggml-large-v3-turbo-q4_0.bin 473992235
+driver init
+[ 1939.906447] rocket fdac0000.npu: rocket: core 1 NPU vdd -> 800000 uV (reads back 800000 uV)
+[ 1939.906463] rocket fdac0000.npu: rocket: core 1 NPU clk -> 600000000 Hz (reads back 600000000)
+[ 1939.907029] rocket fdad0000.npu: rocket: core 2 NPU vdd -> 800000 uV (reads back 800000 uV)
+[ 1939.907047] rocket fdad0000.npu: rocket: core 2 NPU clk -> 600000000 Hz (reads back 600000000)
+[ 1958.806212] rocket fdab0000.npu: rocket: core 0 NPU vdd -> 800000 uV (reads back 800000 uV)
+[ 1958.806256] rocket fdab0000.npu: rocket: core 0 NPU clk -> 600000000 Hz (reads back 600000000)
+[ 1958.806861] rocket fdac0000.npu: rocket: core 1 NPU vdd -> 800000 uV (reads back 800000 uV)
+[ 1958.806882] rocket fdac0000.npu: rocket: core 1 NPU clk -> 600000000 Hz (reads back 600000000)
+[ 1958.807442] rocket fdad0000.npu: rocket: core 2 NPU vdd -> 800000 uV (reads back 800000 uV)
+[ 1958.807474] rocket fdad0000.npu: rocket: core 2 NPU clk -> 600000000 Hz (reads back 600000000)
+[ 1976.594995] rocket fdab0000.npu: rocket: core 0 NPU vdd -> 800000 uV (reads back 800000 uV)
+[ 1976.595033] rocket fdab0000.npu: rocket: core 0 NPU clk -> 600000000 Hz (reads back 600000000)
+[ 1976.595636] rocket fdac0000.npu: rocket: core 1 NPU vdd -> 800000 uV (reads back 800000 uV)
+[ 1976.595655] rocket fdac0000.npu: rocket: core 1 NPU clk -> 600000000 Hz (reads back 600000000)
+[ 1976.596219] rocket fdad0000.npu: rocket: core 2 NPU vdd -> 800000 uV (reads back 800000 uV)
+[ 1976.596238] rocket fdad0000.npu: rocket: core 2 NPU clk -> 600000000 Hz (reads back 600000000)

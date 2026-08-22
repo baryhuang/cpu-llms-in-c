@@ -1,0 +1,164 @@
+{
+  "target": "a113x",
+  "model": "whisper-large-v3-turbo (own C11 runtime, not whisper.cpp)",
+  "machine": {
+    "board": "ThirdReality LinuxBox TRHub-V3 (Amlogic A113X class)",
+    "hostname": "caremojo-hub-87a2c1b7",
+    "cpu": "4x Cortex-A53 (part 0xd03) @ 1.416 GHz max, NEON only (no dotprod/i8mm/fp16)",
+    "memory_mb": 1963,
+    "swap": "982 MB zram (untouched in all runs)",
+    "os": "Armbian, kernel 6.6 meson64, gcc 12.2.0",
+    "governor": "performance pinned on all 4 cores before certified runs"
+  },
+  "methodology": {
+    "runtime": "models/whisper-large-v3-turbo generic C11 runtime + targets/a113x grouped GEMM, attention and precision-preserving double-NEON stem kernels; gcc 12.2 -O3 -std=c11 -fopenmp -mcpu=cortex-a53 -mtune=cortex-a53",
+    "images": "compiler/compile_whisper_turbo_image.py from the pinned F16 checkpoint (pins.json); q4/q8/q5 grouped weights (group 128, BF16 scale), biases/norms/convs F32",
+    "speed_and_rss": "on-device fixed30 quantization chain plus adjacent compact JFK A/B for the stem increment; four OpenMP threads, performance governor, GNU time -v peak RSS",
+    "quality": "transcript identity vs the F32 correctness baseline on jfk.wav (11 s) and the reviewer's std30.wav (27.3 s): every quantized mode must transcribe word-identically (after EnglishTextNormalizer-style normalization) to the F32 image running the same runtime on x86; device NEON output additionally checked identical to the x86 scalar output. Owner-directed scope: no 32-file battery for this small-box target",
+    "fp_note": "per owner directive, no F32/FP16 runs on the device - the 3.24 GB F32 image is the sandbox-only correctness baseline",
+    "wer_platform_note": "scalar x86 and NEON device paths differ only in float summation order; device transcripts spot-checked word-identical to x86 on jfk.wav and std30.wav for every mode measured"
+  },
+  "image_sizes_bytes": {
+    "f32": 3236281216,
+    "q4": 447416512,
+    "q5": 547465472,
+    "q8": 847612352
+  },
+  "x86_cross_validation": {
+    "date": "2026-08-20",
+    "jfk_transcripts": "f32, q4, q8, q5 byte-identical (correct JFK quote)",
+    "std30_transcripts": "all modes word-identical to f32 (q4 renders a cased/punctuated variant, WER-neutral after normalization)",
+    "records": "benchmarks/x86-validation/"
+  },
+  "device_runs": {
+    "date": "2026-08-20",
+    "window": "fixed30 quantization baseline, threads=4 (OpenMP)",
+    "q4": {
+      "jfk_11s": {
+        "encoder_seconds": 1307.89,
+        "decoder_core_seconds": 14.62,
+        "output_head_seconds": 0.93,
+        "total_seconds": 1323.84,
+        "generated_tokens": 26,
+        "peak_rss_mb": 496.8
+      },
+      "std30_27s": {
+        "encoder_seconds": 1272.4,
+        "decoder_core_seconds": 24.43,
+        "output_head_seconds": 2.86,
+        "total_seconds": 1300.08,
+        "generated_tokens": 84,
+        "decoder_ms_per_step": 278,
+        "peak_rss_mb": 500.6
+      },
+      "transcripts": "word-identical to the x86 F32 baseline on both files"
+    },
+    "q5": {
+      "jfk_11s": {
+        "encoder_seconds": 1256.77,
+        "decoder_core_seconds": 22.19,
+        "output_head_seconds": 1.31,
+        "total_seconds": 1280.76,
+        "generated_tokens": 26,
+        "peak_rss_mb": 591.9
+      },
+      "std30_27s": {
+        "encoder_seconds": 1274.54,
+        "decoder_core_seconds": 30.35,
+        "output_head_seconds": 3.99,
+        "total_seconds": 1309.35,
+        "generated_tokens": 76,
+        "peak_rss_mb": 595.6
+      },
+      "transcripts": "word-identical to the x86 F32 baseline on both files"
+    },
+    "q8": {
+      "jfk_11s": {
+        "encoder_seconds": 1378.85,
+        "decoder_core_seconds": 15.27,
+        "output_head_seconds": 1.72,
+        "total_seconds": 1396.28,
+        "generated_tokens": 26,
+        "peak_rss_mb": 877.4
+      },
+      "std30_27s": {
+        "encoder_seconds": 1245.21,
+        "decoder_core_seconds": 23.04,
+        "output_head_seconds": 2.56,
+        "total_seconds": 1271.23,
+        "generated_tokens": 76,
+        "peak_rss_mb": 880.6
+      },
+      "transcripts": "word-identical to the x86 F32 baseline on both files"
+    },
+    "ondemand_governor_reference": {
+      "note": "first q4 jfk run before the governor was pinned: total 1614.59 s (encoder 1598.70) - ondemand downclocks between parallel regions; kept as benchmarks/device/jfk-q4-ondemand.*",
+      "total_seconds": 1614.59
+    }
+  },
+  "optimization_increment": {
+    "name": "precision-preserving double-NEON encoder stem",
+    "implementation": "vectorize four adjacent convolution frames while retaining independent float64 accumulation in original channel/tap order; scalar boundary frames",
+    "compact_jfk_q4": {
+      "baseline": {
+        "stem_seconds": 24.764284,
+        "encoder_seconds": 241.722012,
+        "total_seconds": 249.211947,
+        "peak_rss_kib": 458760,
+        "cpu_percent": 315
+      },
+      "optimized": {
+        "stem_seconds": 15.767232,
+        "encoder_seconds": 229.763245,
+        "total_seconds": 236.933801,
+        "peak_rss_kib": 458956,
+        "cpu_percent": 314
+      },
+      "stem_speedup": 1.570617,
+      "end_to_end_speedup": 1.051821,
+      "fixed30_baseline_to_optimized_compact_speedup": 5.587385,
+      "quality": "generated token ids, printed top logits and transcript identical"
+    },
+    "compact_jfk_q5": {
+      "baseline": {
+        "stem_seconds": 25.591630,
+        "encoder_seconds": 244.711712,
+        "total_seconds": 255.093171,
+        "peak_rss_kib": 556136,
+        "cpu_percent": 309
+      },
+      "optimized": {
+        "stem_seconds": 16.719549,
+        "encoder_seconds": 229.851900,
+        "total_seconds": 240.125399,
+        "peak_rss_kib": 556248,
+        "cpu_percent": 316
+      },
+      "stem_speedup": 1.530641,
+      "end_to_end_speedup": 1.062333,
+      "fixed30_baseline_to_optimized_compact_speedup": 5.333727,
+      "quality": "generated token ids, printed top logits and transcript identical"
+    },
+    "stem_microbenchmark_1100_frames": {
+      "baseline_seconds": [29.009422, 28.604233],
+      "optimized_seconds": [19.991012, 18.157429],
+      "baseline_mean_seconds": 28.806828,
+      "optimized_mean_seconds": 19.074221,
+      "speedup": 1.510249,
+      "checksum_all_runs": 1635322.4827359049
+    },
+    "rejected_four_row_gemm": {
+      "microbenchmark": "up to 14.8% faster for four layers at 150 output frames",
+      "compact_q5_baseline_seconds": 255.093171,
+      "compact_q5_four_row_seconds": 257.359803,
+      "end_to_end_regression_percent": 0.889,
+      "decision": "rejected and removed from release source"
+    },
+    "records": "benchmarks/device/"
+  },
+  "reading": {
+    "position": "A53-class CPU-only fallback: recommended Q4 compact JFK takes 236.934 s for 11 s audio at 448.2 MiB RSS; offline/archival transcription, not realtime",
+    "next_bottleneck": "after the stem increment, the 32 encoder Transformer blocks account for about 90% of compact Q4 end-to-end time"
+  },
+  "quality_scope_note": "owner directive 2026-08-20: the 32-file LibriSpeech battery is not run for this target - full-load certification is not worth it on this class of box; spot-check identity above is the recorded quality evidence"
+}
