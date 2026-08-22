@@ -6,6 +6,12 @@
 
 typedef struct minimindo_audio_encoder minimindo_audio_encoder;
 
+typedef struct {
+    double frontend_ms;
+    double encoder_ms;
+    double projector_ms;
+} minimindo_audio_encoder_profile;
+
 minimindo_audio_encoder *minimindo_audio_encoder_open(const char *image_path,
                                                        char *error,
                                                        size_t error_capacity);
@@ -22,5 +28,9 @@ int minimindo_audio_encoder_encode_pcm16(minimindo_audio_encoder *model,
                                          size_t *output_frames,
                                          char *error,
                                          size_t error_capacity);
+
+void minimindo_audio_encoder_last_profile(
+    const minimindo_audio_encoder *model,
+    minimindo_audio_encoder_profile *profile);
 
 #endif

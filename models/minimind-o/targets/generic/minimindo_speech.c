@@ -29,6 +29,7 @@ static minimindo_audio_encoder *resident_audio_encoder;
 static const uint32_t resident_context = 512;
 
 static double monotonic_seconds(void);
+static double process_cpu_seconds(void);
 
 static int ensure_resident(const char *thinker_path,const char *talker_path,
                            const char *tokenizer_path,const char *mimi_path,
@@ -97,14 +98,44 @@ static uint32_t sample_top_k(const float *logits, uint32_t count, uint32_t top_k
                              size_t history_count, float repetition_penalty,
                              candidate *work)
 {
-    for (uint32_t i = 0; i < count; ++i) {
+    if (top_k > count) top_k = count;
+    for (uint32_t i = 0; i < top_k; ++i) {
         float score = logits[i];
         for (size_t j = 0; j < history_count; ++j)
             if (history[j] == i) { score = score > 0 ? score / repetition_penalty : score * repetition_penalty; break; }
         work[i] = (candidate){score / temperature, i};
     }
-    qsort(work, count, sizeof(*work), descending);
-    if (top_k > count) top_k = count;
+    /* Keep only the best k in a min-heap instead of sorting all 2,112 logits. */
+    for (uint32_t parent = top_k / 2U; parent != 0U; ) {
+        --parent;
+        uint32_t root = parent;
+        while (root * 2U + 1U < top_k) {
+            uint32_t child = root * 2U + 1U;
+            if (child + 1U < top_k &&
+                work[child + 1U].score < work[child].score) ++child;
+            if (work[root].score <= work[child].score) break;
+            candidate swap = work[root]; work[root] = work[child];
+            work[child] = swap; root = child;
+        }
+    }
+    for (uint32_t i = top_k; i < count; ++i) {
+        float score = logits[i];
+        for (size_t j = 0; j < history_count; ++j)
+            if (history[j] == i) { score = score > 0 ? score / repetition_penalty : score * repetition_penalty; break; }
+        candidate value = {score / temperature, i};
+        if (value.score <= work[0].score) continue;
+        work[0] = value;
+        uint32_t root = 0;
+        while (root * 2U + 1U < top_k) {
+            uint32_t child = root * 2U + 1U;
+            if (child + 1U < top_k &&
+                work[child + 1U].score < work[child].score) ++child;
+            if (work[root].score <= work[child].score) break;
+            candidate swap = work[root]; work[root] = work[child];
+            work[child] = swap; root = child;
+        }
+    }
+    qsort(work, top_k, sizeof(*work), descending);
     const float maximum = work[0].score;
     double total = 0;
     for (uint32_t i = 0; i < top_k; ++i) total += exp(work[i].score - maximum);
@@ -183,6 +214,7 @@ typedef struct {
     int producer_done;
     int failed;
     double decode_end;
+    double decode_cpu_end;
     char error[256];
 } mimi_decode_worker;
 
@@ -191,16 +223,22 @@ static void *mimi_decode_thread(void *opaque)
     mimi_decode_worker *worker = opaque;
     const size_t samples_per_frame =
         minimindo_mimi_samples_for_frames(worker->model, 1);
+#if defined(_OPENMP)
+    /* The main model owns all four A53 cores until producer_done. */
+    omp_set_num_threads(worker->drain_threads);
+#endif
     while (1) {
         uint32_t frame[MINIMINDO_MIMI_CODEBOOKS];
         pthread_mutex_lock(&worker->mutex);
-        while (worker->decoded_frames == worker->queued_frames &&
-               !worker->producer_done && !worker->failed)
+        while (!worker->producer_done && !worker->failed)
             pthread_cond_wait(&worker->ready, &worker->mutex);
         if (worker->failed ||
             (worker->producer_done &&
              worker->decoded_frames == worker->queued_frames)) {
-            if (!worker->failed) worker->decode_end = monotonic_seconds();
+            if (!worker->failed) {
+                worker->decode_end = monotonic_seconds();
+                worker->decode_cpu_end = process_cpu_seconds();
+            }
             pthread_mutex_unlock(&worker->mutex);
             break;
         }
@@ -209,14 +247,7 @@ static void *mimi_decode_thread(void *opaque)
              codebook < MINIMINDO_MIMI_CODEBOOKS; ++codebook)
             frame[codebook] =
                 worker->codes[index * MINIMINDO_MIMI_CODEBOOKS + codebook];
-        const int producer_done = worker->producer_done;
         pthread_mutex_unlock(&worker->mutex);
-#if defined(_OPENMP)
-        /* Leave the main model nearly all cores while tokens are arriving. */
-        omp_set_num_threads(producer_done ? worker->drain_threads : 1);
-#else
-        (void)producer_done;
-#endif
         size_t produced = 0;
         const int result = minimindo_mimi_stream_decode(
             worker->stream, frame, 1,
@@ -323,6 +354,15 @@ static int16_t pcm16(float sample)
     return (int16_t)lrintf(sample * 32767.0f);
 }
 
+static size_t playback_start_frames(size_t total_frames)
+{
+    if (total_frames <= 4U) return total_frames;
+    size_t frames = (total_frames * 3U + 3U) / 4U;
+    if (frames < 4U) frames = 4U;
+    if (frames >= total_frames) frames = total_frames - 1U;
+    return frames;
+}
+
 static int stream_worker_to_alsa(mimi_decode_worker *worker,
                                  const char *device, unsigned turn,
                                  double inference_start,
@@ -330,22 +370,29 @@ static int stream_worker_to_alsa(mimi_decode_worker *worker,
                                  size_t *queue_waits,
                                  double *queue_wait_ms)
 {
-    const size_t total_frames = worker->queued_frames;
     const size_t samples_per_frame =
         minimindo_mimi_samples_for_frames(worker->model, 1);
-    size_t start_frames = (total_frames * 3U + 3U) / 4U;
-    if (start_frames < 4U) start_frames = 4U;
-    if (total_frames > 1U && start_frames >= total_frames)
-        start_frames = total_frames - 1U;
-    if (start_frames > total_frames) start_frames = total_frames;
-
+    /*
+     * Do not let ALSA consume until the producer has declared the final frame
+     * count.  Mimi is about 0.5x real time on this A53, so a fixed threshold
+     * can exhaust the pipe on a longer response.  Keeping 75% decoded lets
+     * the final quarter continue in parallel without starving playback.  Very
+     * short responses are decoded completely because no useful overlap exists.
+     */
     pthread_mutex_lock(&worker->mutex);
-    while (worker->decoded_frames < start_frames && !worker->failed)
+    while (!worker->failed) {
+        if (worker->producer_done && worker->queued_frames != 0U &&
+            worker->decoded_frames >=
+                playback_start_frames(worker->queued_frames)) break;
         pthread_cond_wait(&worker->ready, &worker->mutex);
+    }
     const size_t buffered_frames = worker->decoded_frames;
+    const size_t target_frames =
+        playback_start_frames(worker->queued_frames);
     const int failed = worker->failed;
+    const int empty = worker->producer_done && worker->queued_frames == 0U;
     pthread_mutex_unlock(&worker->mutex);
-    if (failed) return -1;
+    if (failed || empty) return -1;
 
     char command[256];
     snprintf(command, sizeof(command),
@@ -361,19 +408,23 @@ static int stream_worker_to_alsa(mimi_decode_worker *worker,
     (void)setvbuf(player, NULL, _IONBF, 0);
 
     int result = 0;
-    for (size_t frame = 0; frame < total_frames; ++frame) {
+    for (size_t frame = 0; ; ++frame) {
         const double wait_start = monotonic_seconds();
         pthread_mutex_lock(&worker->mutex);
         const int had_to_wait = worker->decoded_frames <= frame;
-        while (worker->decoded_frames <= frame && !worker->failed)
+        while (worker->decoded_frames <= frame && !worker->failed &&
+               !(worker->producer_done && worker->queued_frames <= frame))
             pthread_cond_wait(&worker->ready, &worker->mutex);
         const int decode_failed = worker->failed;
+        const int finished = worker->producer_done &&
+                             worker->queued_frames <= frame;
         pthread_mutex_unlock(&worker->mutex);
+        if (decode_failed) { result = -1; break; }
+        if (finished) break;
         if (had_to_wait) {
             ++*queue_waits;
             *queue_wait_ms += (monotonic_seconds() - wait_start) * 1000.0;
         }
-        if (decode_failed) { result = -1; break; }
         const float *source = worker->audio + frame * samples_per_frame;
         for (size_t sample = 0; sample < samples_per_frame; ++sample)
             pcm[sample] = pcm16(source[sample]);
@@ -386,8 +437,9 @@ static int stream_worker_to_alsa(mimi_decode_worker *worker,
             *first_audio_ms =
                 (monotonic_seconds() - inference_start) * 1000.0;
             printf("EVENT first_audio turn=%u elapsed_ms=%.0f "
-                   "buffered_frames=%zu buffered_ms=%zu\n",
+                   "buffered_frames=%zu target_frames=%zu buffered_ms=%zu\n",
                    turn, *first_audio_ms, buffered_frames,
+                   target_frames,
                    buffered_frames * samples_per_frame * 1000U /
                        minimindo_mimi_sample_rate(worker->model));
             fflush(stdout);
@@ -396,6 +448,27 @@ static int stream_worker_to_alsa(mimi_decode_worker *worker,
     free(pcm);
     if (pclose(player) != 0) result = -1;
     return result;
+}
+
+typedef struct {
+    mimi_decode_worker *decoder;
+    const char *device;
+    unsigned turn;
+    double inference_start;
+    double first_audio_ms;
+    double queue_wait_ms;
+    size_t queue_waits;
+    int result;
+} alsa_playback_worker;
+
+static void *alsa_playback_thread(void *opaque)
+{
+    alsa_playback_worker *worker = opaque;
+    worker->result = stream_worker_to_alsa(
+        worker->decoder, worker->device, worker->turn,
+        worker->inference_start, &worker->first_audio_ms,
+        &worker->queue_waits, &worker->queue_wait_ms);
+    return NULL;
 }
 
 static uint16_t read_u16(const unsigned char *p){return(uint16_t)(p[0]|p[1]<<8);}
@@ -441,41 +514,102 @@ static int run(const char *thinker_path, const char *talker_path,
     const uint32_t tv = minimindo_thinker_vocab_size(thinker), av = minimindo_talker_vocab_size(talker);
     const uint32_t hidden = minimindo_thinker_hidden_size(thinker), pad = minimindo_talker_pad_token(talker);
     float *text_logits = malloc((size_t)tv*sizeof(float));
-    float *audio_logits = malloc((size_t)8*av*sizeof(float)); float *bridge=malloc((size_t)hidden*sizeof(float));
+    float *audio_logits = malloc((size_t)8*av*sizeof(float)); float *bridge=NULL;
     candidate *work=malloc((tv>av?tv:av)*sizeof(candidate));
     uint32_t *generated=calloc(max_tokens,sizeof(uint32_t));
     uint32_t *all_codes=malloc((size_t)8*max_tokens*sizeof(uint32_t));
     uint32_t *frames=malloc((size_t)8*max_tokens*sizeof(uint32_t));
-    minimindo_audio_encoder *audio_encoder=resident_audio_encoder;float *audio_embeddings=NULL;size_t audio_frames=0;char *audio_user=NULL;int16_t *owned_pcm=NULL;
+    minimindo_audio_encoder *audio_encoder=resident_audio_encoder;minimindo_audio_encoder_profile audio_profile={0};float *audio_embeddings=NULL;size_t audio_frames=0;char *audio_user=NULL;int16_t *owned_pcm=NULL;
     const double audio_encode_start = monotonic_seconds();
+    const double audio_encode_cpu_start = process_cpu_seconds();
     if(audio_path||provided_pcm){const int16_t *pcm=provided_pcm;size_t pcm_count=provided_pcm_count;if(audio_path&&load_wav(audio_path,&owned_pcm,&pcm_count)){fprintf(stderr,"audio input must be 16 kHz mono PCM WAV\n");return -1;}if(owned_pcm)pcm=owned_pcm;
         size_t frame_capacity=minimindo_audio_encoder_frames(pcm_count);audio_embeddings=malloc(frame_capacity*768*sizeof(float));
-        if(!audio_encoder||!audio_embeddings||minimindo_audio_encoder_encode_pcm16(audio_encoder,pcm,pcm_count,audio_embeddings,frame_capacity*768,&audio_frames,error,sizeof(error))){fprintf(stderr,"audio encoder: %s\n",error);free(owned_pcm);return -1;}free(owned_pcm);audio_user=audio_prompt(audio_frames);prompt_text=audio_user;}
+        if(!audio_encoder||!audio_embeddings||minimindo_audio_encoder_encode_pcm16(audio_encoder,pcm,pcm_count,audio_embeddings,frame_capacity*768,&audio_frames,error,sizeof(error))){fprintf(stderr,"audio encoder: %s\n",error);free(owned_pcm);return -1;}minimindo_audio_encoder_last_profile(audio_encoder,&audio_profile);free(owned_pcm);audio_user=audio_prompt(audio_frames);prompt_text=audio_user;}
     const double audio_encode_end = monotonic_seconds();
+    const double audio_encode_cpu_end = process_cpu_seconds();
     char *formatted=format_prompt(prompt_text); uint32_t *prompt=NULL; size_t prompt_count=0;
-    if(!text_logits||!audio_logits||!bridge||!work||!generated||!all_codes||!frames||!formatted||
+    if(!text_logits||!audio_logits||!work||!generated||!all_codes||!frames||!formatted||
        encode(tokenizer,formatted,&prompt,&prompt_count,error,sizeof(error))!=0) { fprintf(stderr,"allocation/tokenizer: %s\n",error); return -1; }
     uint32_t current_audio[8]; for(int i=0;i<8;++i) current_audio[i]=pad;
+    bridge=malloc(prompt_count*(size_t)hidden*sizeof(float));
+    float *replacement_embeddings=calloc(prompt_count*(size_t)hidden,sizeof(float));
+    uint8_t *replacement_mask=calloc(prompt_count,sizeof(uint8_t));
+    if(!bridge||!replacement_embeddings||!replacement_mask){fprintf(stderr,"prefill allocation failed\n");return -1;}
     size_t audio_cursor=0;
-    for(size_t p=0;p<prompt_count;++p) {
-        int thinker_result;
-        if(prompt[p]==16&&audio_cursor<audio_frames)thinker_result=minimindo_thinker_forward_embedding(thinker,audio_embeddings+audio_cursor++*768,768,text_logits,tv,bridge,hidden,error,sizeof(error));
-        else thinker_result=minimindo_thinker_forward_bridge(thinker,prompt[p],text_logits,tv,bridge,hidden,error,sizeof(error));
-        if(thinker_result||
-           minimindo_talker_forward(talker,bridge,hidden,current_audio,NULL,0,audio_logits,(size_t)8*av,error,sizeof(error))) { fprintf(stderr,"prefill: %s\n",error);return -1; }
-    }
+    for(size_t p=0;p<prompt_count;++p)if(prompt[p]==16&&audio_cursor<audio_frames){
+        memcpy(replacement_embeddings+p*(size_t)hidden,
+               audio_embeddings+audio_cursor++*(size_t)hidden,
+               hidden*sizeof(float));replacement_mask[p]=1;}
     if(audio_cursor!=audio_frames){fprintf(stderr,"audio token/embedding count mismatch: %zu/%zu\n",audio_cursor,audio_frames);return -1;}
+    double prefill_thinker_seconds=0.0,prefill_talker_seconds=0.0;
+#if defined(MINIMINDO_SEQUENTIAL_PREFILL)
+    for(size_t p=0;p<prompt_count;++p) {
+        const int need_text_logits=p+1U==prompt_count;
+        double stage_start=monotonic_seconds();
+        int thinker_result;
+        if(replacement_mask[p]){
+            const float *embedding=replacement_embeddings+p*(size_t)hidden;
+            thinker_result=need_text_logits?minimindo_thinker_forward_embedding(
+                thinker,embedding,hidden,text_logits,tv,bridge,hidden,error,sizeof(error)):
+                minimindo_thinker_prefill_embedding(thinker,embedding,hidden,
+                                                     bridge,hidden,error,sizeof(error));}
+        else thinker_result=need_text_logits?minimindo_thinker_forward_bridge(
+            thinker,prompt[p],text_logits,tv,bridge,hidden,error,sizeof(error)):
+            minimindo_thinker_prefill_bridge(thinker,prompt[p],bridge,hidden,
+                                             error,sizeof(error));
+        prefill_thinker_seconds+=monotonic_seconds()-stage_start;
+        stage_start=monotonic_seconds();
+        int talker_result=minimindo_talker_forward_masked(
+            talker,bridge,hidden,current_audio,NULL,0,0,NULL,0,error,sizeof(error));
+        prefill_talker_seconds+=monotonic_seconds()-stage_start;
+        if(thinker_result||talker_result){fprintf(stderr,"prefill: %s\n",error);return -1;}
+    }
+#else
+    double stage_start=monotonic_seconds();
+    int thinker_result=minimindo_thinker_prefill_sequence(
+        thinker,prompt,prompt_count,replacement_embeddings,replacement_mask,
+        text_logits,tv,bridge,prompt_count*(size_t)hidden,error,sizeof(error));
+    prefill_thinker_seconds=monotonic_seconds()-stage_start;
+    if(thinker_result){fprintf(stderr,"prefill: %s\n",error);return -1;}
+    stage_start=monotonic_seconds();
+    int talker_result=minimindo_talker_prefill_sequence(
+        talker,bridge,prompt_count*(size_t)hidden,current_audio,prompt_count,
+        error,sizeof(error));
+    prefill_talker_seconds=monotonic_seconds()-stage_start;
+    if(talker_result) { fprintf(stderr,"prefill: %s\n",error);return -1; }
+#endif
     const double prefill_end = monotonic_seconds();
+    const double prefill_cpu_end = process_cpu_seconds();
     mimi_decode_worker decoder;
     int decoder_started = 0;
+    alsa_playback_worker playback;
+    pthread_t playback_thread;
+    int playback_started = 0;
     if (stream_mimi) {
         if (mimi_decode_worker_start(&decoder, mimi, max_tokens) != 0) {
             fprintf(stderr, "Mimi stream worker: %s\n", decoder.error);
             return -1;
         }
         decoder_started = 1;
+        if (playback_device != NULL) {
+            memset(&playback, 0, sizeof(playback));
+            playback.decoder = &decoder;
+            playback.device = playback_device;
+            playback.turn = live_turn;
+            playback.inference_start = run_start;
+            if (pthread_create(&playback_thread, NULL, alsa_playback_thread,
+                               &playback) != 0) {
+                fprintf(stderr, "ALSA playback worker start failed\n");
+                mimi_decode_worker_signal_done(&decoder);
+                (void)mimi_decode_worker_finish(&decoder);
+                free(decoder.audio);
+                return -1;
+            }
+            playback_started = 1;
+        }
     }
     random_state=seed?seed:UINT64_C(1); size_t steps=0, frame_count=0; int text_finished=0, first_finished=1;
+    double generate_thinker_seconds=0.0,generate_talker_seconds=0.0;
     int stop[8]; for(int i=0;i<8;++i)stop[i]=-1;
     while(steps<max_tokens) {
         uint32_t text_token;
@@ -504,6 +638,9 @@ static int run(const char *thinker_path, const char *talker_path,
                     frames[(size_t)c*max_tokens+frame_count]=frame[c];
                 if (decoder_started && mimi_decode_worker_push(&decoder, frame) != 0) {
                     fprintf(stderr, "Mimi stream queue failed\n");
+                    mimi_decode_worker_signal_done(&decoder);
+                    if (playback_started)
+                        (void)pthread_join(playback_thread, NULL);
                     (void)mimi_decode_worker_finish(&decoder);
                     free(decoder.audio);
                     return -1;
@@ -516,10 +653,21 @@ static int run(const char *thinker_path, const char *talker_path,
         if(text_finished&&all_stopped)break;
         for(uint32_t c=0;c<8;++c)current_audio[c]=pad;
         for(int c=0;c<8&&c<audio_step+1;++c)current_audio[c]=all_codes[(size_t)c*max_tokens+steps-1];
-        if(minimindo_thinker_forward_bridge(thinker,text_token,text_logits,tv,bridge,hidden,error,sizeof(error))||
-           minimindo_talker_forward(talker,bridge,hidden,current_audio,NULL,0,audio_logits,(size_t)8*av,error,sizeof(error))) {
+        double stage_start=monotonic_seconds();
+        int thinker_result=minimindo_thinker_forward_bridge(thinker,text_token,text_logits,tv,bridge,hidden,error,sizeof(error));
+        generate_thinker_seconds+=monotonic_seconds()-stage_start;
+        uint32_t logits_mask=0;
+        for(uint32_t c=0;c<8&&c<steps;++c)
+            if(stop[c]<0)logits_mask|=UINT32_C(1)<<c;
+        stage_start=monotonic_seconds();
+        int talker_result=minimindo_talker_forward_masked(talker,bridge,hidden,current_audio,NULL,0,logits_mask,audio_logits,(size_t)8*av,error,sizeof(error));
+        generate_talker_seconds+=monotonic_seconds()-stage_start;
+        if(thinker_result||talker_result) {
             fprintf(stderr,"decode: %s\n",error);
             if (decoder_started) {
+                mimi_decode_worker_signal_done(&decoder);
+                if (playback_started)
+                    (void)pthread_join(playback_thread, NULL);
                 (void)mimi_decode_worker_finish(&decoder);
                 free(decoder.audio);
             }
@@ -528,6 +676,8 @@ static int run(const char *thinker_path, const char *talker_path,
         if(!text_finished&&text_token==2)text_finished=1;
     }
     const double generation_end = monotonic_seconds();
+    const double generation_cpu_end = process_cpu_seconds();
+    if (decoder_started) mimi_decode_worker_signal_done(&decoder);
     if (playback_device != NULL) {
         printf("EVENT model_end turn=%u elapsed_ms=%.0f\n", live_turn,
                (generation_end - run_start) * 1000.0);
@@ -538,6 +688,8 @@ static int run(const char *thinker_path, const char *talker_path,
     if(frame_count==0){
         fprintf(stderr,"Talker produced no complete Mimi frames\n");
         if (decoder_started) {
+            if (playback_started)
+                (void)pthread_join(playback_thread, NULL);
             (void)mimi_decode_worker_finish(&decoder);
             free(decoder.audio);
         }
@@ -551,12 +703,14 @@ static int run(const char *thinker_path, const char *talker_path,
     size_t queue_waits = 0;
     double queue_wait_ms = 0.0;
     double mimi_end = 0.0;
+    double mimi_cpu_end = generation_cpu_end;
     if (decoder_started) {
-        mimi_decode_worker_signal_done(&decoder);
-        if (playback_device != NULL) {
-            playback_result = stream_worker_to_alsa(
-                &decoder, playback_device, live_turn, run_start,
-                &first_audio_ms, &queue_waits, &queue_wait_ms);
+        if (playback_started) {
+            (void)pthread_join(playback_thread, NULL);
+            playback_result = playback.result;
+            first_audio_ms = playback.first_audio_ms;
+            queue_waits = playback.queue_waits;
+            queue_wait_ms = playback.queue_wait_ms;
             printf("EVENT playback_end turn=%u result=%d "
                    "elapsed_ms=%.0f queue_waits=%zu queue_wait_ms=%.0f\n",
                    live_turn, playback_result,
@@ -572,6 +726,7 @@ static int run(const char *thinker_path, const char *talker_path,
         audio = decoder.audio;
         samples = decoder.samples;
         mimi_end = decoder.decode_end;
+        mimi_cpu_end = decoder.decode_cpu_end;
     } else {
         mimi_codes=malloc((size_t)8*frame_count*sizeof(uint32_t));
         if(!mimi_codes){fprintf(stderr,"Mimi code compaction allocation failed\n");return -1;}
@@ -586,6 +741,7 @@ static int run(const char *thinker_path, const char *talker_path,
             return -1;
         }
         mimi_end = monotonic_seconds();
+        mimi_cpu_end = process_cpu_seconds();
     }
     if(write_wav(wav_path,audio,samples,minimindo_mimi_sample_rate(mimi))){
         fprintf(stderr,"Mimi/WAV write failed\n");
@@ -595,25 +751,49 @@ static int run(const char *thinker_path, const char *talker_path,
     }
     printf("{\"text\":\"");
     for(const unsigned char *p=(unsigned char *)(answer?answer:"");*p;++p){if(*p=='"'||*p=='\\')putchar('\\');if(*p=='\n'){fputs("\\n",stdout);continue;}putchar(*p);}
-    printf("\",\"steps\":%zu,\"audio_frames\":%zu,\"samples\":%zu,"
-           "\"seed\":%llu,\"audio_encode_ms\":%.0f,\"prefill_ms\":%.0f,"
-           "\"generate_ms\":%.0f,\"mimi_drain_ms\":%.0f,"
+    printf("\",\"steps\":%zu,\"audio_frames\":%zu,\"input_frames\":%zu,"
+           "\"prompt_tokens\":%zu,\"samples\":%zu,\"seed\":%llu,"
+           "\"audio_encode_ms\":%.0f,\"audio_frontend_ms\":%.0f,"
+           "\"audio_encoder_ms\":%.0f,\"audio_projector_ms\":%.0f,\"prefill_ms\":%.0f,"
+           "\"prefill_thinker_ms\":%.0f,\"prefill_talker_ms\":%.0f,"
+           "\"generate_ms\":%.0f,\"generate_thinker_ms\":%.0f,"
+           "\"generate_talker_ms\":%.0f,\"mimi_drain_ms\":%.0f,"
+           "\"audio_encode_cpu_ms\":%.0f,\"audio_encode_cpu_pct\":%.0f,"
+           "\"prefill_cpu_ms\":%.0f,\"prefill_cpu_pct\":%.0f,"
+           "\"generate_cpu_ms\":%.0f,\"generate_cpu_pct\":%.0f,"
+           "\"mimi_cpu_ms\":%.0f,\"mimi_cpu_pct\":%.0f,"
            "\"model_ms\":%.0f,\"stream_mimi\":%s,"
            "\"playback_streaming\":%s,\"first_audio_ms\":%.0f,"
            "\"streaming_lead_ms\":%.0f,\"queue_waits\":%zu,"
            "\"queue_wait_ms\":%.0f}\n",
-           steps,frame_count,samples,
+           steps,frame_count,audio_frames,prompt_count,samples,
            (unsigned long long)seed,
            (audio_encode_end-audio_encode_start)*1000,
+           audio_profile.frontend_ms,audio_profile.encoder_ms,
+           audio_profile.projector_ms,
            (prefill_end-audio_encode_end)*1000,
+           prefill_thinker_seconds*1000,prefill_talker_seconds*1000,
            (generation_end-prefill_end)*1000,
+           generate_thinker_seconds*1000,generate_talker_seconds*1000,
            (mimi_end-generation_end)*1000,
+           (audio_encode_cpu_end-audio_encode_cpu_start)*1000,
+           (audio_encode_cpu_end-audio_encode_cpu_start)*100.0/
+               (audio_encode_end-audio_encode_start),
+           (prefill_cpu_end-audio_encode_cpu_end)*1000,
+           (prefill_cpu_end-audio_encode_cpu_end)*100.0/
+               (prefill_end-audio_encode_end),
+           (generation_cpu_end-prefill_cpu_end)*1000,
+           (generation_cpu_end-prefill_cpu_end)*100.0/
+               (generation_end-prefill_end),
+           (mimi_cpu_end-generation_cpu_end)*1000,
+           (mimi_cpu_end-generation_cpu_end)*100.0/
+               (mimi_end-generation_end),
            (mimi_end-run_start)*1000,
            decoder_started?"true":"false",
            playback_device!=NULL?"true":"false",first_audio_ms,
            first_audio_ms>0.0?(mimi_end-run_start)*1000-first_audio_ms:0.0,
            queue_waits,queue_wait_ms);
-    free(audio);free(mimi_codes);free(answer);free(prompt);free(formatted);free(audio_user);free(audio_embeddings);free(text_logits);free(audio_logits);free(bridge);free(work);free(generated);free(all_codes);free(frames);
+    free(audio);free(mimi_codes);free(answer);free(prompt);free(formatted);free(audio_user);free(audio_embeddings);free(replacement_embeddings);free(replacement_mask);free(text_logits);free(audio_logits);free(bridge);free(work);free(generated);free(all_codes);free(frames);
     return playback_result == 0 ? 0 : -1;
 }
 
@@ -631,6 +811,9 @@ static int warm_resident(const char *thinker,const char *talker,const char *toke
 
 static double monotonic_seconds(void)
 {struct timespec value;clock_gettime(CLOCK_MONOTONIC,&value);return value.tv_sec+value.tv_nsec*1e-9;}
+
+static double process_cpu_seconds(void)
+{struct timespec value;clock_gettime(CLOCK_PROCESS_CPUTIME_ID,&value);return value.tv_sec+value.tv_nsec*1e-9;}
 
 static int safe_alsa_name(const char *name)
 {if(!name||!*name)return 0;for(const unsigned char *p=(const unsigned char *)name;*p;++p)if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')||strchr(":,._-",*p)))return 0;return 1;}
@@ -706,7 +889,8 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
     while(1){if(capture_next(&capture,chunk))break;size_t got=CHUNK;
         double squares=0,peak=0;for(size_t i=0;i<got;++i){double v=chunk[i];squares+=v*v;if(fabs(v)>peak)peak=fabs(v);}double rms=sqrt(squares/got);
         double threshold=fmax(280.0,noise*3.2);double now=monotonic_seconds();
-        if(now-last_monitor>=0.5){printf("%s level_rms=%.0f peak=%.0f noise=%.0f threshold=%.0f turn=%u\n",speaking?"SPEECH":"LISTEN",rms,peak,noise,threshold,turn);fflush(stdout);last_monitor=now;}
+        const double monitor_interval=speaking?0.5:5.0;
+        if(now-last_monitor>=monitor_interval){printf("%s level_rms=%.0f peak=%.0f noise=%.0f threshold=%.0f turn=%u\n",speaking?"SPEECH":"LISTEN",rms,peak,noise,threshold,turn);fflush(stdout);last_monitor=now;}
         if(cooldown){--cooldown;if(rms<threshold)noise=noise*.98+rms*.02;continue;}
         if(!speaking){if(rms<threshold)noise=noise*.995+rms*.005;
             for(size_t i=0;i<got;++i){ring[ring_write]=chunk[i];ring_write=(ring_write+1)%PREROLL;if(ring_count<PREROLL)++ring_count;}

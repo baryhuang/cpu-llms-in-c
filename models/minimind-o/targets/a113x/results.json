@@ -1,5 +1,5 @@
 {
-  "date": "2026-08-21",
+  "date": "2026-08-22",
   "target": {
     "board": "ThirdReality TRHub-V3",
     "soc_reported": "Amlogic A113D / meson-axg",
@@ -10,7 +10,7 @@
   "build": {
     "language": "C11",
     "compiler": "GCC 12.2, Debian 12 Linux/AArch64",
-    "flags": "-O3 -mcpu=cortex-a53 -mtune=cortex-a53 -ffast-math -fopenmp -pthread",
+    "flags": "-O3 -mcpu=cortex-a53 -mtune=cortex-a53 -fopenmp -pthread",
     "python_on_target": false
   },
   "cpu_scaling": {
@@ -105,28 +105,118 @@
       "playback_result": 0
     }
   ],
+  "batch_prefill_ab": {
+    "workload": "1180 ms audio fixture, 37 prompt tokens, 24 generation steps, fixed seed",
+    "sequential": {
+      "prefill_ms": 2328,
+      "thinker_ms": 1490,
+      "talker_ms": 830,
+      "total_ms": 9020
+    },
+    "layer_batched_two_runs": {
+      "prefill_ms": [1632, 1732],
+      "thinker_ms": [1076, 1131],
+      "talker_ms": [553, 597],
+      "total_ms": [8267, 8537]
+    },
+    "average_prefill_saved_ms": 646,
+    "same_text": true,
+    "same_wav": true
+  },
+  "mimi_thread_model_ab": {
+    "workload": "same 1180 ms fixture, 24 steps, 16 output frames, A/B/B/A",
+    "one_core_overlap_during_generation": {
+      "generation_ms": [2694, 2809],
+      "mimi_drain_ms": [1835, 1792],
+      "wall_seconds": [8.83, 8.91]
+    },
+    "four_core_decode_after_generation": {
+      "generation_ms": [2105, 2109],
+      "mimi_drain_ms": [2359, 2293],
+      "wall_seconds": [8.75, 8.67]
+    },
+    "selected": "four_core_decode_after_generation",
+    "reason": "the overlapping decoder created a fifth runnable CPU thread and cost the main model about 644 ms while saving only about 512 ms of Mimi drain"
+  },
+  "current_short_fixture": {
+    "input_audio_ms": 1180,
+    "steps": 24,
+    "audio_frames": 16,
+    "stage_wall_ms": {
+      "audio_encode": 2275,
+      "prefill": 1769,
+      "generate": 2147,
+      "mimi": 2366,
+      "model_total": 8686
+    },
+    "stage_cpu_percent": {
+      "audio_encode": 286,
+      "prefill": 308,
+      "generate": 244,
+      "mimi": 288
+    },
+    "thread_observation": "main plus three OpenMP workers run before EOS; after EOS that team sleeps and the Mimi pthread plus its three OpenMP workers run",
+    "all_four_cores_observed": true,
+    "swap_bytes": 0
+  },
+  "sensevoice_kernel_ab": {
+    "workload": "20 encoder frames from the 1180 ms fixture, A/B/B/A",
+    "four_position_q8_seconds": [2.44, 2.31],
+    "single_position_q8_seconds": [2.52, 2.62],
+    "four_position_speedup": 1.076,
+    "embedding_sha256": "056885c6b8256ba999b53dd9f462690cebdeb9a92a2ae84b260bcf34266dae30",
+    "outputs_identical": true
+  },
+  "sampling_top_k_ab": {
+    "full_sort_serial_overhead_ms": [174, 170],
+    "heap_top_50_serial_overhead_ms": [104, 108],
+    "average_saved_ms": 66,
+    "wav_sha256": "b38714f030bfdcd541767369b314e9a6dd37c8b338e0af7ae9f6366f702d4d1d",
+    "outputs_identical": true
+  },
   "real_streaming_acceptance": {
-    "workload": "production service, physical microphone and speaker, 48 generation steps, 40 Mimi frames",
-    "input_audio_ms": 1184,
-    "model_end_ms": 13161,
-    "first_audio_ms": 17300,
-    "mimi_decode_end_ms": 19207,
-    "streaming_lead_ms": 1907,
-    "playback_end_ms": 20605,
-    "inference_end_ms": 20615,
+    "workload": "physical USB speaker, 1180 ms fixture, 24 generation steps, 16 Mimi frames",
+    "input_audio_ms": 1180,
+    "model_end_ms": 6271,
+    "first_audio_ms": 8044,
+    "first_audio_buffered_frames": 12,
+    "first_audio_buffered_ms": 960,
+    "mimi_decode_end_ms": 8659,
+    "streaming_lead_ms": 614,
+    "playback_end_ms": 9469,
     "playback_result": 0,
-    "queue_waits": 7,
-    "queue_wait_ms": 1061,
+    "queue_waits": 4,
+    "queue_wait_ms": 614,
     "alsa_underruns": 0,
-    "capture_overruns": 0,
     "event_order_verified": true
   },
   "production_policy": {
     "stateful_stream_decode": true,
-    "decode_overlapped_with_generation": true,
+    "decode_overlapped_with_generation": false,
+    "decode_starts_after_producer_eos": true,
+    "decode_threads": 4,
+    "generation_threads": 4,
+    "simultaneous_model_and_mimi_teams": false,
     "direct_raw_pcm_playback": true,
     "wav_required_for_playback": false,
     "start_buffer_fraction": 0.75,
-    "reason": "decoder production rate is 6.35 Mimi frames/s while playback consumes 12.5 frames/s"
+    "omp_wait_policy": "PASSIVE",
+    "omp_proc_bind": true,
+    "omp_places": "cores",
+    "reason": "Mimi is slower than the 12.5 frame/s playback consumer and running it alongside the four-thread generator oversubscribes the four A53 cores"
+  },
+  "rejected_native_c_experiments": {
+    "mimi_f32_preexpanded_convolution_weights": "1.49-1.52 s versus 1.22-1.26 s and about 58 MiB more RSS",
+    "mimi_q8_activation_block16": "1.24 s with no stable speed gain and changed output peak",
+    "mimi_shared_activation_q8_dot2": "1.76 s versus about 1.25 s",
+    "sensevoice_single_position_q8": "2.52-2.62 s versus 2.31-2.44 s for four-position Q8"
+  },
+  "boot_persistence": {
+    "model_directory": "/dev/shm/minimindo-o-native-v1",
+    "volatile_across_reboot": true,
+    "root_filesystem_free_mib": 138,
+    "model_artifacts_mib": 377,
+    "existing_release_contains_minimindo_artifacts": false,
+    "new_release_created": false
   }
 }

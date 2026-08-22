@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #if defined(__aarch64__)
@@ -49,6 +50,7 @@ struct minimindo_audio_encoder {
     tensor projector_norm_weight, projector_norm_bias;
     tensor projector_first_weight, projector_first_bias;
     tensor projector_second_weight, projector_second_bias;
+    minimindo_audio_encoder_profile profile;
 };
 
 typedef struct { double real, imaginary; } complex_value;
@@ -71,6 +73,8 @@ static int take(const unsigned char *mapping,uint64_t bytes,uint64_t *cursor,
     out->header=h;out->data=mapping+data;*cursor=align64(data+expected);return *cursor<=bytes?0:-1;
 }
 static const float *f32(const tensor *t){return(const float *)t->data;}
+static double monotonic_seconds(void)
+{struct timespec value;clock_gettime(CLOCK_MONOTONIC,&value);return value.tv_sec+value.tv_nsec*1e-9;}
 
 static float q8_dot(const int8_t *w,const float *x,uint32_t count)
 {
@@ -86,6 +90,30 @@ static float q8_dot(const int8_t *w,const float *x,uint32_t count)
     double sum=0;for(uint32_t i=0;i<count;++i)sum+=(double)w[i]*x[i];return(float)sum;
 #endif
 }
+
+static void q8_dot4(const int8_t *w,const float *x,uint32_t stride,
+                    uint32_t count,float output[4])
+{
+#if defined(__aarch64__)
+    float32x4_t a0=vdupq_n_f32(0),b0=a0,c0=a0,d0=a0;
+    float32x4_t a1=a0,b1=a0,c1=a0,d1=a0;
+    float32x4_t a2=a0,b2=a0,c2=a0,d2=a0;
+    float32x4_t a3=a0,b3=a0,c3=a0,d3=a0;uint32_t i=0;
+    for(;i+16<=count;i+=16){int8x16_t p=vld1q_s8(w+i);int16x8_t lo=vmovl_s8(vget_low_s8(p)),hi=vmovl_s8(vget_high_s8(p));
+        float32x4_t w0=vcvtq_f32_s32(vmovl_s16(vget_low_s16(lo))),w1=vcvtq_f32_s32(vmovl_s16(vget_high_s16(lo)));
+        float32x4_t w2=vcvtq_f32_s32(vmovl_s16(vget_low_s16(hi))),w3=vcvtq_f32_s32(vmovl_s16(vget_high_s16(hi)));
+#define DOT4_ROW(n,base) do{const float *v=x+(size_t)(base)*stride+i;a##n=vfmaq_f32(a##n,vld1q_f32(v),w0);b##n=vfmaq_f32(b##n,vld1q_f32(v+4),w1);c##n=vfmaq_f32(c##n,vld1q_f32(v+8),w2);d##n=vfmaq_f32(d##n,vld1q_f32(v+12),w3);}while(0)
+        DOT4_ROW(0,0);DOT4_ROW(1,1);DOT4_ROW(2,2);DOT4_ROW(3,3);
+#undef DOT4_ROW
+    }
+#define DOT4_SUM(n) vaddvq_f32(vaddq_f32(vaddq_f32(a##n,b##n),vaddq_f32(c##n,d##n)))
+    output[0]=DOT4_SUM(0);output[1]=DOT4_SUM(1);output[2]=DOT4_SUM(2);output[3]=DOT4_SUM(3);
+#undef DOT4_SUM
+    for(;i<count;++i){float weight=w[i];output[0]+=weight*x[i];output[1]+=weight*x[stride+i];output[2]+=weight*x[(size_t)2*stride+i];output[3]+=weight*x[(size_t)3*stride+i];}
+#else
+    for(uint32_t p=0;p<4;++p)output[p]=q8_dot(w,x+(size_t)p*stride,count);
+#endif
+}
 static void row(const tensor *t,uint32_t r,const int8_t **w,float *scale)
 {const unsigned char *p=t->data+(size_t)r*(4+t->header->cols);memcpy(scale,p,4);*w=(const int8_t *)(p+4);}
 
@@ -96,7 +124,10 @@ static void matrix_sequence(const tensor *matrix,const float *input,uint32_t len
 #pragma omp parallel for schedule(static)
 #endif
     for(uint32_t out=0;out<matrix->header->rows;++out){const int8_t *w;float scale;row(matrix,out,&w,&scale);
-        for(uint32_t p=0;p<length;++p)output[(size_t)p*matrix->header->rows+out]=q8_dot(w,input+(size_t)p*input_width,input_width)*scale+(bias?bias[out]:0);}
+        uint32_t p=0;for(;p+4<=length;p+=4){float sums[4];q8_dot4(w,input+(size_t)p*input_width,input_width,input_width,sums);
+            for(uint32_t lane=0;lane<4;++lane)output[(size_t)(p+lane)*matrix->header->rows+out]=sums[lane]*scale+(bias?bias[out]:0);}
+        for(;p<length;++p)output[(size_t)p*matrix->header->rows+out]=q8_dot(w,input+(size_t)p*input_width,input_width)*scale+(bias?bias[out]:0);
+    }
 }
 
 static void layer_norm_sequence(const float *input,float *output,uint32_t length,uint32_t width,
@@ -213,7 +244,7 @@ static int encoder_forward(minimindo_audio_encoder *model,float *sequence,uint32
 int minimindo_audio_encoder_encode_pcm16(minimindo_audio_encoder *model,const int16_t *samples,size_t sample_count,
                                          float *output,size_t output_count,size_t *output_frames,char *error,size_t capacity)
 {
-    if(!model||!samples||!output){set_error(error,capacity,"invalid audio encode arguments");return -1;}uint32_t frames=0;float *features=frontend(model,samples,sample_count,&frames);
+    if(!model||!samples||!output){set_error(error,capacity,"invalid audio encode arguments");return -1;}model->profile=(minimindo_audio_encoder_profile){0};double stage=monotonic_seconds();uint32_t frames=0;float *features=frontend(model,samples,sample_count,&frames);model->profile.frontend_ms=(monotonic_seconds()-stage)*1000.0;
     if(!features||output_count<(size_t)frames*768){free(features);set_error(error,capacity,"audio buffer too small");return -1;}
     /* MiniMind-O freezes and calls SenseVoice's encoder submodule directly.
        Language/task embeddings belong to the ASR wrapper and are not part of
@@ -224,7 +255,7 @@ int minimindo_audio_encoder_encode_pcm16(minimindo_audio_encoder *model,const in
             sequence[(size_t)p*560+i]=features[(size_t)p*560+i]*root;
     free(features);
     for(uint32_t p=0;p<length;++p)for(uint32_t i=0;i<280;++i){sequence[(size_t)p*560+i]+=sinf((p+1)*pow(10000.0,-2.0*i/560));sequence[(size_t)p*560+i+280]+=cosf((p+1)*pow(10000.0,-2.0*i/560));}
-    if(encoder_forward(model,sequence,length)){free(sequence);set_error(error,capacity,"SenseVoice encoder failed");return -1;}
+    stage=monotonic_seconds();if(encoder_forward(model,sequence,length)){free(sequence);set_error(error,capacity,"SenseVoice encoder failed");return -1;}model->profile.encoder_ms=(monotonic_seconds()-stage)*1000.0;stage=monotonic_seconds();
     float first[768],second[768],normalized[512];const float *nw=f32(&model->projector_norm_weight),*nb=f32(&model->projector_norm_bias);
     for(uint32_t p=0;p<frames;++p){const float *x=sequence+(size_t)p*512;double mean=0,sq=0;for(uint32_t i=0;i<512;++i){mean+=x[i];sq+=(double)x[i]*x[i];}mean/=512;double inv=1.0/sqrt(sq/512-mean*mean+1e-5);
         for(uint32_t i=0;i<512;++i)
@@ -234,5 +265,9 @@ int minimindo_audio_encoder_encode_pcm16(minimindo_audio_encoder *model,const in
             first[i]=0.5f*first[i]*(1+erff(first[i]*0.7071067811865475f));
         matrix_sequence(&model->projector_second_weight,first,1,768,second,f32(&model->projector_second_bias));
         memcpy(output+(size_t)p*768,second,768*4);}
-    free(sequence);if(output_frames)*output_frames=frames;return 0;
+    model->profile.projector_ms=(monotonic_seconds()-stage)*1000.0;free(sequence);if(output_frames)*output_frames=frames;return 0;
 }
+
+void minimindo_audio_encoder_last_profile(const minimindo_audio_encoder *model,
+                                          minimindo_audio_encoder_profile *profile)
+{if(profile)*profile=model?model->profile:(minimindo_audio_encoder_profile){0};}

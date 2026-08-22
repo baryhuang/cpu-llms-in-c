@@ -55,24 +55,49 @@ path then uses the same NEON Q8 dot kernel as GEMV and retains only the previous
 input vector. One-frame streaming remains equivalent to whole-sequence decode
 without recomputing a prefix.
 
-The live runtime starts a Mimi pthread before text/audio generation. While
-Thinker and Talker are active, the worker uses one OpenMP thread so it can use
-otherwise idle CPU without oversubscribing the four A53 cores. Once the
-producer reaches EOS, the worker uses four threads to drain its queue.
+The live runtime creates the Mimi pthread before generation, but that thread
+sleeps until the Talker producer reaches EOS. Thinker/Talker therefore own the
+four A53 cores during generation. After EOS, the main OpenMP team sleeps and
+Mimi uses a different four-thread team to drain the completed code queue. An
+A/B/B/A test rejected one-core Mimi overlap: it created a fifth runnable thread,
+made generation about 644 ms slower and saved only about 512 ms in Mimi drain.
 
-Production playback is now end-to-end streaming. The decoder publishes each
-1,920-sample/80 ms PCM frame under a pthread condition variable. Playback opens
-`aplay` in raw 24 kHz mono S16 mode and writes frames directly; the response
-WAV is an archive and is no longer on the playback path. `SIGPIPE` is ignored
-and ALSA/write failure is reported instead of terminating the resident service.
+Production playback is decoder-to-ALSA streaming, not token-to-speaker
+streaming. The decoder publishes each 1,920-sample/80 ms PCM frame under a
+pthread condition variable. Playback opens `aplay` in raw 24 kHz mono S16 mode
+and writes published frames directly; the response WAV is an archive and is no
+longer on the playback path. Inference and model execution are native C11 and
+launch no Python. `aplay` remains the small external ALSA transport process.
+`SIGPIPE` is ignored and ALSA/write failure is reported instead of terminating
+the resident service.
 
 The A53 still decodes below real time: eight frames represent 0.64 seconds but
-require 1.26 seconds. Playback therefore starts after 75% of the response is
-decoded (minimum four frames, leaving at least one undecoded frame). This
-measured safety buffer prevents speaker underruns while the remaining frames
-continue decoding. It is real streaming because `EVENT first_audio` occurs
-before Mimi completion and `inference_end`; it is not a claim of low-latency
-token-to-audio generation.
+require 1.22--1.26 seconds. Playback must first know the final response length,
+then wait for 75% to be decoded (minimum four frames; responses of four frames
+or fewer decode completely). A fixed eight-frame threshold was rejected after
+the physical speaker reported a 1.16-second underrun. The dynamic threshold
+passed the same 16-frame test with 12 frames/960 ms buffered and no ALSA
+underrun. `EVENT first_audio` still occurs before Mimi completion, but only
+after model generation has ended.
+
+## Thread ownership and lifetime
+
+The production lifecycle has explicit single-writer ownership:
+
+- the capture pthread exclusively drains ALSA capture into its bounded ring;
+- the main thread owns Thinker/Talker state and is the only Mimi-code producer;
+- the Mimi pthread exclusively owns the stateful decoder and writes each unique
+  PCM range before publishing `decoded_frames` under the mutex;
+- the playback pthread reads only published PCM ranges and never touches Mimi
+  state;
+- the main thread signals producer completion, joins playback, joins Mimi, and
+  only then destroys the condition/mutex and frees PCM.
+
+`OMP_WAIT_POLICY=PASSIVE` prevents the inactive team from spinning.
+`OMP_PROC_BIND=true` with `OMP_PLACES=cores` keeps the active team on the four
+physical cores. Thread sampling observed main + three workers before EOS, then
+Mimi + three different workers after EOS; the two compute teams were never
+runnable together.
 
 ## Cortex-A53 kernels
 
@@ -88,6 +113,21 @@ Cortex-A53:
   contiguous NEON Q8 dot instead of scalar/scatter output updates;
 - OpenMP statically partitions matrix rows, convolution output/time tiles and
   activation ranges across four cores.
+
+Thinker and Talker prefill now run layer-by-layer across the full prompt. This
+reuses each Q8 weight row across all prompt positions, computes the Thinker LM
+head only at the final prompt token, skips all Talker output heads during
+prefill, and computes the fixed pad-codec projection once instead of once per
+prompt token. RoPE sine/cosine values are precomputed at model load. For a
+37-token prompt, prefill fell from 2.328 seconds to 1.632--1.732 seconds with
+identical text and WAV output.
+
+SenseVoice uses a four-position Q8 dot kernel: one weight row feeds four audio
+positions before it is evicted. The 20-frame target A/B was 2.31--2.44 seconds
+versus 2.52--2.62 seconds for the single-position kernel, with byte-identical
+embeddings. Talker top-50 sampling uses a 50-entry min-heap followed by a
+50-item sort instead of sorting all 2,112 logits. It removes about 66 ms of
+serial work per 24-step fixture and preserves the exact WAV hash.
 
 The im2col change trades about 11 MiB of temporary memory on the eight-frame
 fixture for contiguous vector access and reuse. It reduced Mimi decode from
@@ -130,6 +170,24 @@ audio frames and identical answer text. Four cores are genuinely used; the
 remaining gap from 400% comes from serial sampling/attention sections, short
 parallel regions and shared L2/memory bandwidth.
 
+The current 1.18-second input / 24-step / 16-frame production fixture gives a
+more useful distribution of the full response path:
+
+| Stage | Wall | Process CPU / wall | Approximate work |
+|---|---:|---:|---:|
+| SenseVoice + audio projector | 2.275 s | 286% | 4.4B MAC at 20 encoder frames |
+| Thinker/Talker batch prefill | 1.769 s | 308% | 2.18B + 1.24B MAC |
+| Thinker/Talker generation | 2.147 s | 244% | about 2.2B MAC plus sampling |
+| Mimi drain | 2.366 s | 288% | about 166M MAC per output frame |
+| Model/decode total | 8.686 s | — | no swap; 427,492 KiB peak RSS |
+
+All four CPUs are active, but no stage sustains 400%. The short transformer
+regions have serial attention/sampling gaps, and SenseVoice/Mimi stream large
+Q8 weights through the A53 cluster's shared L2. This is why merely increasing
+the OpenMP thread count cannot produce 1--3 second latency. With the exact
+current graph, the pre-audio floor is already approximately 2.3 s SenseVoice +
+1.7 s prefill + 2.1 s generation + 1.8 s to the safe Mimi buffer.
+
 The optimized Mimi profiler for eight frames reports:
 
 | Stage | Time |
@@ -150,20 +208,20 @@ kernel work should target stages 3 and 4, then the SenseVoice encoder and
 Thinker prefill. The current system is substantially faster but does not meet
 a 1--3 second conversational latency target.
 
-Two live microphone turns on the optimized resident service both generated 48
-steps and 40 Mimi frames. They completed inference in 18.916 and 21.405
-seconds; Mimi drain was 8.735 and 10.670 seconds, and both ALSA playbacks
-returned zero. The variation follows input duration, model scheduling and
-thermal/resource state. These are production-path observations, not a claim
-that the system has reached normal conversational latency.
+Earlier 48-step resident turns took 18.916--21.405 seconds and are retained in
+the raw result file as historical measurements. Production now caps the fast
+path at 24 steps. On the final physical-speaker fixture, model generation ended
+at 6,271 ms, 12 of 16 frames were buffered at 8,044 ms, Mimi completed at
+8,659 ms, and playback ended at 9,469 ms. `aplay` returned zero and emitted no
+underrun. The four condition waits (614 ms total) happened behind the 960 ms
+PCM safety buffer; they did not starve ALSA.
 
-The final production microphone turn contained 1,184 ms of captured speech and
-generated 40 Mimi frames. Model generation ended at 13,161 ms, the first raw
-PCM frame reached ALSA at 17,300 ms, Mimi finished at 19,207 ms, playback ended
-at 20,605 ms with result zero, and `inference_end` followed at 20,615 ms. Thus
-audio delivery began 1,907 ms before decoder completion. The seven queue waits
-(1,061 ms total) mean the unbuffered writer caught up with the decoder; they
-are not ALSA underrun reports. No ALSA underrun or capture overrun was logged.
+The model is therefore usable as a correctness prototype, but it is not the
+1--3 second immediate-dialog path. The product design should keep two paths:
+an aggressively bounded tiny safety/intent model for immediate local response,
+and this higher-accuracy transcript/reasoning path for notification decisions.
+Further exact-graph work should first reduce SenseVoice weight traffic and Mimi
+stages 3/4; a separate tiny model is required to change the latency class.
 
 ## Service and monitoring
 
@@ -177,8 +235,20 @@ ssh root@100.123.75.40 \
 Successful native turns include `"stream_mimi":true`,
 `"playback_streaming":true`, and stage fields `audio_encode_ms`,
 `prefill_ms`, `generate_ms`, `mimi_drain_ms`, `first_audio_ms`, and
-`streaming_lead_ms`. The production event order is:
+`streaming_lead_ms`. The four `*_cpu_pct` fields expose effective per-stage CPU
+parallelism; values above 100% prove multi-core execution. The production event
+order is:
 
 ```text
 speech_end -> model_end -> first_audio -> playback_end -> inference_end
 ```
+
+The current deployment directory is `/dev/shm/minimindo-o-native-v1` because
+the 6.9 GiB root filesystem had only about 138 MiB free while the MiniMind-O
+images require about 377 MiB. `/dev/shm` is erased on reboot. A reboot observed
+on 2026-08-22 therefore left systemd in `203/EXEC` restart failures until the
+artifacts were restored. Existing repository releases do not contain these
+MiniMind-O images, and no new release was created. The service is resident and
+warm for the current boot, but automatic cold-boot recovery remains impossible
+until persistent space or an approved artifact URL is provided; this is a
+deployment constraint, not an inference-thread issue.

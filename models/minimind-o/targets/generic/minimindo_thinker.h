@@ -41,4 +41,31 @@ int minimindo_thinker_forward_embedding(minimindo_thinker *model,
                                         size_t bridge_count,
                                         char *error, size_t error_capacity);
 
+/* Prefill-only variants update all recurrent state but skip the unused LM head. */
+int minimindo_thinker_prefill_bridge(minimindo_thinker *model,
+                                     uint32_t token_id,
+                                     float *bridge_states,
+                                     size_t bridge_count,
+                                     char *error, size_t error_capacity);
+int minimindo_thinker_prefill_embedding(minimindo_thinker *model,
+                                        const float *embedding,
+                                        size_t embedding_count,
+                                        float *bridge_states,
+                                        size_t bridge_count,
+                                        char *error, size_t error_capacity);
+
+/*
+ * Process a complete prompt layer-by-layer.  replacement_mask selects rows in
+ * replacement_embeddings (token_count * hidden floats), which is how projected
+ * audio embeddings replace audio-pad token embeddings.  Every bridge state is
+ * returned in sequence order; logits contains only the final prompt position.
+ */
+int minimindo_thinker_prefill_sequence(
+    minimindo_thinker *model,
+    const uint32_t *token_ids, size_t token_count,
+    const float *replacement_embeddings, const uint8_t *replacement_mask,
+    float *logits, size_t logits_count,
+    float *bridge_states, size_t bridge_count,
+    char *error, size_t error_capacity);
+
 #endif

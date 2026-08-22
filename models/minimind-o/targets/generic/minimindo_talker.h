@@ -29,4 +29,24 @@ int minimindo_talker_forward(minimindo_talker *model,
                              float *logits, size_t logits_count,
                              char *error, size_t error_capacity);
 
+/* Only selected codebook heads are evaluated; mask zero is prefill-only. */
+int minimindo_talker_forward_masked(
+    minimindo_talker *model,
+    const float *bridge_states,
+    size_t bridge_count,
+    const uint32_t audio_ids[MINIMINDO_AUDIO_CODEBOOKS],
+    const float *speaker_embedding,
+    size_t speaker_count,
+    uint32_t logits_mask,
+    float *logits, size_t logits_count,
+    char *error, size_t error_capacity);
+
+/* Prompt-only sequence path: one fixed audio-codebook tuple, no output heads. */
+int minimindo_talker_prefill_sequence(
+    minimindo_talker *model,
+    const float *bridge_states, size_t bridge_count,
+    const uint32_t audio_ids[MINIMINDO_AUDIO_CODEBOOKS],
+    size_t token_count,
+    char *error, size_t error_capacity);
+
 #endif

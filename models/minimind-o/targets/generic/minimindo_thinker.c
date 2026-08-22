@@ -57,6 +57,7 @@ struct minimindo_thinker {
     float *hidden, *normed, *query, *key, *value;
     float *attention, *projected, *mlp_normed, *gate, *up;
     double *scores;
+    double *rope_cos, *rope_sin;
 };
 
 _Static_assert(sizeof(mmo_header) == 136, "MiniMind-O image header ABI");
@@ -169,6 +170,27 @@ static void q8_matvec(const mmo_tensor *tensor, const float *input,
     }
 }
 
+static void q8_matmul_sequence(const mmo_tensor *tensor, const float *input,
+                               uint32_t length, float *output)
+{
+    const uint32_t input_width = tensor->header->cols;
+    const uint32_t output_width = tensor->header->rows;
+    const size_t weight_stride = sizeof(float) + input_width;
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for (uint32_t row = 0; row < output_width; ++row) {
+        const unsigned char *record = tensor->data + (size_t)row * weight_stride;
+        float scale;
+        memcpy(&scale, record, sizeof(scale));
+        const int8_t *weights = (const int8_t *)(record + sizeof(scale));
+        for (uint32_t position = 0; position < length; ++position)
+            output[(size_t)position * output_width + row] =
+                q8_f32_dot(weights, input + (size_t)position * input_width,
+                           input_width) * scale;
+    }
+}
+
 static void rms_norm(const float *input, const float *weight, float *output,
                      uint32_t width, float epsilon)
 {
@@ -180,16 +202,26 @@ static void rms_norm(const float *input, const float *weight, float *output,
         output[index] = (float)((double)input[index] * scale * weight[index]);
 }
 
+static void rms_norm_sequence(const float *input, const float *weight,
+                              float *output, uint32_t length,
+                              uint32_t width, float epsilon)
+{
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for (uint32_t position = 0; position < length; ++position)
+        rms_norm(input + (size_t)position * width, weight,
+                 output + (size_t)position * width, width, epsilon);
+}
+
 static void apply_rope(float *states, uint32_t heads, uint32_t head_dim,
-                       uint32_t position, float theta)
+                       const double *cosines, const double *sines)
 {
     const uint32_t half = head_dim / 2U;
     for (uint32_t head = 0; head < heads; ++head) {
         float *vector = states + (size_t)head * head_dim;
         for (uint32_t index = 0; index < half; ++index) {
-            const double angle = position /
-                pow((double)theta, (2.0 * index) / head_dim);
-            const double cosine = cos(angle), sine = sin(angle);
+            const double cosine = cosines[index], sine = sines[index];
             const double first = vector[index], second = vector[index + half];
             vector[index] = (float)(first * cosine - second * sine);
             vector[index + half] = (float)(second * cosine + first * sine);
@@ -215,7 +247,18 @@ static int allocate_buffers(minimindo_thinker *model)
     ALLOC(projected, hidden); ALLOC(mlp_normed, hidden);
     ALLOC(gate, intermediate); ALLOC(up, intermediate);
     ALLOC(scores, model->max_context);
+    ALLOC(rope_cos, model->max_context * model->header->head_dim / 2U);
+    ALLOC(rope_sin, model->max_context * model->header->head_dim / 2U);
 #undef ALLOC
+    const uint32_t half = model->header->head_dim / 2U;
+    for (uint32_t position = 0; position < model->max_context; ++position)
+        for (uint32_t index = 0; index < half; ++index) {
+            const double angle = position /
+                pow((double)model->header->rope_theta,
+                    (2.0 * index) / model->header->head_dim);
+            model->rope_cos[(size_t)position * half + index] = cos(angle);
+            model->rope_sin[(size_t)position * half + index] = sin(angle);
+        }
     return 0;
 }
 
@@ -301,6 +344,7 @@ void minimindo_thinker_close(minimindo_thinker *model)
     free(model->key); free(model->value); free(model->attention);
     free(model->projected); free(model->mlp_normed); free(model->gate);
     free(model->up); free(model->scores);
+    free(model->rope_cos); free(model->rope_sin);
     if (model->mapping != NULL) munmap((void *)model->mapping, model->mapped_bytes);
     if (model->file >= 0) close(model->file);
     free(model);
@@ -332,8 +376,8 @@ static int forward_hidden(minimindo_thinker *model,
                           float *bridge_states, size_t bridge_count,
                           char *error, size_t error_capacity)
 {
-    if (model == NULL || logits == NULL ||
-        logits_count < model->header->vocab ||
+    if (model == NULL ||
+        (logits != NULL && logits_count < model->header->vocab) ||
         (bridge_states != NULL && bridge_count < model->header->hidden)) {
         set_error(error, error_capacity, "invalid forward arguments"); return -1;
     }
@@ -351,9 +395,9 @@ static int forward_hidden(minimindo_thinker *model,
         const mmo_layer *layer = &model->layers[layer_index];
         rms_norm(model->hidden, f32_data(&layer->input_norm), model->normed,
                  h, model->header->rms_epsilon);
-        q8_matvec(&layer->q_proj, model->normed, model->query);
-        q8_matvec(&layer->k_proj, model->normed, model->key);
-        q8_matvec(&layer->v_proj, model->normed, model->value);
+        q8_matvec(&layer->q_proj,model->normed,model->query);
+        q8_matvec(&layer->k_proj,model->normed,model->key);
+        q8_matvec(&layer->v_proj,model->normed,model->value);
         for (uint32_t head = 0; head < heads; ++head)
             rms_norm(model->query + (size_t)head * d, f32_data(&layer->q_norm),
                      model->query + (size_t)head * d, d,
@@ -362,8 +406,10 @@ static int forward_hidden(minimindo_thinker *model,
             rms_norm(model->key + (size_t)head * d, f32_data(&layer->k_norm),
                      model->key + (size_t)head * d, d,
                      model->header->rms_epsilon);
-        apply_rope(model->query, heads, d, pos, model->header->rope_theta);
-        apply_rope(model->key, kv_heads, d, pos, model->header->rope_theta);
+        const double *rope_cos=model->rope_cos+(size_t)pos*(d/2U);
+        const double *rope_sin=model->rope_sin+(size_t)pos*(d/2U);
+        apply_rope(model->query, heads, d, rope_cos, rope_sin);
+        apply_rope(model->key, kv_heads, d, rope_cos, rope_sin);
         const size_t cache_base =
             ((size_t)layer_index * model->max_context + pos) * kv_size;
         memcpy(model->key_cache + cache_base, model->key, kv_size * sizeof(float));
@@ -405,8 +451,8 @@ static int forward_hidden(minimindo_thinker *model,
             model->hidden[index] += model->projected[index];
         rms_norm(model->hidden, f32_data(&layer->post_norm), model->mlp_normed,
                  h, model->header->rms_epsilon);
-        q8_matvec(&layer->gate_proj, model->mlp_normed, model->gate);
-        q8_matvec(&layer->up_proj, model->mlp_normed, model->up);
+        q8_matvec(&layer->gate_proj,model->mlp_normed,model->gate);
+        q8_matvec(&layer->up_proj,model->mlp_normed,model->up);
         for (uint32_t index = 0; index < model->header->intermediate; ++index)
             model->gate[index] = (float)(silu(model->gate[index]) * model->up[index]);
         q8_matvec(&layer->down_proj, model->gate, model->projected);
@@ -415,9 +461,11 @@ static int forward_hidden(minimindo_thinker *model,
         if (layer_index == 3U && bridge_states != NULL)
             memcpy(bridge_states, model->hidden, h * sizeof(float));
     }
-    rms_norm(model->hidden, f32_data(&model->final_norm), model->normed,
-             h, model->header->rms_epsilon);
-    q8_matvec(&model->embedding, model->normed, logits);
+    if (logits != NULL) {
+        rms_norm(model->hidden, f32_data(&model->final_norm), model->normed,
+                 h, model->header->rms_epsilon);
+        q8_matvec(&model->embedding, model->normed, logits);
+    }
     model->position++;
     return 0;
 }
@@ -461,4 +509,208 @@ int minimindo_thinker_forward(minimindo_thinker *model, uint32_t token_id,
     return minimindo_thinker_forward_bridge(model, token_id, logits,
                                             logits_count, NULL, 0,
                                             error, error_capacity);
+}
+
+int minimindo_thinker_prefill_sequence(
+    minimindo_thinker *model,
+    const uint32_t *token_ids, size_t token_count,
+    const float *replacement_embeddings, const uint8_t *replacement_mask,
+    float *logits, size_t logits_count,
+    float *bridge_states, size_t bridge_count,
+    char *error, size_t error_capacity)
+{
+    if (model == NULL || token_ids == NULL || token_count == 0U ||
+        token_count > UINT32_MAX ||
+        model->position + token_count > model->max_context ||
+        logits == NULL || logits_count < model->header->vocab ||
+        bridge_states == NULL ||
+        bridge_count < token_count * (size_t)model->header->hidden) {
+        set_error(error, error_capacity, "invalid sequence prefill arguments");
+        return -1;
+    }
+    const uint32_t length = (uint32_t)token_count;
+    const uint32_t h = model->header->hidden;
+    const uint32_t d = model->header->head_dim;
+    const uint32_t heads = model->header->heads;
+    const uint32_t kv_heads = model->header->kv_heads;
+    const uint32_t kv_size = kv_heads * d;
+    const uint32_t groups = heads / kv_heads;
+    const uint32_t start_position = model->position;
+    const size_t hidden_count = (size_t)length * h;
+    const size_t kv_count = (size_t)length * kv_size;
+    const size_t intermediate_count =
+        (size_t)length * model->header->intermediate;
+    float *hidden = malloc(hidden_count * sizeof(float));
+    float *normed = malloc(hidden_count * sizeof(float));
+    float *query = malloc(hidden_count * sizeof(float));
+    float *key = malloc(kv_count * sizeof(float));
+    float *value = malloc(kv_count * sizeof(float));
+    float *attention = malloc(hidden_count * sizeof(float));
+    float *projected = malloc(hidden_count * sizeof(float));
+    float *gate = malloc(intermediate_count * sizeof(float));
+    float *up = malloc(intermediate_count * sizeof(float));
+    if (hidden == NULL || normed == NULL || query == NULL || key == NULL ||
+        value == NULL || attention == NULL || projected == NULL ||
+        gate == NULL || up == NULL) {
+        set_error(error, error_capacity, "sequence prefill allocation failed");
+        free(hidden); free(normed); free(query); free(key); free(value);
+        free(attention); free(projected); free(gate); free(up);
+        return -1;
+    }
+    for (uint32_t position = 0; position < length; ++position) {
+        float *destination = hidden + (size_t)position * h;
+        if (replacement_mask != NULL && replacement_mask[position] != 0U) {
+            if (replacement_embeddings == NULL) {
+                set_error(error, error_capacity,
+                          "missing sequence replacement embedding");
+                free(hidden); free(normed); free(query); free(key); free(value);
+                free(attention); free(projected); free(gate); free(up);
+                return -1;
+            }
+            memcpy(destination,
+                   replacement_embeddings + (size_t)position * h,
+                   h * sizeof(float));
+        } else {
+            if (token_ids[position] >= model->header->vocab) {
+                set_error(error, error_capacity, "invalid sequence token id");
+                free(hidden); free(normed); free(query); free(key); free(value);
+                free(attention); free(projected); free(gate); free(up);
+                return -1;
+            }
+            q8_row_to_float(&model->embedding, token_ids[position], destination);
+        }
+    }
+
+    for (uint32_t layer_index = 0; layer_index < model->header->layers;
+         ++layer_index) {
+        const mmo_layer *layer = &model->layers[layer_index];
+        rms_norm_sequence(hidden, f32_data(&layer->input_norm), normed,
+                          length, h, model->header->rms_epsilon);
+        q8_matmul_sequence(&layer->q_proj, normed, length, query);
+        q8_matmul_sequence(&layer->k_proj, normed, length, key);
+        q8_matmul_sequence(&layer->v_proj, normed, length, value);
+        for (uint32_t position = 0; position < length; ++position) {
+            float *position_query = query + (size_t)position * h;
+            float *position_key = key + (size_t)position * kv_size;
+            for (uint32_t head = 0; head < heads; ++head)
+                rms_norm(position_query + (size_t)head * d,
+                         f32_data(&layer->q_norm),
+                         position_query + (size_t)head * d, d,
+                         model->header->rms_epsilon);
+            for (uint32_t head = 0; head < kv_heads; ++head)
+                rms_norm(position_key + (size_t)head * d,
+                         f32_data(&layer->k_norm),
+                         position_key + (size_t)head * d, d,
+                         model->header->rms_epsilon);
+            const uint32_t absolute_position = start_position + position;
+            const double *rope_cos = model->rope_cos +
+                (size_t)absolute_position * (d / 2U);
+            const double *rope_sin = model->rope_sin +
+                (size_t)absolute_position * (d / 2U);
+            apply_rope(position_query, heads, d, rope_cos, rope_sin);
+            apply_rope(position_key, kv_heads, d, rope_cos, rope_sin);
+            const size_t cache_base =
+                ((size_t)layer_index * model->max_context + absolute_position) *
+                kv_size;
+            memcpy(model->key_cache + cache_base, position_key,
+                   kv_size * sizeof(float));
+            memcpy(model->value_cache + cache_base,
+                   value + (size_t)position * kv_size,
+                   kv_size * sizeof(float));
+        }
+        for (uint32_t position = 0; position < length; ++position) {
+            const uint32_t absolute_position = start_position + position;
+            for (uint32_t head = 0; head < heads; ++head) {
+                const uint32_t kv_head = head / groups;
+                const float *head_query =
+                    query + (size_t)position * h + (size_t)head * d;
+                double maximum = -INFINITY;
+                for (uint32_t source = 0; source <= absolute_position; ++source) {
+                    const size_t base =
+                        ((size_t)layer_index * model->max_context + source) *
+                        kv_size + (size_t)kv_head * d;
+                    double score = 0.0;
+                    for (uint32_t index = 0; index < d; ++index)
+                        score += (double)head_query[index] *
+                                 model->key_cache[base + index];
+                    model->scores[source] = score / sqrt((double)d);
+                    if (model->scores[source] > maximum)
+                        maximum = model->scores[source];
+                }
+                double denominator = 0.0;
+                for (uint32_t source = 0; source <= absolute_position; ++source) {
+                    model->scores[source] =
+                        exp(model->scores[source] - maximum);
+                    denominator += model->scores[source];
+                }
+                float *head_attention = attention + (size_t)position * h +
+                                        (size_t)head * d;
+                for (uint32_t index = 0; index < d; ++index) {
+                    double sum = 0.0;
+                    for (uint32_t source = 0; source <= absolute_position;
+                         ++source) {
+                        const size_t base =
+                            ((size_t)layer_index * model->max_context + source) *
+                            kv_size + (size_t)kv_head * d;
+                        sum += model->scores[source] *
+                               model->value_cache[base + index];
+                    }
+                    head_attention[index] = (float)(sum / denominator);
+                }
+            }
+        }
+        q8_matmul_sequence(&layer->o_proj, attention, length, projected);
+        for (size_t index = 0; index < hidden_count; ++index)
+            hidden[index] += projected[index];
+        rms_norm_sequence(hidden, f32_data(&layer->post_norm), query,
+                          length, h, model->header->rms_epsilon);
+        q8_matmul_sequence(&layer->gate_proj, query, length, gate);
+        q8_matmul_sequence(&layer->up_proj, query, length, up);
+        for (size_t index = 0; index < intermediate_count; ++index)
+            gate[index] = (float)(silu(gate[index]) * up[index]);
+        q8_matmul_sequence(&layer->down_proj, gate, length, projected);
+        for (size_t index = 0; index < hidden_count; ++index)
+            hidden[index] += projected[index];
+        if (layer_index == 3U)
+            memcpy(bridge_states, hidden, hidden_count * sizeof(float));
+    }
+    const float *last_hidden = hidden + (size_t)(length - 1U) * h;
+    rms_norm(last_hidden, f32_data(&model->final_norm), model->normed,
+             h, model->header->rms_epsilon);
+    q8_matvec(&model->embedding, model->normed, logits);
+    memcpy(model->hidden, last_hidden, h * sizeof(float));
+    model->position += length;
+    free(hidden); free(normed); free(query); free(key); free(value);
+    free(attention); free(projected); free(gate); free(up);
+    return 0;
+}
+
+int minimindo_thinker_prefill_bridge(minimindo_thinker *model,
+                                     uint32_t token_id,
+                                     float *bridge_states,
+                                     size_t bridge_count,
+                                     char *error, size_t error_capacity)
+{
+    if (model == NULL || token_id >= model->header->vocab) {
+        set_error(error, error_capacity, "invalid token id"); return -1;
+    }
+    q8_row_to_float(&model->embedding, token_id, model->hidden);
+    return forward_hidden(model, NULL, 0, bridge_states, bridge_count,
+                          error, error_capacity);
+}
+
+int minimindo_thinker_prefill_embedding(minimindo_thinker *model,
+                                        const float *embedding,
+                                        size_t embedding_count,
+                                        float *bridge_states,
+                                        size_t bridge_count,
+                                        char *error, size_t error_capacity)
+{
+    if (model == NULL || embedding == NULL ||
+        embedding_count < model->header->hidden) {
+        set_error(error, error_capacity, "invalid input embedding"); return -1;
+    }
+    memcpy(model->hidden, embedding, model->header->hidden * sizeof(float));
+    return forward_hidden(model, NULL, 0, bridge_states, bridge_count,
+                          error, error_capacity);
 }
