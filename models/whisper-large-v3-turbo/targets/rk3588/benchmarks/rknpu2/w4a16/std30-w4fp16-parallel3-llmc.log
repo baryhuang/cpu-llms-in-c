@@ -1,0 +1,41 @@
+runtime: llmc-native-cpp-rknpu2-fp16-matmul
+quantization: cpu-w4-group32-to-npu-fp16
+mode: llmc
+audio_seconds: 27.270
+model_init_ms: 2129.378
+preprocess_ms: 91.352
+encoder_ms: 66512.003
+decoder_steps: 90
+decoder_total_ms: 12852.948
+avg_decoder_step_ms: 142.811
+inference_ms: 79596.454
+generated_tokens: 87
+w4_linear_runs: 3172
+fp16_attention_matmul_runs: 30080
+baseline_weight_uploads: 0
+w4_linear_wall_ms: 26582.785
+attention_wall_ms: 45409.282
+npu_scheduler: parallel3
+npu_sharding: output-columns-N-aligned16
+npu_configured_cores: 3
+npu_load_source: /sys/kernel/debug/rknpu/load
+npu_load_sample_interval_ms: 10
+npu_load_status: sampled
+npu_encoder_load_samples: 6532
+npu_encoder_core0_avg_load_pct: 15.17
+npu_encoder_core0_max_load_pct: 45
+npu_encoder_core1_avg_load_pct: 15.33
+npu_encoder_core1_max_load_pct: 44
+npu_encoder_core2_avg_load_pct: 15.14
+npu_encoder_core2_max_load_pct: 44
+npu_decoder_load_samples: 1291
+npu_decoder_core0_avg_load_pct: 10.58
+npu_decoder_core0_max_load_pct: 17
+npu_decoder_core1_avg_load_pct: 10.58
+npu_decoder_core1_max_load_pct: 18
+npu_decoder_core2_avg_load_pct: 10.58
+npu_decoder_core2_max_load_pct: 17
+npu_observed_active_cores: 3
+token_ids: 50258 50259 50360 50364 18200 765 8752 281 1080 1081 30153 372 264 39283 13 440 3669 2128 292 281 264 5522 42853 295 8085 11 295 597 436 632 1027 257 499 317 2069 17225 281 12044 264 18365 295 264 2037 14742 13 440 5522 11 294 2736 11 9185 264 3669 281 257 44185 11 597 390 281 312 2212 264 958 786 13 9694 645 23270 294 3564 264 14742 5315 1830 720 4671 13 509 486 312 10455 365 385 30 286 1009 669 13 50257
+text:
+Concord returned to its place amidst the tents. The English forwarded to the French baskets of flowers, of which they had made a plentiful provision to greet the arrival of the young princess. The French, in return, invited the English to a supper, which was to be given the next day. Congratulations were poured in upon the princess everywhere during her journey. You will be frank with me? I always am.

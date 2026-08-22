@@ -4,8 +4,50 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
+
+void validate_cpu_dequantization() {
+  constexpr size_t kColumns = 2;
+  constexpr size_t kInner = 32;
+  std::vector<uint8_t> packed(kColumns * kInner / 2);
+  for (size_t byte_index = 0; byte_index < packed.size(); ++byte_index) {
+    const int low_value = static_cast<int>((byte_index * 2) % 16) - 8;
+    const int high_value = static_cast<int>((byte_index * 2 + 1) % 16) - 8;
+    packed[byte_index] =
+        static_cast<uint8_t>((low_value & 0x0f) | ((high_value & 0x0f) << 4));
+  }
+  const float scales[kColumns] = {0.5f, 0.25f};
+  llmc::W4Tensor tensor;
+  tensor.name = "synthetic";
+  tensor.encoding = llmc::W4Encoding::kW4A16Group;
+  tensor.dimensions = 2;
+  tensor.shape = {kColumns, kInner, 0, 0};
+  tensor.group_size = 32;
+  tensor.data = packed.data();
+  tensor.data_size = packed.size();
+  tensor.scales = scales;
+  tensor.scale_size = sizeof(scales);
+  std::vector<llmc_float16> output(kColumns * kInner);
+  llmc::dequantize_w4a16_to_fp16_kn(tensor, output.data(), output.size());
+  for (size_t index = 0; index < output.size(); ++index) {
+    const int quantized = static_cast<int>(index % 16) - 8;
+    const float expected = quantized * scales[index % kColumns];
+    if (static_cast<float>(output[index]) != expected) {
+      throw std::runtime_error("synthetic W4A16 CPU dequantization failed");
+    }
+  }
+  std::vector<llmc_float16> shard(kInner);
+  llmc::dequantize_w4a16_columns_to_fp16_kn(
+      tensor, 1, 1, shard.data(), shard.size());
+  for (size_t k = 0; k < kInner; ++k) {
+    if (shard[k] != output[k * kColumns + 1]) {
+      throw std::runtime_error(
+          "synthetic W4A16 column-shard dequantization failed");
+    }
+  }
+}
 
 void require_shape(const llmc::W4Model &model, const std::string &name,
                    uint32_t rows, uint32_t columns, llmc::W4Encoding encoding) {
@@ -152,6 +194,7 @@ int main(int argc, char **argv) {
     return 2;
   }
   try {
+    validate_cpu_dequantization();
     llmc::W4Model encoder(argv[1]);
     llmc::W4Model decoder(argv[2]);
     validate_encoder(encoder);
@@ -162,6 +205,7 @@ int main(int argc, char **argv) {
     validate_tensor_payloads(decoder);
     std::printf("decoder_bytes: %llu\n",
                 static_cast<unsigned long long>(decoder.file_size()));
+    std::printf("cpu_w4_to_fp16_validation: passed\n");
     std::printf("package_validation: passed\n");
   } catch (const std::exception &error) {
     std::fprintf(stderr, "package_validation: failed: %s\n", error.what());

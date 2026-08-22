@@ -204,4 +204,61 @@ bool W4Model::contains(std::string_view name) const {
   return tensors_.find(std::string(name)) != tensors_.end();
 }
 
+void dequantize_w4a16_to_fp16_kn(const W4Tensor &tensor,
+                                 llmc_float16 *output,
+                                 size_t output_elements) {
+  dequantize_w4a16_columns_to_fp16_kn(
+      tensor, 0, tensor.shape[0], output, output_elements);
+}
+
+void dequantize_w4a16_columns_to_fp16_kn(const W4Tensor &tensor,
+                                         size_t column_offset,
+                                         size_t column_count,
+                                         llmc_float16 *output,
+                                         size_t output_elements) {
+  if (tensor.encoding != W4Encoding::kW4A16Group ||
+      tensor.dimensions != 2 || tensor.group_size == 0 ||
+      tensor.shape[1] % tensor.group_size != 0 || output == nullptr) {
+    throw std::runtime_error("invalid tensor for W4A16 CPU dequantization");
+  }
+  const size_t columns = tensor.shape[0];
+  const size_t inner = tensor.shape[1];
+  if (column_count == 0 || column_offset > columns ||
+      column_count > columns - column_offset) {
+    throw std::runtime_error("invalid W4A16 dequantization column shard");
+  }
+  if (column_count != 0 &&
+      inner > std::numeric_limits<size_t>::max() / column_count) {
+    throw std::runtime_error("W4A16 dequantization size overflow");
+  }
+  const size_t source_elements = inner * columns;
+  const size_t output_required = inner * column_count;
+  if (output_elements < output_required ||
+      tensor.data_size < (source_elements + 1) / 2 ||
+      tensor.scale_size <
+          (inner / tensor.group_size) * columns * sizeof(float)) {
+    throw std::runtime_error("undersized W4A16 dequantization buffer");
+  }
+
+  const auto *packed = static_cast<const uint8_t *>(tensor.data);
+  for (size_t k = 0; k < inner; ++k) {
+    const float *group_scales =
+        tensor.scales + (k / tensor.group_size) * columns;
+    llmc_float16 *row = output + k * column_count;
+    for (size_t n = 0; n < column_count; ++n) {
+      const size_t source_column = column_offset + n;
+      const size_t index = k * columns + source_column;
+      const uint8_t byte = packed[index / 2];
+      const uint8_t nibble =
+          index & 1 ? static_cast<uint8_t>(byte >> 4)
+                    : static_cast<uint8_t>(byte & 0x0f);
+      const int8_t quantized =
+          nibble < 8 ? static_cast<int8_t>(nibble)
+                     : static_cast<int8_t>(static_cast<int>(nibble) - 16);
+      row[n] = static_cast<llmc_float16>(
+          static_cast<float>(quantized) * group_scales[source_column]);
+    }
+  }
+}
+
 } // namespace llmc

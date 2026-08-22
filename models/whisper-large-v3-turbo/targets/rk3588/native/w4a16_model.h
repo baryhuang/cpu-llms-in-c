@@ -7,6 +7,8 @@
 #include <string_view>
 #include <unordered_map>
 
+#include "float16_compat.h"
+
 namespace llmc {
 
 enum class W4Encoding : uint8_t {
@@ -25,6 +27,19 @@ struct W4Tensor {
   const float *scales = nullptr;
   uint64_t scale_size = 0;
 };
+
+// Expand the package's signed group-32 INT4 [N, K] weight into the normal
+// FP16 B=[K, N] layout consumed by RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT16.
+// Quantization and scheduling belong to the LLMC runtime; RKNPU2 only sees
+// the resulting FP16 matrix.
+void dequantize_w4a16_to_fp16_kn(const W4Tensor &tensor,
+                                 llmc_float16 *output,
+                                 size_t output_elements);
+void dequantize_w4a16_columns_to_fp16_kn(const W4Tensor &tensor,
+                                         size_t column_offset,
+                                         size_t column_count,
+                                         llmc_float16 *output,
+                                         size_t output_elements);
 
 class W4Model {
 public:

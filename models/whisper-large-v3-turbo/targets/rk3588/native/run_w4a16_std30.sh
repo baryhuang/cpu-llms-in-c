@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=${1:-.}
-CORE_MASK=${CORE_MASK:-0,1,2}
+NPU_SCHEDULER=${NPU_SCHEDULER:-parallel3}
 OUT=${OUT:-"$ROOT/logs"}
 
 ENCODER="$ROOT/models/whisper-large-v3-turbo-encoder-w4a16-v2.llmc"
@@ -25,9 +25,9 @@ if [ ! -r /sys/kernel/debug/rknpu/load ]; then
 fi
 
 "$BIN/w4a16_matmul_smoke" "$DECODER" model.proj_out.weight baseline \
-  1 3 "$CORE_MASK" >"$OUT/matmul-baseline.log" 2>&1
+  1 3 parallel3 >"$OUT/matmul-baseline.log" 2>&1
 "$BIN/w4a16_matmul_smoke" "$DECODER" model.proj_out.weight llmc \
-  1 3 "$CORE_MASK" >"$OUT/matmul-llmc.log" 2>&1
+  1 3 parallel3 >"$OUT/matmul-llmc.log" 2>&1
 
 baseline_checksum=$(awk '/^output_checksum:/ {print $2}' \
   "$OUT/matmul-baseline.log")
@@ -39,11 +39,11 @@ if [ -z "$baseline_checksum" ] || [ "$baseline_checksum" != "$llmc_checksum" ]; 
 fi
 
 "$BIN/whisper_rknpu2_w4a16" "$ENCODER" "$DECODER" "$VOCAB" "$AUDIO" \
-  baseline --core-mask "$CORE_MASK" 2>&1 |
+  baseline --npu-scheduler "$NPU_SCHEDULER" 2>&1 |
   tee "$OUT/std30-w4a16-baseline.log"
 
 "$BIN/whisper_rknpu2_w4a16" "$ENCODER" "$DECODER" "$VOCAB" "$AUDIO" \
-  llmc --core-mask "$CORE_MASK" 2>&1 |
+  llmc --npu-scheduler "$NPU_SCHEDULER" 2>&1 |
   tee "$OUT/std30-w4a16-llmc.log"
 
 baseline_tokens=$(sed -n 's/^token_ids://p' \

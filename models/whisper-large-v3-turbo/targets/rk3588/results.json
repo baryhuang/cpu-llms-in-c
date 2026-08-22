@@ -1,7 +1,7 @@
 {
   "target": "rk3588-rknpu2",
   "model": "whisper-large-v3-turbo",
-  "date": "2026-08-20",
+  "date": "2026-08-21",
   "scope": "owner-directed std30.wav only; no 32-file mode and no corpus WER claim",
   "machine": {
     "board": "Orange Pi 5 Plus",
@@ -87,6 +87,15 @@
       "reason": "Rockchip upstream 2.3.2 documents W4A16 for RK3576; RK3588 documents INT4 x INT4 to INT16 only",
       "record": "benchmarks/rknpu2/w4a16/rk3588-w4a16-capability-20260821.log"
     },
+    "custom_w4_fp16_system_path": {
+      "status": "supported and measured",
+      "weight_storage": "signed INT4, group size 32",
+      "cpu_role": "unpack INT4 and apply group scales into aligned FP16 output-column shards",
+      "npu_role": "RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT16 only",
+      "scheduler": "three independent contexts pinned to Core0, Core1 and Core2; 16-aligned N sharding",
+      "combined_mask_result": "Core0+1 and Core0+1+2 rejected with -1; RKNN_NPU_CORE_ALL executes on one core",
+      "quality": "baseline and LLMC generated identical 87-token sequences on std30.wav"
+    },
     "native_toolkit_checks": {
       "w8a8": "configuration accepted; not benchmarked because no calibrated large-v3-turbo graph was produced",
       "w8a16": "rejected as unsupported on rk3588",
@@ -144,6 +153,45 @@
         "decoder_step_speedup": 3.660,
         "e2e_speedup": 2.552
       }
+    },
+    "custom_w4_fp16_parallel3": {
+      "matmul_gate": {
+        "shape_mkn": [1, 1280, 51904],
+        "core0_ms": 12.305,
+        "parallel3_ms": 5.351,
+        "speedup": 2.300,
+        "cpu_npu_cosine": 0.999999978,
+        "active_cores": 3
+      },
+      "baseline": {
+        "runner": "native C++17 custom W4-to-FP16 runtime",
+        "npu_scheduler": "parallel3 N-sharding",
+        "generated_tokens": 87,
+        "decoder_steps": 90,
+        "encoder_ms": 67177.078,
+        "decoder_total_ms": 216308.245,
+        "avg_decoder_step_ms": 2403.425,
+        "e2e_ms": 283728.328,
+        "npu_encoder_max_load_percent": [43, 41, 41],
+        "npu_decoder_max_load_percent": [18, 18, 18]
+      },
+      "llmc": {
+        "runner": "native C++17 custom W4-to-FP16 runtime with resident decoder B shards",
+        "npu_scheduler": "parallel3 N-sharding",
+        "generated_tokens": 87,
+        "decoder_steps": 90,
+        "encoder_ms": 66512.003,
+        "decoder_total_ms": 12852.948,
+        "avg_decoder_step_ms": 142.811,
+        "e2e_ms": 79596.454,
+        "npu_encoder_max_load_percent": [45, 44, 44],
+        "npu_decoder_max_load_percent": [17, 18, 17]
+      },
+      "gains": {
+        "matmul_speedup": 2.300,
+        "decoder_speedup": 16.829,
+        "e2e_speedup": 3.565
+      }
     }
   },
   "tuning": {
@@ -197,6 +245,9 @@
     "quantization_support": "benchmarks/rknpu2/toolkit-2.3.2-quantization-support.log",
     "w4a16_runtime_capability": "benchmarks/rknpu2/w4a16/rk3588-w4a16-capability-20260821.log",
     "w4a16_package_validation": "benchmarks/rknpu2/w4a16/w4a16-package-validation-20260821.log",
+    "w4_fp16_parallel3_matmul_gate": "benchmarks/rknpu2/w4a16/matmul-parallel3-resident-gate.log",
+    "w4_fp16_parallel3_baseline": "benchmarks/rknpu2/w4a16/std30-w4fp16-parallel3-baseline.log",
+    "w4_fp16_parallel3_llmc": "benchmarks/rknpu2/w4a16/std30-w4fp16-parallel3-llmc.log",
     "native_source": "native/whisper_rknpu2_llmc.cc",
     "native_tuned_runner": "native/run_std30_tuned.sh"
   }

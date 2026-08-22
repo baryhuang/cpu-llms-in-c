@@ -350,21 +350,25 @@ std::vector<llmc_float16> extract_features(const llmc::PcmAudio &audio) {
 class LinearExecutor {
 public:
   LinearExecutor(const llmc::W4Model &encoder, const llmc::W4Model &decoder,
-                 llmc::W4RunMode mode, rknn_core_mask core_mask)
+                 llmc::W4RunMode mode,
+                 std::vector<rknn_core_mask> core_masks)
       : encoder_(encoder), decoder_(decoder), mode_(mode),
-        core_mask_(core_mask) {}
+        core_masks_(std::move(core_masks)) {}
 
   void encoder(const std::string &weight_name, const llmc_float16 *input,
                llmc_float16 *output, int rows,
                const std::string &bias_name = std::string()) {
-    run(encoder_, &encoder_linears_, weight_name, input, output, rows,
-        bias_name);
+    // Encoder linears run once per 30 s window. Stream one FP16 NPU workspace
+    // at a time instead of retaining 202 A/B/C DMA triplets.
+    run(encoder_, nullptr, weight_name, input, output, rows, bias_name);
   }
 
   void decoder(const std::string &weight_name, const llmc_float16 *input,
                llmc_float16 *output,
                const std::string &bias_name = std::string()) {
-    run(decoder_, &decoder_linears_, weight_name, input, output, 1, bias_name);
+    run(decoder_, mode_ == llmc::W4RunMode::kLlmc ? &decoder_linears_
+                                                   : nullptr,
+        weight_name, input, output, 1, bias_name);
   }
 
   uint64_t runs() const { return runs_; }
@@ -372,21 +376,16 @@ public:
   double wall_ms() const { return wall_ms_; }
 
   void prepare() {
-    for (const auto &pair : encoder_.tensors()) {
-      if (pair.second.encoding != llmc::W4Encoding::kW4A16Group)
-        continue;
-      const int rows =
-          pair.first == "model.encoder.conv1.weight" ? kFrames : kEncoderFrames;
-      encoder_linears_.emplace(
-          pair.first, std::make_unique<llmc::W4Linear>(pair.second, rows, mode_,
-                                                       core_mask_));
-    }
+    if (mode_ != llmc::W4RunMode::kLlmc)
+      return;
+    // Decoder weights are reused at every generated token, so LLMC expands
+    // and binds these once. Baseline deliberately streams them every step.
     for (const auto &pair : decoder_.tensors()) {
       if (pair.second.encoding != llmc::W4Encoding::kW4A16Group)
         continue;
       decoder_linears_.emplace(
           pair.first,
-          std::make_unique<llmc::W4Linear>(pair.second, 1, mode_, core_mask_));
+          std::make_unique<llmc::W4Linear>(pair.second, 1, mode_, core_masks_));
     }
   }
 
@@ -402,7 +401,7 @@ private:
     std::unique_ptr<llmc::W4Linear> temporary;
     if (cache == nullptr) {
       temporary = std::make_unique<llmc::W4Linear>(model.require(weight_name),
-                                                   rows, mode_, core_mask_);
+                                                   rows, mode_, core_masks_);
       linear = temporary.get();
     } else {
       auto found = cache->find(weight_name);
@@ -410,7 +409,7 @@ private:
         auto inserted = cache->emplace(
             weight_name,
             std::make_unique<llmc::W4Linear>(model.require(weight_name), rows,
-                                             mode_, core_mask_));
+                                             mode_, core_masks_));
         found = inserted.first;
       }
       linear = found->second.get();
@@ -429,8 +428,7 @@ private:
   const llmc::W4Model &encoder_;
   const llmc::W4Model &decoder_;
   llmc::W4RunMode mode_;
-  rknn_core_mask core_mask_;
-  Cache encoder_linears_;
+  std::vector<rknn_core_mask> core_masks_;
   Cache decoder_linears_;
   uint64_t runs_ = 0;
   uint64_t baseline_weight_uploads_ = 0;
@@ -439,13 +437,13 @@ private:
 
 class AttentionExecutor {
 public:
-  explicit AttentionExecutor(rknn_core_mask core_mask)
-      : encoder_qk_(kEncoderFrames, kHead, kEncoderPaddedFrames, core_mask),
-        encoder_pv_(kEncoderFrames, kEncoderPaddedFrames, kHead, core_mask),
-        decoder_self_qk_(1, kHead, kDecoderPositions, core_mask),
-        decoder_self_pv_(1, kDecoderPositions, kHead, core_mask),
-        decoder_cross_qk_(1, kHead, kEncoderPaddedFrames, core_mask),
-        decoder_cross_pv_(1, kEncoderPaddedFrames, kHead, core_mask) {}
+  explicit AttentionExecutor(std::vector<rknn_core_mask> core_masks)
+      : encoder_qk_(kEncoderFrames, kHead, kEncoderPaddedFrames, core_masks),
+        encoder_pv_(kEncoderFrames, kEncoderPaddedFrames, kHead, core_masks),
+        decoder_self_qk_(1, kHead, kDecoderPositions, core_masks),
+        decoder_self_pv_(1, kDecoderPositions, kHead, core_masks),
+        decoder_cross_qk_(1, kHead, kEncoderPaddedFrames, core_masks),
+        decoder_cross_pv_(1, kEncoderPaddedFrames, kHead, core_masks) {}
 
   void encoder(const llmc_float16 *query, const llmc_float16 *key,
                const llmc_float16 *value, llmc_float16 *output) {
@@ -1011,28 +1009,30 @@ int main(int argc, char **argv) {
   if (argc < 6 || argc > 8) {
     std::fprintf(stderr,
                  "usage: %s ENCODER.llmc DECODER.llmc vocab.json AUDIO.wav "
-                 "baseline|llmc [--core-mask auto|0|1|2|0,1|0,1,2|all]\n",
+                 "baseline|llmc [--npu-scheduler parallel3]\n",
                  argv[0]);
     return 2;
   }
   try {
-    const char *core_text = "auto";
+    const char *scheduler_text = "parallel3";
     if (argc == 8) {
-      if (std::strcmp(argv[6], "--core-mask") != 0) {
-        throw std::runtime_error("expected --core-mask");
+      if (std::strcmp(argv[6], "--npu-scheduler") != 0) {
+        throw std::runtime_error("expected --npu-scheduler");
       }
-      core_text = argv[7];
+      scheduler_text = argv[7];
     } else if (argc == 7) {
-      throw std::runtime_error("--core-mask requires a value");
+      throw std::runtime_error("--npu-scheduler requires a value");
     }
+    if (std::strcmp(scheduler_text, "parallel3") != 0)
+      throw std::runtime_error("Whisper runtime requires parallel3 scheduler");
     const auto mode = llmc::parse_run_mode(argv[5]);
-    const auto core_mask = llmc::parse_core_mask(core_text);
+    const auto core_masks = llmc::parallel_npu_core_masks();
     const auto init_begin = Clock::now();
     llmc::W4Model encoder_model(argv[1]);
     llmc::W4Model decoder_model(argv[2]);
     const auto vocabulary = load_vocabulary(argv[3]);
-    LinearExecutor linear(encoder_model, decoder_model, mode, core_mask);
-    AttentionExecutor attention(core_mask);
+    LinearExecutor linear(encoder_model, decoder_model, mode, core_masks);
+    AttentionExecutor attention(core_masks);
     linear.prepare();
     const auto init_end = Clock::now();
 
@@ -1092,8 +1092,8 @@ int main(int argc, char **argv) {
     double decoder_total = 0.0;
     for (double value : decoder_steps)
       decoder_total += value;
-    std::printf("runtime: proprietary-rknpu2-matmul-native-cpp\n");
-    std::printf("quantization: w4a16-group32\n");
+    std::printf("runtime: llmc-native-cpp-rknpu2-fp16-matmul\n");
+    std::printf("quantization: cpu-w4-group32-to-npu-fp16\n");
     std::printf("mode: %s\n", llmc::run_mode_name(mode));
     std::printf("audio_seconds: %.3f\n", audio_seconds);
     std::printf("model_init_ms: %.3f\n", elapsed_ms(init_begin, init_end));
@@ -1117,13 +1117,9 @@ int main(int argc, char **argv) {
         static_cast<unsigned long long>(linear.baseline_weight_uploads()));
     std::printf("w4_linear_wall_ms: %.3f\n", linear.wall_ms());
     std::printf("attention_wall_ms: %.3f\n", attention.wall_ms());
-    std::printf("core_mask: %s\n", core_text);
-    if (std::strcmp(core_text, "auto") == 0) {
-      std::printf("npu_configured_cores: auto\n");
-    } else {
-      std::printf("npu_configured_cores: %d\n",
-                  llmc::configured_core_count(core_text));
-    }
+    std::printf("npu_scheduler: %s\n", scheduler_text);
+    std::printf("npu_sharding: output-columns-N-aligned16\n");
+    std::printf("npu_configured_cores: 3\n");
     monitor.print();
     std::printf("token_ids:");
     for (int token : tokens)
