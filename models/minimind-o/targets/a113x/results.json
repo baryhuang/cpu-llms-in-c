@@ -220,6 +220,8 @@
     "omp_places": "cores",
     "max_live_input_ms": 3000,
     "mic_capture_gain_db": 8,
+    "pcm_playback_percent": 5,
+    "pcm_zero_value_silent_despite_alsa_zero_db_metadata": true,
     "reason": "Mimi is slower than the 12.5 frame/s playback consumer and running it alongside the four-thread generator oversubscribes the four A53 cores"
   },
   "rejected_native_c_experiments": {

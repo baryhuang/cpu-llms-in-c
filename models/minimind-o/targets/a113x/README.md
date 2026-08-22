@@ -243,7 +243,13 @@ ssh root@100.123.75.40 \
 The unit sets the P10S microphone capture gain to 50% / +8 dB before launch.
 At the device's 0 dB setting the endpoint delivered all-zero PCM; +8 dB
 produced an idle RMS around 50--70 and speech peaks above 2,000 while leaving
-speaker volume unchanged.
+speaker volume unchanged. It also sets `PCM` playback to 5% and explicitly
+unmutes it. Although the P10S ALSA descriptor reports raw playback value zero
+as 0 dB and switched on, the physical output was silent at that value. A
+native 48 kHz stereo endpoint test proved that USB frames were advancing, and
+audible playback resumed as soon as the raw control moved to 5%. Keep this
+non-zero initialization in the service so USB resets and reboots cannot leave
+the endpoint silently accepting samples.
 
 Successful native turns include `"stream_mimi":true`,
 `"playback_streaming":true`, and stage fields `audio_encode_ms`,
