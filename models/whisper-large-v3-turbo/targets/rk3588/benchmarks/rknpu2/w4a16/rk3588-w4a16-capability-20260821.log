@@ -1,0 +1,36 @@
+2026-08-21T17:39:36-07:00
+caremojo-hub-84f8f312
+Linux caremojo-hub-84f8f312 6.1.115-vendor-rk35xx #1 SMP Wed Jul 15 20:32:36 UTC 2026 aarch64 GNU/Linux
+soc: rockchip,rk3588-orangepi-5-plus,rockchip,rk3588,
+RKNPU driver: v0.9.8
+librknnrt version: 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+npu_before: NPU load:  Core0:  0%, Core1:  0%, Core2:  0%,
+
+=== official FP16 positive control ===
+MatMul matmul_type = RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT16, M = 1, K = 64, N = 64, B_layout = 0, AC_layout = 0, loop_count = 1, core_mask = 0, iommu_domain_id = 0
+input/output matmul tensor attribute:
+  name=A, dims=(1, 64), size=128, type=FP16
+  name=B, dims=(64, 64), size=8192, type=FP16
+  name=C, dims=(1, 64), size=128, type=FP16
+Begin perf ...
+   0: Elapse Time = 0.10ms, FPS = 9803.92
+Average Time = 0.10ms, Average FPS = 9803.92
+FLOAT16_MM_FLOAT16_TO_FLOAT16 matmul result is correct M x K x N is 1 64 64 AC_layout is 0 B_layout is 0
+rc=0
+
+=== official Rockchip W4A16 canonical probe ===
+E RKNN: [17:39:36.659] rknn_matmul_create_dynamic_shape, unsupported matmul dtype : RKNN_FLOAT16_MM_INT4_TO_FLOAT16 in this platform
+rknn_matmul_create fail! ret=-5
+MatMul matmul_type = RKNN_FLOAT16_MM_INT4_TO_FLOAT16, M = 1, K = 64, N = 64, B_layout = 1, AC_layout = 1, loop_count = 1, core_mask = 0, iommu_domain_id = 0
+rc=255
+
+=== LLMC W4A16 baseline ===
+E RKNN: [17:39:36.769] rknn_matmul_create_dynamic_shape, unsupported matmul dtype : RKNN_FLOAT16_MM_INT4_TO_FLOAT16 in this platform
+error: rknn_matmul_create failed: -5
+rc=1
+
+=== LLMC W4A16 optimized ===
+E RKNN: [17:39:36.880] rknn_matmul_create_dynamic_shape, unsupported matmul dtype : RKNN_FLOAT16_MM_INT4_TO_FLOAT16 in this platform
+error: rknn_matmul_create failed: -5
+rc=1
+npu_after: NPU load:  Core0:  0%, Core1:  0%, Core2:  0%,

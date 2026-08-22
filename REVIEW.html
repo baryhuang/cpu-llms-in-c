@@ -280,10 +280,12 @@
           <tr><td>q5_0</td><td>no native RK3588 5-bit conversion mode</td><td>unsupported exact format</td></tr>
           <tr><td>q4_K</td><td>no native groupwise GGML q4_K conversion mode</td><td>unsupported exact format</td></tr>
           <tr><td>q4_0</td><td>invalid <code>quantized_dtype</code>; distinct w4a16 is also unsupported on RK3588</td><td>unsupported exact format</td></tr>
+          <tr><td>w4a16 · group 32</td><td>official support is RK3576-only; the official RK3588 MatMul probe returns <code>-5</code> for <code>FP16×INT4→FP16</code></td><td>baseline and LLMC both rejected before NPU dispatch; all three cores remained at 0%, so no timing is reported</td></tr>
         </tbody>
       </table>
     </div>
     <p class="note">Unsupported formats are reported explicitly rather than relabeled. Native w8a8 requires a representative calibration set; no calibrated large-v3-turbo graph was fabricated for this one-file task.</p>
+    <p class="note">The w4a16 capability result was reproduced on 2026-08-21 with the proprietary <code>librknnrt 2.3.2</code>, RKNPU driver <code>v0.9.8</code>, native B/A/C layouts and a canonical 1×64×64 official-SDK positive/negative probe. FP16×FP16 completed correctly; FP16×INT4 was rejected as unsupported on this platform. The full Whisper baseline and LLMC runners fail at the same context-creation boundary, before <code>std30.wav</code> inference can start.</p>
 
     <h3 style="margin-top:20px">Retained open-stack Rocket measurements · PDF variants · std30 only</h3>
     <div class="table-wrap">
@@ -339,7 +341,7 @@
     </div>
 
     <h3 id="cross-device" style="margin-top:20px">Cross-device comparison — fresh RK3588 RKNPU2 rows appended</h3>
-    <p class="note">Same Whisper large-v3-turbo model family. Encoder numbers use the fixed 30-second window; end-to-end numbers use the same 27.27-second <code>std30.wav</code> and exclude model loading. The two fresh proprietary RKNPU2 rows are appended to the existing owner, Rocket and CPU records; no original row or value was removed or changed. Packed formats and runtimes remain target-specific.</p>
+    <p class="note">Same Whisper large-v3-turbo model family. Encoder numbers use the fixed 30-second window; end-to-end numbers use the same 27.27-second <code>std30.wav</code> and exclude model loading. The two fresh proprietary RKNPU2 rows are appended to the existing owner, Rocket and CPU records; no original row or value was removed or changed. Packed formats and runtimes remain target-specific. Two additional w4a16 capability rows record the measured platform rejection and deliberately contain no fabricated timing.</p>
     <div class="table-wrap" style="margin-top:10px">
       <table>
         <thead><tr><th>Platform</th><th>Execution</th><th>Quantization</th><th class="num">Encoder / fixed 30 s</th><th class="num">std30 end to end</th><th>Recognition</th></tr></thead>
@@ -348,6 +350,8 @@
           <tr><td>A311Y3</td><td>NPU · ADLA3</td><td>w4a16</td><td class="num">1,922 ms</td><td class="num">4.50 s</td><td>successful; owner table reports 5.03% WER</td></tr>
           <tr><td>RK3588</td><td>NPU · proprietary RKNPU2 baseline · Python host orchestration</td><td>FP16</td><td class="num">12,840 ms</td><td class="num">45.774 s</td><td>correct; 77 generated tokens</td></tr>
           <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · proprietary RKNPU2 LLMC · native C++ zero-copy</strong></td><td>FP16</td><td class="num"><strong>8,725 ms</strong></td><td class="num"><strong>17.933 s</strong></td><td>exact match to fresh baseline</td></tr>
+          <tr><td>RK3588</td><td>NPU · proprietary RKNPU2 baseline capability probe</td><td>w4a16 · group 32</td><td class="num">unsupported</td><td class="num">not run</td><td><code>rknn_matmul_create = -5</code>; no NPU dispatch</td></tr>
+          <tr><td>RK3588</td><td>NPU · proprietary RKNPU2 LLMC capability probe · native C++</td><td>w4a16 · group 32</td><td class="num">unsupported</td><td class="num">not run</td><td>same platform rejection as baseline; NPU cores 0/0/0%</td></tr>
           <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>FP16</td><td class="num">17,929 ms</td><td class="num">26.047 s</td><td>complete; normalized words identical</td></tr>
           <tr style="background:var(--accent-bg)"><td><strong>RK3588</strong></td><td><strong>NPU · Rocket LLMC</strong></td><td>FP16</td><td class="num"><strong>12,413 ms</strong></td><td class="num"><strong>16.485 s</strong></td><td>complete; normalized words identical</td></tr>
           <tr><td>RK3588</td><td>NPU · Rocket baseline</td><td>q8_0</td><td class="num">18,627 ms</td><td class="num">24.899 s</td><td>complete; normalized words identical</td></tr>
@@ -429,11 +433,13 @@ No model weights or generated images in git</pre>
       <li><a href="models/whisper-large-v3-turbo/targets/rk3588/README.md">RK3588 proprietary RKNPU2 methodology and retained Rocket appendix</a></li>
       <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/baseline-python-copy-std30.log">RK3588 proprietary RKNPU2 baseline record</a></li>
       <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/llmc-native-all-performance-std30.log">RK3588 native C++ LLMC median record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/rk3588-w4a16-capability-20260821.log">RK3588 proprietary RKNPU2 w4a16 on-device capability record</a></li>
+      <li><a href="models/whisper-large-v3-turbo/targets/rk3588/benchmarks/rknpu2/w4a16/w4a16-package-validation-20260821.log">RK3588 w4a16 package and std30 payload validation record</a></li>
       <li><a href="models/whisper-large-v3-turbo/targets/rk3588/native/whisper_rknpu2_llmc.cc">RK3588 Python-free native RKNPU2 implementation</a></li>
     </ul>
   </section>
 
-  <footer>Review updated 2026-08-20. Every result belongs to the linked checkpoint, runtime, target and workload; raw records take precedence over rounded display values.</footer>
+  <footer>Review updated 2026-08-21. Every result belongs to the linked checkpoint, runtime, target and workload; raw records take precedence over rounded display values.</footer>
 </main>
 <script>
   const buttons = [...document.querySelectorAll('[data-filter]')];

@@ -38,9 +38,11 @@ struct F16MatmulMetrics {
 // One persistent RKNPU2 FP16 x INT4 -> FP16 context.  PyTorch Linear weights
 // are stored as [N, K] in W4Tensor and packed as RKNPU2's normal B=[K, N].
 //
-// Baseline mode deliberately uses normal-layout B and uploads the packed
-// weight before every invocation. LLMC mode converts B to the RK3588 native
-// layout once, keeps it resident, and reuses all A/B/C allocations.
+// RKNPU2 requires native A/C and B layouts for group-quantized INT4. Baseline
+// converts and uploads the normal-layout packed weight before every
+// invocation. LLMC converts B once, keeps it resident, and reuses all A/B/C
+// allocations. Normal-layout CPU inputs/outputs are converted at the API
+// boundary in both modes.
 class W4Linear {
 public:
   W4Linear(const W4Tensor &weight, int rows, W4RunMode mode,
@@ -55,8 +57,8 @@ public:
   llmc_float16 *input();
   const llmc_float16 *output() const;
 
-  // Execute using the already-bound input/output buffers. This is the LLMC
-  // zero-copy primitive used when adjacent stages can share DMA memory.
+  // Execute using already-bound native-layout input/output buffers. This is
+  // the LLMC zero-copy primitive used when adjacent stages can share DMA.
   void run_bound();
 
   // Convenience interface for CPU stages. The copies are reported separately

@@ -14,6 +14,37 @@ double elapsed_ms(Clock::time_point start, Clock::time_point end) {
   return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
+// RKNPU2 2.3.2 requires native A/C layout when group-quantized INT4 B is
+// used.  On RK3588 the native FP16 A/C layout is [K/subK, M, subK].
+void normal_to_native_ac(const llmc_float16 *source, llmc_float16 *target,
+                         int rows, int columns, int blocks, int block_size) {
+  for (int block = 0; block < blocks; ++block) {
+    for (int row = 0; row < rows; ++row) {
+      for (int lane = 0; lane < block_size; ++lane) {
+        const int column = block * block_size + lane;
+        target[(block * rows + row) * block_size + lane] =
+            column < columns ? source[row * columns + column]
+                             : llmc_float16{};
+      }
+    }
+  }
+}
+
+void native_to_normal_ac(const llmc_float16 *source, llmc_float16 *target,
+                         int rows, int columns, int blocks, int block_size) {
+  for (int block = 0; block < blocks; ++block) {
+    for (int lane = 0; lane < block_size; ++lane) {
+      const int column = block * block_size + lane;
+      if (column >= columns)
+        continue;
+      for (int row = 0; row < rows; ++row) {
+        target[row * columns + column] =
+            source[(block * rows + row) * block_size + lane];
+      }
+    }
+  }
+}
+
 } // namespace
 
 const char *run_mode_name(W4RunMode mode) {
@@ -76,10 +107,12 @@ W4Linear::W4Linear(const W4Tensor &weight, int rows, W4RunMode mode,
   info_.K = input_columns_;
   info_.N = output_columns_;
   info_.type = RKNN_FLOAT16_MM_INT4_TO_FLOAT16;
-  info_.B_layout =
-      mode_ == W4RunMode::kLlmc ? RKNN_MM_LAYOUT_NATIVE : RKNN_MM_LAYOUT_NORM;
+  // RKNPU2 2.3.2 validates per-group INT4 only with native B and A/C.
+  // Platforms without the mixed FP16/INT4 type may still reject creation.
+  // Baseline pays B conversion/upload on every invocation; LLMC does it once.
+  info_.B_layout = RKNN_MM_LAYOUT_NATIVE;
   info_.B_quant_type = RKNN_QUANT_TYPE_PER_GROUP_SYM;
-  info_.AC_layout = RKNN_MM_LAYOUT_NORM;
+  info_.AC_layout = RKNN_MM_LAYOUT_NATIVE;
   info_.AC_quant_type = RKNN_QUANT_TYPE_PER_LAYER_SYM;
   info_.group_size = 32;
 
@@ -117,6 +150,11 @@ W4Linear::W4Linear(const W4Tensor &weight, int rows, W4RunMode mode,
     if (io_.A.size < expected_a || io_.C.size < expected_c ||
         io_.B.size < weight_.data_size) {
       throw std::runtime_error("RKNPU2 returned undersized MatMul buffers");
+    }
+    if (io_.A.n_dims < 3 || io_.C.n_dims < 3 || io_.A.dims[1] != rows_ ||
+        io_.C.dims[1] != rows_ || io_.A.dims[2] == 0 ||
+        io_.C.dims[2] == 0) {
+      throw std::runtime_error("unexpected RKNPU2 native A/C layout");
     }
     if (mode_ == W4RunMode::kLlmc)
       upload_weight();
@@ -163,14 +201,10 @@ void W4Linear::check(int rc, const char *operation) const {
 
 void W4Linear::upload_weight() {
   const auto start = Clock::now();
-  if (mode_ == W4RunMode::kLlmc) {
-    check(rknn_B_normal_layout_to_native_layout(
-              const_cast<void *>(weight_.data), b_->virt_addr, input_columns_,
-              output_columns_, &info_),
-          "rknn_B_normal_layout_to_native_layout");
-  } else {
-    std::memcpy(b_->virt_addr, weight_.data, weight_.data_size);
-  }
+  check(rknn_B_normal_layout_to_native_layout(
+            const_cast<void *>(weight_.data), b_->virt_addr, input_columns_,
+            output_columns_, &info_),
+        "rknn_B_normal_layout_to_native_layout");
   check(rknn_mem_sync(context_, b_, RKNN_MEMORY_SYNC_TO_DEVICE),
         "rknn_mem_sync(B to device)");
   metrics_.weight_upload_ms += elapsed_ms(start, Clock::now());
@@ -191,16 +225,16 @@ void W4Linear::run_bound() {
 }
 
 void W4Linear::run(const llmc_float16 *input_data, llmc_float16 *output_data) {
-  const size_t input_bytes =
-      static_cast<size_t>(rows_) * input_columns_ * sizeof(llmc_float16);
-  const size_t output_bytes =
-      static_cast<size_t>(rows_) * output_columns_ * sizeof(llmc_float16);
   auto start = Clock::now();
-  std::memcpy(input(), input_data, input_bytes);
+  normal_to_native_ac(input_data, input(), rows_, input_columns_,
+                      static_cast<int>(io_.A.dims[0]),
+                      static_cast<int>(io_.A.dims[2]));
   metrics_.input_copy_ms += elapsed_ms(start, Clock::now());
   run_bound();
   start = Clock::now();
-  std::memcpy(output_data, output(), output_bytes);
+  native_to_normal_ac(output(), output_data, rows_, output_columns_,
+                      static_cast<int>(io_.C.dims[0]),
+                      static_cast<int>(io_.C.dims[2]));
   metrics_.output_copy_ms += elapsed_ms(start, Clock::now());
 }
 

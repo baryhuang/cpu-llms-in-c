@@ -1,0 +1,12 @@
+2026-08-21T17:41:15-07:00
+quantized_tensors: 202
+fp16_tensors: 297
+encoder_bytes: 409684160
+quantized_tensors: 41
+fp16_tensors: 60
+decoder_bytes: 241173248
+package_validation: passed
+sample_rate: 16000
+samples: 436320
+pcm_checksum: 1373.705871582031
+wav_validation: passed

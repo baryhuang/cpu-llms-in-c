@@ -53,7 +53,7 @@
     }
   },
   "quantization_matrix": {
-    "source_labels": ["FP16", "q8_0", "q5_0", "q4_K", "q4_0"],
+    "source_labels": ["FP16", "q8_0", "q5_0", "q4_K", "q4_0", "w4a16"],
     "fp16": {
       "rknpu2_status": "supported and measured",
       "note": "precompiled RKNPU2 graph uses float16 tensor I/O"
@@ -73,6 +73,19 @@
     "q4_0": {
       "rknpu2_status": "unsupported exact format",
       "note": "Toolkit2 2.3.2 rejects q4_0; its distinct w4a16 mode is also unsupported on RK3588"
+    },
+    "w4a16_runtime_probe": {
+      "date": "2026-08-21",
+      "format": "symmetric INT4 weights, group size 32, FP16 activations and FP16 output",
+      "package_validation": "passed: 202 encoder and 41 decoder W4 tensors",
+      "official_sdk_positive_control": "FP16 x FP16, M=1 K=64 N=64: passed",
+      "official_sdk_w4a16": "rknn_matmul_create returned -5: RKNN_FLOAT16_MM_INT4_TO_FLOAT16 unsupported on this platform",
+      "baseline": "rejected at context creation before NPU dispatch",
+      "llmc": "rejected at context creation before NPU dispatch",
+      "npu_core_load_before_after_percent": [0, 0, 0],
+      "timing": null,
+      "reason": "Rockchip upstream 2.3.2 documents W4A16 for RK3576; RK3588 documents INT4 x INT4 to INT16 only",
+      "record": "benchmarks/rknpu2/w4a16/rk3588-w4a16-capability-20260821.log"
     },
     "native_toolkit_checks": {
       "w8a8": "configuration accepted; not benchmarked because no calibrated large-v3-turbo graph was produced",
@@ -182,6 +195,8 @@
     "native_tuning": "benchmarks/rknpu2/llmc-native-auto-std30.log and llmc-native-all-std30.log",
     "tensor_layout": "benchmarks/rknpu2/model-tensors.log",
     "quantization_support": "benchmarks/rknpu2/toolkit-2.3.2-quantization-support.log",
+    "w4a16_runtime_capability": "benchmarks/rknpu2/w4a16/rk3588-w4a16-capability-20260821.log",
+    "w4a16_package_validation": "benchmarks/rknpu2/w4a16/w4a16-package-validation-20260821.log",
     "native_source": "native/whisper_rknpu2_llmc.cc",
     "native_tuned_runner": "native/run_std30_tuned.sh"
   }

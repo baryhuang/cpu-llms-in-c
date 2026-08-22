@@ -51,26 +51,28 @@ are not the PDF's q8/q4/q5 formats. No calibrated large-v3-turbo `w8a8` graph
 was produced, so no native INT8 number is presented. The exact support probe is
 in [`toolkit-2.3.2-quantization-support.log`](benchmarks/rknpu2/toolkit-2.3.2-quantization-support.log).
 
-### Native W4A16 MatMul-API path (built locally, not measured yet)
+### Native W4A16 MatMul-API path (device result: unsupported)
 
 Toolkit2 2.3.2 rejects `quantized_dtype=w4a16` when compiling an RK3588
-`.rknn` graph. The proprietary RKNPU2 runtime nevertheless exposes
-`RKNN_FLOAT16_MM_INT4_TO_FLOAT16` for RK3588, including symmetric per-group
-scales with group size 32. The new path uses that lower-level API directly; it
-does not relabel a GGML q4 format and does not deploy an RK3576 graph.
+`.rknn` graph. Its generic MatMul header exposes
+`RKNN_FLOAT16_MM_INT4_TO_FLOAT16`, but the RK3588 backend rejects that type at
+context creation with `-5` (`unsupported ... in this platform`). Rockchip's
+current changelog documents W4A16 for RK3576; the RK3588 INT4 addition is
+`INT4 x INT4 -> INT16`, not W4A16. The official SDK demo reproduces the same
+rejection at a canonical 1x64x64 shape while its FP16 control passes.
 
 Two comparable modes are implemented in the same Python-free C++17 binary:
 
-- `baseline` uses normal-layout INT4 weights and uploads each weight on every
-  invocation.
-- `llmc` converts each weight once to the RK3588 native B layout, keeps the
-  buffer resident and reuses its MatMul context and DMA allocations.
+- `baseline` converts each INT4 weight to the required native B layout and
+  uploads it on every invocation.
+- `llmc` converts each weight once to native B layout, keeps the buffer
+  resident and reuses its MatMul context and DMA allocations.
 
 Both modes use the same v2 W4A16 files, FP16 activation/attention MatMuls,
-native audio preprocessing, greedy decoder and `std30.wav`. The runner logs
-configured and observed NPU core counts plus per-core average/maximum load for
-the encoder and decoder stages. The shell gate rejects the run if the baseline
-and LLMC MatMul checksum or final token sequence differs.
+native audio preprocessing, greedy decoder and `std30.wav`. Package and WAV
+validation pass, but both modes stop at the first W4A16 MatMul context before
+any NPU dispatch. The observed NPU load remains 0% on cores 0, 1 and 2, so no
+encoder or end-to-end timing is reported.
 
 Local build state on 2026-08-20:
 
@@ -80,12 +82,17 @@ Local build state on 2026-08-20:
 | Decoder W4A16 v2 | 241,173,248 bytes; 41 INT4 tensors; SHA-256 `8ff480c2…c5d3061` |
 | Target executable | ARM64 Linux, pure C++17, maximum required glibc 2.29; FFTW linked statically; no Python, libsndfile or external FFTW runtime dependency |
 | Local validation | Full container/shape/alignment check passed; representative packed INT4 and scale payloads exactly match re-quantization from the source checkpoint |
-| RK3588 result | Pending device-only kernel/correctness/performance validation; no number has been added to `REVIEW.html` |
+| RK3588 result | Unsupported by the proprietary RK3588 backend; baseline and LLMC both return `rknn_matmul_create = -5`, with no NPU dispatch or timing |
 
 The scale payload is deliberately versioned. v2 stores scales in RKNPU2's
 `[K/32, N]` order; the native loader rejects the earlier v1 ordering.
 The fixed `std30.wav` gate also uses an in-tree PCM16 WAV reader and validates
 the exact 436,320-sample payload before initializing the NPU.
+
+The on-device evidence is in
+[`rk3588-w4a16-capability-20260821.log`](benchmarks/rknpu2/w4a16/rk3588-w4a16-capability-20260821.log),
+and the package/audio gate is in
+[`w4a16-package-validation-20260821.log`](benchmarks/rknpu2/w4a16/w4a16-package-validation-20260821.log).
 
 Build the two packages on the host (Python is build-time only):
 
