@@ -207,11 +207,14 @@
   },
   "production_policy": {
     "stateful_stream_decode": true,
-    "decode_overlapped_with_generation": false,
-    "decode_starts_after_producer_eos": true,
-    "decode_threads": 4,
+    "decode_overlapped_with_generation": true,
+    "decode_starts_after_producer_eos": false,
+    "decode_threads_during_generation": 1,
+    "decode_threads_after_generation": 4,
     "generation_threads": 4,
-    "simultaneous_model_and_mimi_teams": false,
+    "simultaneous_model_and_mimi_threads": true,
+    "streaming_mode_switch": false,
+    "per_frame_stream_logs": true,
     "direct_raw_pcm_playback": true,
     "wav_required_for_playback": false,
     "start_buffer_fraction": 0.75,
@@ -224,14 +227,26 @@
     "mic_capture_gain_db": 8,
     "pcm_playback_percent": 5,
     "pcm_zero_value_silent_despite_alsa_zero_db_metadata": true,
-    "reason": "Mimi is slower than the 12.5 frame/s playback consumer and running it alongside the four-thread generator oversubscribes the four A53 cores"
+    "reason": "Talker-to-Mimi streaming is mandatory; continuous ALSA playback remains buffered because Mimi is slower than the 12.5 frame/s consumer"
   },
   "rejected_native_c_experiments": {
     "mimi_f32_preexpanded_convolution_weights": "1.49-1.52 s versus 1.22-1.26 s and about 58 MiB more RSS",
     "mimi_q8_activation_block16": "1.24 s with no stable speed gain and changed output peak",
     "mimi_shared_activation_q8_dot2": "1.76 s versus about 1.25 s",
     "sensevoice_single_position_q8": "2.52-2.62 s versus 2.31-2.44 s for four-position Q8",
-    "three_generation_threads_plus_one_mimi_thread": "byte-identical 44-frame WAV and 9 frames decoded before EOS, but generation increased from 4.233 s to 8.161 s and total model time from 12.609 s to 15.258 s"
+    "three_generation_threads_plus_one_mimi_thread": "byte-identical 44-frame WAV and 9 frames decoded before EOS, but generation increased from 4.233 s to 8.161 s and total model time from 12.609 s to 15.258 s",
+    "mimi_four_frame_microbatch": "byte-identical 44-frame WAV and 12 frames decoded before EOS, but wall time increased from 16.92 s to 20.43 s and producer time from 9.114 s to 10.902 s"
+  },
+  "always_streaming_trace": {
+    "workload": "fixed Chinese prompt, seed 20260822, 44 output frames",
+    "talker_first_frame_ms": 2087,
+    "mimi_first_frame_ms": 2844,
+    "producer_end_ms": 9044,
+    "decode_overlap_frames": 9,
+    "model_end_ms": 14943,
+    "decode_overlapped_with_generation": true,
+    "end_to_end_streaming": false,
+    "reason_end_to_end_false": "Mimi produces PCM below the 12.5 frame/s playback rate, so ALSA requires a continuity buffer"
   },
   "complete_response_correction": {
     "problem": "24 generation steps jointly truncated text and staggered audio to 16 Mimi frames / 1.28 seconds",

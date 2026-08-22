@@ -13,7 +13,7 @@ asset_sha256()
 {
     case "$1" in
         minimindo-speech-a113x)
-            printf '%s\n' 530971bee858d221aba19acaa24810a65f7a34a40369ac17cce122e02e8ededf ;;
+            printf '%s\n' 0403a9ee83cdf11b0b664c00287b85d157e60cfff81a37dc2271db373b2bf943 ;;
         minimindo-thinker-q8-v1.mmo)
             printf '%s\n' 7a0c78199510275aa25af55fcf6f1f5bd66ca05fdb99db3c18abd28c258a66ab ;;
         minimindo-talker-q8-v1.mmo)

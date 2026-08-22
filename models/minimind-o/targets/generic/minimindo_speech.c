@@ -209,10 +209,13 @@ typedef struct {
     size_t capacity_frames;
     size_t queued_frames;
     size_t decoded_frames;
+    size_t decode_overlap_frames;
     size_t samples;
     int drain_threads;
     int producer_done;
     int failed;
+    unsigned turn;
+    double inference_start;
     double decode_end;
     double decode_cpu_end;
     char error[256];
@@ -224,13 +227,13 @@ static void *mimi_decode_thread(void *opaque)
     const size_t samples_per_frame =
         minimindo_mimi_samples_for_frames(worker->model, 1);
 #if defined(_OPENMP)
-    /* The main model owns all four A53 cores until producer_done. */
-    omp_set_num_threads(worker->drain_threads);
+    int active_threads = 0;
 #endif
     while (1) {
         uint32_t frame[MINIMINDO_MIMI_CODEBOOKS];
         pthread_mutex_lock(&worker->mutex);
-        while (!worker->producer_done && !worker->failed)
+        while (worker->decoded_frames == worker->queued_frames &&
+               !worker->producer_done && !worker->failed)
             pthread_cond_wait(&worker->ready, &worker->mutex);
         if (worker->failed ||
             (worker->producer_done &&
@@ -243,15 +246,29 @@ static void *mimi_decode_thread(void *opaque)
             break;
         }
         const size_t index = worker->decoded_frames;
+        const int producer_done = worker->producer_done;
         for (uint32_t codebook = 0;
              codebook < MINIMINDO_MIMI_CODEBOOKS; ++codebook)
             frame[codebook] =
-                worker->codes[index * MINIMINDO_MIMI_CODEBOOKS + codebook];
+                worker->codes[index*MINIMINDO_MIMI_CODEBOOKS+codebook];
         pthread_mutex_unlock(&worker->mutex);
+#if defined(_OPENMP)
+        /* Keep all four cores on Thinker/Talker while they are producing, but
+         * consume Mimi frames on one competing thread instead of sleeping.
+         * Once the producer stops, Mimi expands to the full four-core team. */
+        const int wanted_threads = producer_done ? worker->drain_threads : 1;
+        if (active_threads != wanted_threads) {
+            omp_set_num_threads(wanted_threads);
+            active_threads = wanted_threads;
+        }
+#else
+        (void)producer_done;
+#endif
         size_t produced = 0;
         const int result = minimindo_mimi_stream_decode(
             worker->stream, frame, 1,
-            worker->audio + index * samples_per_frame, samples_per_frame,
+            worker->audio + index * samples_per_frame,
+            samples_per_frame,
             &produced, worker->error, sizeof(worker->error));
         pthread_mutex_lock(&worker->mutex);
         if (result != 0 || produced != samples_per_frame) {
@@ -260,19 +277,30 @@ static void *mimi_decode_thread(void *opaque)
             ++worker->decoded_frames;
             worker->samples += produced;
         }
+        const size_t decoded_snapshot = worker->decoded_frames;
+        const size_t queued_snapshot = worker->queued_frames;
+        const int done_snapshot = worker->producer_done;
         pthread_cond_broadcast(&worker->ready);
         pthread_mutex_unlock(&worker->mutex);
+        printf("STREAM stage=mimi_decode turn=%u frame=%zu queued=%zu "
+               "producer_done=%d elapsed_ms=%.0f\n",
+               worker->turn,decoded_snapshot,queued_snapshot,done_snapshot,
+               (monotonic_seconds()-worker->inference_start)*1000.0);
+        fflush(stdout);
     }
     return NULL;
 }
 
 static int mimi_decode_worker_start(mimi_decode_worker *worker,
                                     minimindo_mimi *model,
-                                    size_t capacity_frames)
+                                    size_t capacity_frames,unsigned turn,
+                                    double inference_start)
 {
     memset(worker, 0, sizeof(*worker));
     worker->model = model;
     worker->capacity_frames = capacity_frames;
+    worker->turn = turn;
+    worker->inference_start = inference_start;
 #if defined(_OPENMP)
     worker->drain_threads = omp_get_max_threads();
 #else
@@ -321,17 +349,34 @@ static int mimi_decode_worker_push(mimi_decode_worker *worker,
         worker->codes[worker->queued_frames * MINIMINDO_MIMI_CODEBOOKS +
                       codebook] = frame[codebook];
     ++worker->queued_frames;
-    pthread_cond_signal(&worker->ready);
+    const size_t queued_snapshot = worker->queued_frames;
+    pthread_cond_broadcast(&worker->ready);
     pthread_mutex_unlock(&worker->mutex);
+    printf("STREAM stage=talker_produce turn=%u frame=%zu elapsed_ms=%.0f\n",
+           worker->turn,queued_snapshot,
+           (monotonic_seconds()-worker->inference_start)*1000.0);
+    fflush(stdout);
     return 0;
 }
 
 static void mimi_decode_worker_signal_done(mimi_decode_worker *worker)
 {
     pthread_mutex_lock(&worker->mutex);
+    const int was_done = worker->producer_done;
+    if (!was_done)
+        worker->decode_overlap_frames = worker->decoded_frames;
     worker->producer_done = 1;
+    const size_t queued_snapshot = worker->queued_frames;
+    const size_t decoded_snapshot = worker->decoded_frames;
     pthread_cond_broadcast(&worker->ready);
     pthread_mutex_unlock(&worker->mutex);
+    if (!was_done) {
+        printf("STREAM stage=talker_done turn=%u frames=%zu decoded=%zu "
+               "elapsed_ms=%.0f\n",worker->turn,queued_snapshot,
+               decoded_snapshot,
+               (monotonic_seconds()-worker->inference_start)*1000.0);
+        fflush(stdout);
+    }
 }
 
 static int mimi_decode_worker_finish(mimi_decode_worker *worker)
@@ -433,6 +478,16 @@ static int stream_worker_to_alsa(mimi_decode_worker *worker,
             result = -1;
             break;
         }
+        pthread_mutex_lock(&worker->mutex);
+        const size_t decoded_snapshot = worker->decoded_frames;
+        const size_t queued_snapshot = worker->queued_frames;
+        const int producer_done = worker->producer_done;
+        pthread_mutex_unlock(&worker->mutex);
+        printf("STREAM stage=alsa_write turn=%u frame=%zu decoded=%zu "
+               "queued=%zu producer_done=%d elapsed_ms=%.0f\n",
+               turn,frame+1U,decoded_snapshot,queued_snapshot,producer_done,
+               (monotonic_seconds()-inference_start)*1000.0);
+        fflush(stdout);
         if (frame == 0U) {
             *first_audio_ms =
                 (monotonic_seconds() - inference_start) * 1000.0;
@@ -502,7 +557,7 @@ static int run(const char *thinker_path, const char *talker_path,
                const char *prompt_text, const char *wav_path,
                const char *audio_encoder_path,const char *audio_path,
                const int16_t *provided_pcm,size_t provided_pcm_count,
-               uint32_t max_tokens, uint64_t seed, int stream_mimi,
+               uint32_t max_tokens, uint64_t seed,
                const char *playback_device, unsigned live_turn)
 {
     /* Text EOS and spoken EOS are not close in time: a 10-token Chinese
@@ -595,29 +650,27 @@ static int run(const char *thinker_path, const char *talker_path,
     alsa_playback_worker playback;
     pthread_t playback_thread;
     int playback_started = 0;
-    if (stream_mimi) {
-        if (mimi_decode_worker_start(&decoder, mimi,
-                                     generation_capacity) != 0) {
-            fprintf(stderr, "Mimi stream worker: %s\n", decoder.error);
+    if (mimi_decode_worker_start(&decoder, mimi, generation_capacity,
+                                 live_turn, run_start) != 0) {
+        fprintf(stderr, "Mimi stream worker: %s\n", decoder.error);
+        return -1;
+    }
+    decoder_started = 1;
+    if (playback_device != NULL) {
+        memset(&playback, 0, sizeof(playback));
+        playback.decoder = &decoder;
+        playback.device = playback_device;
+        playback.turn = live_turn;
+        playback.inference_start = run_start;
+        if (pthread_create(&playback_thread, NULL, alsa_playback_thread,
+                           &playback) != 0) {
+            fprintf(stderr, "ALSA playback worker start failed\n");
+            mimi_decode_worker_signal_done(&decoder);
+            (void)mimi_decode_worker_finish(&decoder);
+            free(decoder.audio);
             return -1;
         }
-        decoder_started = 1;
-        if (playback_device != NULL) {
-            memset(&playback, 0, sizeof(playback));
-            playback.decoder = &decoder;
-            playback.device = playback_device;
-            playback.turn = live_turn;
-            playback.inference_start = run_start;
-            if (pthread_create(&playback_thread, NULL, alsa_playback_thread,
-                               &playback) != 0) {
-                fprintf(stderr, "ALSA playback worker start failed\n");
-                mimi_decode_worker_signal_done(&decoder);
-                (void)mimi_decode_worker_finish(&decoder);
-                free(decoder.audio);
-                return -1;
-            }
-            playback_started = 1;
-        }
+        playback_started = 1;
     }
     random_state=seed?seed:UINT64_C(1); size_t steps=0, frame_count=0;
     size_t text_steps=0; int text_finished=0, text_limit_hit=0;
@@ -776,8 +829,12 @@ static int run(const char *thinker_path, const char *talker_path,
            "\"prefill_cpu_ms\":%.0f,\"prefill_cpu_pct\":%.0f,"
            "\"generate_cpu_ms\":%.0f,\"generate_cpu_pct\":%.0f,"
            "\"mimi_cpu_ms\":%.0f,\"mimi_cpu_pct\":%.0f,"
-           "\"model_ms\":%.0f,\"stream_mimi\":%s,"
-           "\"playback_streaming\":%s,\"first_audio_ms\":%.0f,"
+           "\"model_ms\":%.0f,\"streaming\":%s,"
+           "\"decode_overlapped_with_generation\":%s,"
+           "\"decode_overlap_frames\":%zu,"
+           "\"decoder_to_alsa_streaming\":%s,"
+           "\"end_to_end_streaming\":%s,\"producer_end_ms\":%.0f,"
+           "\"first_audio_ms\":%.0f,"
            "\"streaming_lead_ms\":%.0f,\"queue_waits\":%zu,"
            "\"queue_wait_ms\":%.0f,\"text_limit_hit\":%s,"
            "\"audio_drain_complete\":%s}\n",
@@ -804,8 +861,13 @@ static int run(const char *thinker_path, const char *talker_path,
            (mimi_cpu_end-generation_cpu_end)*100.0/
                (mimi_end-generation_end),
            (mimi_end-run_start)*1000,
-           decoder_started?"true":"false",
-           playback_device!=NULL?"true":"false",first_audio_ms,
+           decoder.decode_overlap_frames?"true":"false",
+           decoder.decode_overlap_frames?"true":"false",
+           decoder.decode_overlap_frames,
+           playback_device!=NULL?"true":"false",
+           first_audio_ms>0.0&&first_audio_ms<
+               (generation_end-run_start)*1000.0?"true":"false",
+           (generation_end-run_start)*1000.0,first_audio_ms,
            first_audio_ms>0.0?(mimi_end-run_start)*1000-first_audio_ms:0.0,
            queue_waits,queue_wait_ms,
            text_limit_hit?"true":"false",
@@ -920,7 +982,7 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
                 if(speech_count<4000||active_chunks<3){printf("EVENT empty_vad turn=%u samples=%zu active_chunks=%d action=discard\n",turn,speech_count,active_chunks);fflush(stdout);speech_count=0;continue;}
                 printf("EVENT speech_end turn=%u samples=%zu duration_ms=%zu end=%s\n",turn,speech_count,speech_count*1000/16000,hit_limit?"limit":"silence");fflush(stdout);
                 const double inference_start=monotonic_seconds();const char *response="/dev/shm/minimindo-live-response.wav";
-                int result=run(thinker,talker,tokenizer,mimi,NULL,response,audio_encoder,NULL,speech,speech_count,max_tokens,seed+turn,1,playback_device,turn);
+                int result=run(thinker,talker,tokenizer,mimi,NULL,response,audio_encoder,NULL,speech,speech_count,max_tokens,seed+turn,playback_device,turn);
                 printf("EVENT inference_end turn=%u elapsed_ms=%.0f result=%d\n",turn,(monotonic_seconds()-inference_start)*1000,result);fflush(stdout);speech_count=0;
                 capture_flush(&capture);cooldown=32;
             }}
@@ -931,12 +993,12 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
 int main(int argc,char **argv)
 {
     (void)signal(SIGPIPE, SIG_IGN);
-    if(argc<8){fprintf(stderr,"usage: %s THINKER TALKER TOKENIZER MIMI (--prompt TEXT | --audio INPUT.wav --audio-encoder ENCODER.mmo) --output FILE.wav [--stream-mimi] [--playback-device ALSA] [--max-tokens N] [--seed N]\n",argv[0]);return 2;}
-    const char *prompt=NULL,*output=NULL,*audio_path=NULL,*audio_encoder=NULL,*capture=NULL,*playback=NULL;int live_mode=0,stream_mimi=0;uint32_t max_tokens=96;uint64_t seed=1;
-    for(int i=5;i<argc;++i){if(!strcmp(argv[i],"--prompt")&&i+1<argc)prompt=argv[++i];else if(!strcmp(argv[i],"--audio")&&i+1<argc)audio_path=argv[++i];else if(!strcmp(argv[i],"--audio-encoder")&&i+1<argc)audio_encoder=argv[++i];else if(!strcmp(argv[i],"--output")&&i+1<argc)output=argv[++i];else if(!strcmp(argv[i],"--live"))live_mode=1;else if(!strcmp(argv[i],"--stream-mimi"))stream_mimi=1;else if(!strcmp(argv[i],"--capture-device")&&i+1<argc)capture=argv[++i];else if(!strcmp(argv[i],"--playback-device")&&i+1<argc)playback=argv[++i];else if(!strcmp(argv[i],"--max-tokens")&&i+1<argc)max_tokens=(uint32_t)strtoul(argv[++i],NULL,10);else if(!strcmp(argv[i],"--seed")&&i+1<argc)seed=strtoull(argv[++i],NULL,10);else return 2;}
+    if(argc<8){fprintf(stderr,"usage: %s THINKER TALKER TOKENIZER MIMI (--prompt TEXT | --audio INPUT.wav --audio-encoder ENCODER.mmo) --output FILE.wav [--playback-device ALSA] [--max-tokens N] [--seed N]\n",argv[0]);return 2;}
+    const char *prompt=NULL,*output=NULL,*audio_path=NULL,*audio_encoder=NULL,*capture=NULL,*playback=NULL;int live_mode=0;uint32_t max_tokens=96;uint64_t seed=1;
+    for(int i=5;i<argc;++i){if(!strcmp(argv[i],"--prompt")&&i+1<argc)prompt=argv[++i];else if(!strcmp(argv[i],"--audio")&&i+1<argc)audio_path=argv[++i];else if(!strcmp(argv[i],"--audio-encoder")&&i+1<argc)audio_encoder=argv[++i];else if(!strcmp(argv[i],"--output")&&i+1<argc)output=argv[++i];else if(!strcmp(argv[i],"--live"))live_mode=1;else if(!strcmp(argv[i],"--capture-device")&&i+1<argc)capture=argv[++i];else if(!strcmp(argv[i],"--playback-device")&&i+1<argc)playback=argv[++i];else if(!strcmp(argv[i],"--max-tokens")&&i+1<argc)max_tokens=(uint32_t)strtoul(argv[++i],NULL,10);else if(!strcmp(argv[i],"--seed")&&i+1<argc)seed=strtoull(argv[++i],NULL,10);else return 2;}
     if(max_tokens<16||max_tokens>resident_context-192U)return 2;
     if(live_mode)return live(argv[1],argv[2],argv[3],argv[4],audio_encoder,capture?capture:"plughw:1,0",playback?playback:"plughw:0,0",max_tokens,seed)!=0;
     if((!prompt&&!audio_path)||(prompt&&audio_path)||!output)return 2;
     if (playback != NULL && !safe_alsa_name(playback)) return 2;
-    return run(argv[1],argv[2],argv[3],argv[4],prompt,output,audio_encoder,audio_path,NULL,0,max_tokens,seed,stream_mimi||playback!=NULL,playback,0)!=0;
+    return run(argv[1],argv[2],argv[3],argv[4],prompt,output,audio_encoder,audio_path,NULL,0,max_tokens,seed,playback,0)!=0;
 }

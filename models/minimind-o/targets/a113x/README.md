@@ -55,12 +55,20 @@ path then uses the same NEON Q8 dot kernel as GEMV and retains only the previous
 input vector. One-frame streaming remains equivalent to whole-sequence decode
 without recomputing a prefix.
 
-The live runtime creates the Mimi pthread before generation, but that thread
-sleeps until the Talker producer reaches EOS. Thinker/Talker therefore own the
-four A53 cores during generation. After EOS, the main OpenMP team sleeps and
-Mimi uses a different four-thread team to drain the completed code queue. An
-A/B/B/A test rejected one-core Mimi overlap: it created a fifth runnable thread,
-made generation about 644 ms slower and saved only about 512 ms in Mimi drain.
+The runtime has no batch/non-streaming mode. It always creates the stateful
+Mimi consumer before Talker generation. Talker publishes each complete
+eight-codebook frame immediately; Mimi consumes queued frames with one thread
+while the four-thread Thinker/Talker team is active, then expands to four
+threads after producer EOS. The one-core overlap is slower end-to-end than the
+old phase-exclusive scheduler, but is mandatory pipeline semantics rather than
+an optional flag.
+
+Every frame is observable in the production journal. `talker_produce` records
+queue insertion, `mimi_decode` records PCM publication, and `alsa_write`
+records delivery to the ALSA pipe. The final JSON separately reports
+`decode_overlapped_with_generation`, `decode_overlap_frames`,
+`decoder_to_alsa_streaming`, and `end_to_end_streaming`; it no longer calls all
+of these distinct behaviors `playback_streaming`.
 
 Production playback is decoder-to-ALSA streaming, not token-to-speaker
 streaming. The decoder publishes each 1,920-sample/80 ms PCM frame under a
@@ -77,8 +85,14 @@ then wait for 75% to be decoded (minimum four frames; responses of four frames
 or fewer decode completely). A fixed eight-frame threshold was rejected after
 the physical speaker reported a 1.16-second underrun. The dynamic threshold
 passed the same 16-frame test with 12 frames/960 ms buffered and no ALSA
-underrun. `EVENT first_audio` still occurs before Mimi completion, but only
-after model generation has ended.
+underrun. `EVENT first_audio` still occurs before Mimi completion, but
+continuous ALSA playback currently begins after model generation. A fixed-seed
+44-frame trace showed Talker frame 1 at 2.087 s, Mimi frame 1 at 2.844 s, nine
+frames decoded before producer EOS at 9.044 s, and total model completion at
+14.943 s. Starting ALSA from the first decoded frame would consume each 80 ms
+frame much faster than Mimi can produce it and cause audible underruns;
+therefore the trace correctly reports `end_to_end_streaming=false` until Mimi
+reaches real time.
 
 ## Thread ownership and lifetime
 
