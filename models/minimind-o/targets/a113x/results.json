@@ -57,8 +57,18 @@
       "peak": 0.710567594,
       "different_pcm_bytes_vs_optimized_whole": 9
     },
+    "phase_packed_stream_one_frame": {
+      "wall_seconds": 1.26,
+      "cpu_percent": 318,
+      "peak_rss_kib": 58844,
+      "rms": 0.0925718293,
+      "peak": 0.710567653,
+      "different_pcm_bytes_vs_phase_packed_whole": 11,
+      "different_pcm_bytes_vs_prior_im2col": 16
+    },
     "whole_decode_speedup": 4.127,
-    "optimized_decode_realtime_factor": 0.339
+    "phase_packed_speedup_vs_baseline": 6.190,
+    "phase_packed_decode_realtime_factor": 0.508
   },
   "optimized_mimi_profile_ms": {
     "codebooks": 6.783,
@@ -95,10 +105,28 @@
       "playback_result": 0
     }
   ],
+  "real_streaming_acceptance": {
+    "workload": "production service, physical microphone and speaker, 48 generation steps, 40 Mimi frames",
+    "input_audio_ms": 1184,
+    "model_end_ms": 13161,
+    "first_audio_ms": 17300,
+    "mimi_decode_end_ms": 19207,
+    "streaming_lead_ms": 1907,
+    "playback_end_ms": 20605,
+    "inference_end_ms": 20615,
+    "playback_result": 0,
+    "queue_waits": 7,
+    "queue_wait_ms": 1061,
+    "alsa_underruns": 0,
+    "capture_overruns": 0,
+    "event_order_verified": true
+  },
   "production_policy": {
     "stateful_stream_decode": true,
     "decode_overlapped_with_generation": true,
-    "eager_pcm_playback": false,
-    "reason": "decoder production rate remains below the 12.5 Mimi frames/s playback consumption rate"
+    "direct_raw_pcm_playback": true,
+    "wav_required_for_playback": false,
+    "start_buffer_fraction": 0.75,
+    "reason": "decoder production rate is 6.35 Mimi frames/s while playback consumes 12.5 frames/s"
   }
 }
