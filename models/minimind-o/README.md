@@ -14,6 +14,8 @@ is still speaking; output codebooks are decoded and delivered to ALSA while
 Talker is still generating. Both directions are mandatory streaming paths,
 with no production batch-mode switch. Target
 architecture, correctness gates and measurements are in the
-[A113X target record](targets/a113x/README.md).
+[A113X target record](targets/a113x/README.md). The architectural mistakes,
+measurement lessons, and reusable streaming rules from the prototype are in
+[LEARNINGS.md](LEARNINGS.md).
 
 Upstream source: <https://github.com/jingyaogong/minimind-o>.
