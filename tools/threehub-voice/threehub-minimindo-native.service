@@ -10,9 +10,9 @@ Environment=OMP_WAIT_POLICY=PASSIVE
 Environment=OMP_PROC_BIND=true
 Environment=OMP_PLACES=cores
 ExecStartPre=-/usr/bin/amixer -c 0 set Mic 50% cap
-ExecStart=/dev/shm/minimindo-o-native-v1/minimindo-speech-a113x /dev/shm/minimindo-o-native-v1/minimindo-thinker-q8-v1.mmo /dev/shm/minimindo-o-native-v1/minimindo-talker-q8-v1.mmo /dev/shm/minimindo-o-native-v1/minimindo-tokenizer-v1.mmotok /dev/shm/minimindo-o-native-v1/minimindo-mimi-q8-v1.mmo --live --audio-encoder /dev/shm/minimindo-o-native-v1/minimindo-sensevoice-q8-v1.mmo --capture-device plughw:0,0 --playback-device plughw:0,0 --max-tokens 24 --seed 20260821
+ExecStart=/usr/local/bin/run-minimindo-native-a113x.sh
 Restart=always
-RestartSec=2
+RestartSec=30
 Nice=-5
 OOMScoreAdjust=-500
 

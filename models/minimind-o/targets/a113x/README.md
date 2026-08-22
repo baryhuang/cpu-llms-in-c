@@ -256,12 +256,24 @@ order is:
 speech_end -> model_end -> first_audio -> playback_end -> inference_end
 ```
 
-The current deployment directory is `/dev/shm/minimindo-o-native-v1` because
-the 6.9 GiB root filesystem had only about 138 MiB free while the MiniMind-O
-images require about 377 MiB. `/dev/shm` is erased on reboot. A reboot observed
-on 2026-08-22 therefore left systemd in `203/EXEC` restart failures until the
-artifacts were restored. Existing repository releases do not contain these
-MiniMind-O images, and no new release was created. The service is resident and
-warm for the current boot, but automatic cold-boot recovery remains impossible
-until persistent space or an approved artifact URL is provided; this is a
-deployment constraint, not an inference-thread issue.
+The model directory remains `/dev/shm/minimindo-o-native-v1` because the 6.9
+GiB root filesystem had only about 138 MiB free while the six runtime artifacts
+require about 377 MiB. `/dev/shm` is erased on reboot. The persistent
+`/usr/local/bin/run-minimindo-native-a113x.sh` launcher solves that cold-boot
+failure by verifying every artifact against a pinned SHA256 and downloading
+only missing or corrupt files from the
+[`minimindo-native-a113x-v1.0.0` release](https://github.com/baryhuang/llm-in-c/releases/tag/minimindo-native-a113x-v1.0.0).
+
+Downloads use a per-process `.part` file in `/dev/shm`; the launcher verifies
+it before an atomic rename. A truncated or incorrect asset is never executed.
+Once all six files pass, the launcher `exec`s the native-C binary with the live
+production arguments. The unit retries after 30 seconds if the network is
+unavailable. A warm service restart performs local SHA checks and downloads
+nothing; a board reboot repopulates the volatile directory automatically.
+
+To verify/download the release without starting inference:
+
+```sh
+MINIMINDO_DOWNLOAD_ONLY=1 \
+  /usr/local/bin/run-minimindo-native-a113x.sh
+```

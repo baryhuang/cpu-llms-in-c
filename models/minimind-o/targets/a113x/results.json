@@ -233,7 +233,12 @@
     "volatile_across_reboot": true,
     "root_filesystem_free_mib": 138,
     "model_artifacts_mib": 377,
-    "existing_release_contains_minimindo_artifacts": false,
-    "new_release_created": false
+    "release_tag": "minimindo-native-a113x-v1.0.0",
+    "release_contains_all_required_artifacts": true,
+    "persistent_runner": "/usr/local/bin/run-minimindo-native-a113x.sh",
+    "sha256_pinned_in_runner": true,
+    "partial_download_atomic_rename": true,
+    "systemd_retry_seconds": 30,
+    "automatic_cold_boot_restore": true
   }
 }
