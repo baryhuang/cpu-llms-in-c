@@ -223,6 +223,14 @@ and this higher-accuracy transcript/reasoning path for notification decisions.
 Further exact-graph work should first reduce SenseVoice weight traffic and Mimi
 stages 3/4; a separate tiny model is required to change the latency class.
 
+A live 7.52-second utterance demonstrated why the paths must be bounded:
+SenseVoice took 63.709 seconds, 142-token prefill took 12.477 seconds, and first
+audio arrived at 83.126 seconds. The fast resident service now closes a turn at
+approximately three seconds even without detected silence and records
+`end=limit`; silence-terminated turns record `end=silence`. Longer recordings
+must be handed to the accurate asynchronous path instead of occupying the
+interactive process.
+
 ## Service and monitoring
 
 The deployed unit is `threehub-minimindo-native.service`. Follow activity with:
@@ -231,6 +239,11 @@ The deployed unit is `threehub-minimindo-native.service`. Follow activity with:
 ssh root@100.123.75.40 \
   'journalctl -fu threehub-minimindo-native.service'
 ```
+
+The unit sets the P10S microphone capture gain to 50% / +8 dB before launch.
+At the device's 0 dB setting the endpoint delivered all-zero PCM; +8 dB
+produced an idle RMS around 50--70 and speech peaks above 2,000 while leaving
+speaker volume unchanged.
 
 Successful native turns include `"stream_mimi":true`,
 `"playback_streaming":true`, and stage fields `audio_encode_ms`,

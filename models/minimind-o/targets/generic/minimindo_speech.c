@@ -882,7 +882,7 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
     printf("READY pipeline=MiniMind-O-native-C warmup_ms=%.0f capture=%s playback=%s\n",
            (monotonic_seconds()-warm_start)*1000,capture_device,playback_device);fflush(stdout);
     capture_queue capture;if(capture_start(&capture,capture_device)){perror("arecord");return -1;}
-    enum{CHUNK=CAPTURE_CHUNK,PREROLL=8192,MAX_SPEECH=16*16000};
+    enum{CHUNK=CAPTURE_CHUNK,PREROLL=8192,MAX_SPEECH=3*16000};
     int16_t chunk[CHUNK],ring[PREROLL],*speech=malloc(MAX_SPEECH*sizeof(int16_t));
     size_t ring_write=0,ring_count=0,speech_count=0;double noise=120.0,last_monitor=0;int speaking=0,hot=0,silent=0,active_chunks=0,cooldown=0;unsigned turn=0;
     if(!speech)return -1;
@@ -897,11 +897,11 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
             hot=rms>threshold?hot+1:0;if(hot>=2){speaking=1;silent=0;active_chunks=hot;speech_count=0;size_t start=(ring_write+PREROLL-ring_count)%PREROLL;
                 for(size_t i=0;i<ring_count&&speech_count<MAX_SPEECH;++i)speech[speech_count++]=ring[(start+i)%PREROLL];
                 printf("EVENT speech_start turn=%u preroll_ms=%zu\n",turn+1,ring_count*1000/16000);fflush(stdout);}}
-        else{if(speech_count+got<=MAX_SPEECH){memcpy(speech+speech_count,chunk,got*sizeof(int16_t));speech_count+=got;}if(rms>threshold)++active_chunks;
+        else{const int hit_limit=speech_count+got>MAX_SPEECH;if(!hit_limit){memcpy(speech+speech_count,chunk,got*sizeof(int16_t));speech_count+=got;}if(rms>threshold)++active_chunks;
             silent=rms<threshold*.65?silent+1:0;
-            if(silent>=20||speech_count+got>MAX_SPEECH){speaking=0;hot=0;ring_count=0;++turn;size_t trim=(size_t)silent*CHUNK;if(trim<speech_count)speech_count-=trim;
+            if(silent>=20||hit_limit){speaking=0;hot=0;ring_count=0;++turn;size_t trim=(size_t)silent*CHUNK;if(trim<speech_count)speech_count-=trim;
                 if(speech_count<4000||active_chunks<3){printf("EVENT empty_vad turn=%u samples=%zu active_chunks=%d action=discard\n",turn,speech_count,active_chunks);fflush(stdout);speech_count=0;continue;}
-                printf("EVENT speech_end turn=%u samples=%zu duration_ms=%zu\n",turn,speech_count,speech_count*1000/16000);fflush(stdout);
+                printf("EVENT speech_end turn=%u samples=%zu duration_ms=%zu end=%s\n",turn,speech_count,speech_count*1000/16000,hit_limit?"limit":"silence");fflush(stdout);
                 const double inference_start=monotonic_seconds();const char *response="/dev/shm/minimindo-live-response.wav";
                 int result=run(thinker,talker,tokenizer,mimi,NULL,response,audio_encoder,NULL,speech,speech_count,max_tokens,seed+turn,1,playback_device,turn);
                 printf("EVENT inference_end turn=%u elapsed_ms=%.0f result=%d\n",turn,(monotonic_seconds()-inference_start)*1000,result);fflush(stdout);speech_count=0;

@@ -159,6 +159,21 @@
     "all_four_cores_observed": true,
     "swap_bytes": 0
   },
+  "uncapped_long_live_turn": {
+    "input_audio_ms": 7520,
+    "input_frames": 125,
+    "prompt_tokens": 142,
+    "steps": 24,
+    "audio_encode_ms": 63909,
+    "prefill_ms": 12477,
+    "generate_ms": 4056,
+    "mimi_drain_ms": 3301,
+    "first_audio_ms": 83126,
+    "inference_ms": 84573,
+    "playback_result": 0,
+    "alsa_underruns": 0,
+    "action": "production live capture is now capped at about 3000 ms and logs end=limit; long audio belongs on the separate accurate path"
+  },
   "sensevoice_kernel_ab": {
     "workload": "20 encoder frames from the 1180 ms fixture, A/B/B/A",
     "four_position_q8_seconds": [2.44, 2.31],
@@ -203,6 +218,8 @@
     "omp_wait_policy": "PASSIVE",
     "omp_proc_bind": true,
     "omp_places": "cores",
+    "max_live_input_ms": 3000,
+    "mic_capture_gain_db": 8,
     "reason": "Mimi is slower than the 12.5 frame/s playback consumer and running it alongside the four-thread generator oversubscribes the four A53 cores"
   },
   "rejected_native_c_experiments": {
