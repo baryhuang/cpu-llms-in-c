@@ -45,7 +45,8 @@ instead of inventing measurements or relabeling another format.
 | q5_0 | No native RK3588 5-bit conversion mode | unsupported exact format |
 | q4_K | No native groupwise GGML q4_K conversion mode | unsupported exact format |
 | q4_0 | Rejected; it is not the custom group-32 package below | unsupported exact GGML format |
-| w4a16 · group 32 | Fused vendor dtype unsupported; custom CPU-W4→NPU-FP16 runtime supported | **79.596 s LLMC; correct output** |
+| w4a16 · group 32 · retained v2 | Fused vendor dtype unsupported; custom CPU-W4→NPU-FP16 runtime supported | **79.596 s LLMC; correct output** |
+| w4a16 · group 32 · AOT v3 | CPU-sequential tiled storage, fixed three-thread scheduler, shape-shared AOT and static head scheduling | **42.480 s LLMC median; correct output** |
 
 Toolkit configuration accepts `w8a8`, `w16a16i` and `w16a16i_dfp`, but those
 are not the PDF's q8/q4/q5 formats. No calibrated large-v3-turbo `w8a8` graph
@@ -78,7 +79,7 @@ Core0, Core1 and Core2 masks all pass the same CPU-reference gate, so the
 runtime implements parallelism explicitly instead of relying on
 `RKNN_NPU_CORE_ALL`.
 
-Two comparable modes are implemented in the same binary:
+The retained v2 measurements used two comparable modes in the same binary:
 
 - `baseline` expands and prepares each three-way FP16 B shard on every use.
 - `llmc` expands each decoder weight once, keeps all three B shards resident
@@ -116,15 +117,57 @@ The measured custom path is recorded in
 and
 [`std30-w4fp16-parallel3-llmc.log`](benchmarks/rknpu2/w4a16/std30-w4fp16-parallel3-llmc.log).
 
+### AOT v3 fixed-thread result
+
+The current appended path retains all v2 rows and adds a new versioned package
+and scheduler:
+
+- Each 640-byte W4 record contains 32 FP32 scales followed by one packed
+  32x32 INT4 tile. N32 is outermost and K32 is innermost, so CPU expansion is
+  a sequential read instead of separate scale and nibble streams.
+- Nine shape-shared AOT plans own the RKNPU2 A/C contexts. All 235 W4 tensors
+  are expanded during initialization into 1,611,694,080 resident FP16 B bytes;
+  inference creates no context, thread, queue or DMA allocation.
+- One long-lived C++ worker thread owns each of Core0, Core1 and Core2. Context
+  creation, binding, execution and destruction stay on the owning thread. A
+  fixed three-slot scheduler replaces per-call threads, promises and queues.
+- Attention heads use a static round-robin mapping (`head % 3`). Encoder K/V
+  for decoder cross-attention are transposed and packed once after encoding.
+
+The same final binary was run once in baseline mode and three adjacent times
+in LLMC mode. Model loading is excluded; `std30.wav` is the only workload.
+
+| Metric | AOT v3 baseline | AOT v3 LLMC median | Gain |
+|---|---:|---:|---:|
+| Encoder / fixed 30 s | 34.930 s | **21.796 s** | **1.603x** |
+| Decoder / 90 steps | 125.994 s | **20.733 s** | **6.077x** |
+| Decoder step | 1,399.94 ms | **230.37 ms** | **6.077x** |
+| End to end | 161.158 s | **42.480 s** | **3.794x** |
+
+The LLMC end-to-end trials are 43.776, 42.441 and 42.480 seconds. All three
+and the baseline emit the exact same 87-token sequence. The 1000-loop
+1x1280x51904 gate completed 3000 NPU jobs without a crash or stale DMA data;
+Core0/Core1/Core2 each reached 90% load, CPU/NPU cosine was 0.999999978, and
+average three-core MatMul time was 4.730 ms.
+
+Two measured alternatives were rejected: complete-N Q/K/V jobs statically
+assigned one per core took 43.227 s, and retaining another 30.8 MB of
+cross-attention B buffers took 42.583 s. Neither beat the lighter N-sharded
+42.480 s median path. The custom path remains 2.369x slower than the 17.933 s
+fused FP16 graph because RK3588 cannot fuse runtime W4 weights into that graph.
+
+Raw records are under
+[`benchmarks/rknpu2/w4a16/aot-v3/`](benchmarks/rknpu2/w4a16/aot-v3/).
+
 Build the two packages on the host (Python is build-time only):
 
 ```sh
 python scripts/build_w4a16_weights.py \
   --checkpoint model.safetensors --scope encoder \
-  --output whisper-large-v3-turbo-encoder-w4a16-v2.llmc
+  --output whisper-large-v3-turbo-encoder-w4a16-v3.llmc
 python scripts/build_w4a16_weights.py \
   --checkpoint model.safetensors --scope decoder \
-  --output whisper-large-v3-turbo-decoder-w4a16-v2.llmc
+  --output whisper-large-v3-turbo-decoder-w4a16-v3.llmc
 ```
 
 The target-side gate is [`native/run_w4a16_std30.sh`](native/run_w4a16_std30.sh).

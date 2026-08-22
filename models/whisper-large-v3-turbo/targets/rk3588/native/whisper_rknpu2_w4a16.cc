@@ -358,69 +358,109 @@ public:
   void encoder(const std::string &weight_name, const llmc_float16 *input,
                llmc_float16 *output, int rows,
                const std::string &bias_name = std::string()) {
-    // Encoder linears run once per 30 s window. Stream one FP16 NPU workspace
-    // at a time instead of retaining 202 A/B/C DMA triplets.
     run(encoder_, nullptr, weight_name, input, output, rows, bias_name);
   }
 
   void decoder(const std::string &weight_name, const llmc_float16 *input,
                llmc_float16 *output,
                const std::string &bias_name = std::string()) {
-    run(decoder_, mode_ == llmc::W4RunMode::kLlmc ? &decoder_linears_
-                                                   : nullptr,
-        weight_name, input, output, 1, bias_name);
+    run(decoder_, nullptr, weight_name, input, output, 1, bias_name);
   }
 
   uint64_t runs() const { return runs_; }
   uint64_t baseline_weight_uploads() const { return baseline_weight_uploads_; }
+  uint64_t aot_weight_bytes() const { return aot_weight_bytes_; }
+  size_t aot_plan_count() const { return aot_plans_.size(); }
+  size_t aot_weight_count() const { return aot_weights_.size(); }
   double wall_ms() const { return wall_ms_; }
 
   void prepare() {
     if (mode_ != llmc::W4RunMode::kLlmc)
       return;
-    // Decoder weights are reused at every generated token, so LLMC expands
-    // and binds these once. Baseline deliberately streams them every step.
-    for (const auto &pair : decoder_.tensors()) {
-      if (pair.second.encoding != llmc::W4Encoding::kW4A16Group)
-        continue;
-      decoder_linears_.emplace(
-          pair.first,
-          std::make_unique<llmc::W4Linear>(pair.second, 1, mode_, core_masks_));
-    }
+    prepare_model(encoder_, true);
+    prepare_model(decoder_, false);
   }
 
 private:
-  using Cache =
-      std::unordered_map<std::string, std::unique_ptr<llmc::W4Linear>>;
+  struct PlanShape {
+    int rows = 0;
+    int input_columns = 0;
+    int output_columns = 0;
 
-  void run(const llmc::W4Model &model, Cache *cache,
+    bool operator==(const PlanShape &other) const {
+      return rows == other.rows && input_columns == other.input_columns &&
+             output_columns == other.output_columns;
+    }
+  };
+
+  struct PlanShapeHash {
+    size_t operator()(const PlanShape &shape) const {
+      size_t result = static_cast<size_t>(shape.rows);
+      result = result * 1315423911u + static_cast<size_t>(shape.input_columns);
+      result = result * 1315423911u + static_cast<size_t>(shape.output_columns);
+      return result;
+    }
+  };
+
+  struct PreparedLinear {
+    llmc::AotW4LinearPlan *plan = nullptr;
+    std::unique_ptr<llmc::AotW4LinearPlan::Weight> weight;
+  };
+
+  void prepare_model(const llmc::W4Model &model, bool encoder_scope) {
+    for (const auto &pair : model.tensors()) {
+      const auto &tensor = pair.second;
+      if (!llmc::is_w4_encoding(tensor.encoding) ||
+          aot_weights_.find(pair.first) != aot_weights_.end()) {
+        continue;
+      }
+      int rows = 1;
+      if (encoder_scope) {
+        rows = pair.first == "model.encoder.conv1.weight" ? kFrames
+                                                           : kEncoderFrames;
+      }
+      const PlanShape shape{rows, static_cast<int>(tensor.shape[1]),
+                            static_cast<int>(tensor.shape[0])};
+      auto plan = aot_plans_.find(shape);
+      if (plan == aot_plans_.end()) {
+        plan = aot_plans_
+                   .emplace(shape,
+                            std::make_unique<llmc::AotW4LinearPlan>(
+                                shape.rows, shape.input_columns,
+                                shape.output_columns, core_masks_))
+                   .first;
+      }
+      auto weight = plan->second->prepare(tensor);
+      aot_weight_bytes_ += weight->bytes();
+      aot_weights_.emplace(
+          pair.first, PreparedLinear{plan->second.get(), std::move(weight)});
+    }
+  }
+
+  void run(const llmc::W4Model &model, void *,
            const std::string &weight_name, const llmc_float16 *input,
            llmc_float16 *output, int rows, const std::string &bias_name) {
     const auto begin = Clock::now();
-    llmc::W4Linear *linear = nullptr;
-    std::unique_ptr<llmc::W4Linear> temporary;
-    if (cache == nullptr) {
-      temporary = std::make_unique<llmc::W4Linear>(model.require(weight_name),
-                                                   rows, mode_, core_masks_);
-      linear = temporary.get();
+    int output_columns = 0;
+    if (mode_ == llmc::W4RunMode::kLlmc) {
+      const auto found = aot_weights_.find(weight_name);
+      if (found == aot_weights_.end())
+        throw std::runtime_error("missing AOT W4 linear: " + weight_name);
+      if (found->second.plan->rows() != rows)
+        throw std::runtime_error("AOT W4 row mismatch: " + weight_name);
+      found->second.plan->run(*found->second.weight, input, output);
+      output_columns = found->second.plan->output_columns();
     } else {
-      auto found = cache->find(weight_name);
-      if (found == cache->end()) {
-        auto inserted = cache->emplace(
-            weight_name,
-            std::make_unique<llmc::W4Linear>(model.require(weight_name), rows,
-                                             mode_, core_masks_));
-        found = inserted.first;
-      }
-      linear = found->second.get();
+      llmc::W4Linear linear(model.require(weight_name), rows, mode_,
+                            core_masks_);
+      linear.run(input, output);
+      output_columns = linear.output_columns();
+      ++baseline_weight_uploads_;
     }
-    linear->run(input, output);
     if (!bias_name.empty()) {
-      add_bias(output, rows, linear->output_columns(),
+      add_bias(output, rows, output_columns,
                fp16(model.require(bias_name)));
     }
-    if (mode_ == llmc::W4RunMode::kBaseline)
-      ++baseline_weight_uploads_;
     ++runs_;
     wall_ms_ += elapsed_ms(begin, Clock::now());
   }
@@ -429,7 +469,13 @@ private:
   const llmc::W4Model &decoder_;
   llmc::W4RunMode mode_;
   std::vector<rknn_core_mask> core_masks_;
-  Cache decoder_linears_;
+  // Member destruction is reverse declaration order: weights release their
+  // B buffers through the owning plans before the plans destroy A/C contexts.
+  std::unordered_map<PlanShape, std::unique_ptr<llmc::AotW4LinearPlan>,
+                     PlanShapeHash>
+      aot_plans_;
+  std::unordered_map<std::string, PreparedLinear> aot_weights_;
+  uint64_t aot_weight_bytes_ = 0;
   uint64_t runs_ = 0;
   uint64_t baseline_weight_uploads_ = 0;
   double wall_ms_ = 0.0;
@@ -438,7 +484,8 @@ private:
 class AttentionExecutor {
 public:
   explicit AttentionExecutor(std::vector<rknn_core_mask> core_masks)
-      : encoder_qk_(kEncoderFrames, kHead, kEncoderPaddedFrames, core_masks),
+      : scheduler_(llmc::static_npu_scheduler()),
+        encoder_qk_(kEncoderFrames, kHead, kEncoderPaddedFrames, core_masks),
         encoder_pv_(kEncoderFrames, kEncoderPaddedFrames, kHead, core_masks),
         decoder_self_qk_(1, kHead, kDecoderPositions, core_masks),
         decoder_self_pv_(1, kDecoderPositions, kHead, core_masks),
@@ -448,123 +495,261 @@ public:
   void encoder(const llmc_float16 *query, const llmc_float16 *key,
                const llmc_float16 *value, llmc_float16 *output) {
     run(query, key, value, output, kEncoderFrames, kEncoderFrames,
-        kEncoderPaddedFrames, encoder_qk_, encoder_pv_);
+        kEncoderPaddedFrames, false, encoder_qk_, encoder_pv_);
   }
 
   void decoder_self(const llmc_float16 *query, const llmc_float16 *key,
                     const llmc_float16 *value, int valid_positions,
                     llmc_float16 *output) {
     run(query, key, value, output, 1, valid_positions, kDecoderPositions,
-        decoder_self_qk_, decoder_self_pv_);
+        false, decoder_self_qk_, decoder_self_pv_);
   }
 
   void decoder_cross(const llmc_float16 *query, const llmc_float16 *key,
                      const llmc_float16 *value, llmc_float16 *output) {
     run(query, key, value, output, 1, kEncoderFrames, kEncoderPaddedFrames,
-        decoder_cross_qk_, decoder_cross_pv_);
+        true, decoder_cross_qk_, decoder_cross_pv_);
   }
 
   uint64_t runs() const { return runs_; }
+  uint64_t dispatches() const { return dispatches_; }
   double wall_ms() const { return wall_ms_; }
 
 private:
-  void run(const llmc_float16 *query, const llmc_float16 *key,
-           const llmc_float16 *value, llmc_float16 *output, int query_rows,
-           int key_rows, int padded_key_rows, llmc::F16Matmul &qk,
-           llmc::F16Matmul &pv) {
-    const auto begin = Clock::now();
-    std::vector<llmc_float16> q(static_cast<size_t>(query_rows) * kHead);
-    std::vector<llmc_float16> kt(static_cast<size_t>(kHead) * padded_key_rows);
-    std::vector<llmc_float16> scores(static_cast<size_t>(query_rows) *
-                                     padded_key_rows);
-    std::vector<llmc_float16> probabilities(scores.size(),
-                                            static_cast<llmc_float16>(0.0f));
-    std::vector<llmc_float16> v(static_cast<size_t>(padded_key_rows) * kHead,
-                                static_cast<llmc_float16>(0.0f));
-    std::vector<llmc_float16> head_output(static_cast<size_t>(query_rows) *
-                                          kHead);
+  struct Scratch {
+    Scratch()
+        : q(static_cast<size_t>(kEncoderFrames) * kHead),
+          kt(static_cast<size_t>(kHead) * kEncoderPaddedFrames),
+          scores(static_cast<size_t>(kEncoderFrames) * kEncoderPaddedFrames),
+          probabilities(scores.size()),
+          v(static_cast<size_t>(kEncoderPaddedFrames) * kHead),
+          head_output(static_cast<size_t>(kEncoderFrames) * kHead) {}
 
-    for (int head = 0; head < kHeads; ++head) {
-      std::fill(kt.begin(), kt.end(), static_cast<llmc_float16>(0.0f));
-      std::fill(v.begin(), v.end(), static_cast<llmc_float16>(0.0f));
-      for (int row = 0; row < query_rows; ++row) {
+    std::vector<llmc_float16> q;
+    std::vector<llmc_float16> kt;
+    std::vector<llmc_float16> scores;
+    std::vector<llmc_float16> probabilities;
+    std::vector<llmc_float16> v;
+    std::vector<llmc_float16> head_output;
+  };
+
+  struct HeadTask {
+    AttentionExecutor *owner = nullptr;
+    const llmc_float16 *query = nullptr;
+    const llmc_float16 *key = nullptr;
+    const llmc_float16 *value = nullptr;
+    llmc_float16 *output = nullptr;
+    int query_rows = 0;
+    int key_rows = 0;
+    int padded_key_rows = 0;
+    bool prepacked_key_value = false;
+    llmc::WorkerF16Matmul *qk = nullptr;
+    llmc::WorkerF16Matmul *pv = nullptr;
+    size_t worker_index = 0;
+    int result = RKNN_SUCC;
+  };
+
+  static void run_heads_task(void *argument) noexcept {
+    auto &task = *static_cast<HeadTask *>(argument);
+    task.result = task.owner->run_heads(task);
+  }
+
+  int run_heads(HeadTask &task) noexcept {
+    Scratch &scratch = scratch_[task.worker_index];
+    for (int head = static_cast<int>(task.worker_index); head < kHeads;
+         head += static_cast<int>(llmc::StaticNpuScheduler::kWorkerCount)) {
+      const llmc_float16 *packed_key = nullptr;
+      const llmc_float16 *packed_value = nullptr;
+      if (task.prepacked_key_value) {
+        packed_key = task.key + static_cast<size_t>(head) * kHead *
+                                    task.padded_key_rows;
+        packed_value = task.value + static_cast<size_t>(head) *
+                                        task.padded_key_rows * kHead;
+      } else {
+        std::fill_n(scratch.kt.data(),
+                    static_cast<size_t>(kHead) * task.padded_key_rows,
+                    static_cast<llmc_float16>(0.0f));
+        std::fill_n(scratch.v.data(),
+                    static_cast<size_t>(task.padded_key_rows) * kHead,
+                    static_cast<llmc_float16>(0.0f));
+      }
+      for (int row = 0; row < task.query_rows; ++row) {
         for (int column = 0; column < kHead; ++column) {
-          q[static_cast<size_t>(row) * kHead + column] =
+          scratch.q[static_cast<size_t>(row) * kHead + column] =
               static_cast<llmc_float16>(
-                  static_cast<float>(query[static_cast<size_t>(row) * kModel +
-                                           head * kHead + column]) *
+                  static_cast<float>(
+                      task.query[static_cast<size_t>(row) * kModel +
+                                 head * kHead + column]) *
                   kAttentionScale);
         }
       }
-      for (int row = 0; row < key_rows; ++row) {
-        for (int column = 0; column < kHead; ++column) {
-          kt[static_cast<size_t>(column) * padded_key_rows + row] =
-              key[static_cast<size_t>(row) * kModel + head * kHead + column];
-          v[static_cast<size_t>(row) * kHead + column] =
-              value[static_cast<size_t>(row) * kModel + head * kHead + column];
+      if (!task.prepacked_key_value) {
+        for (int row = 0; row < task.key_rows; ++row) {
+          for (int column = 0; column < kHead; ++column) {
+            scratch.kt[static_cast<size_t>(column) * task.padded_key_rows +
+                       row] =
+                task.key[static_cast<size_t>(row) * kModel + head * kHead +
+                         column];
+            scratch.v[static_cast<size_t>(row) * kHead + column] =
+                task.value[static_cast<size_t>(row) * kModel + head * kHead +
+                           column];
+          }
         }
+        packed_key = scratch.kt.data();
+        packed_value = scratch.v.data();
       }
-      qk.run(q.data(), kt.data(), scores.data());
-      for (int row = 0; row < query_rows; ++row) {
+      int result = task.qk->run_on_worker(
+          task.worker_index, scratch.q.data(), packed_key,
+          scratch.scores.data());
+      if (result != RKNN_SUCC)
+        return result;
+      for (int row = 0; row < task.query_rows; ++row) {
         const llmc_float16 *score_row =
-            scores.data() + static_cast<size_t>(row) * padded_key_rows;
+            scratch.scores.data() +
+            static_cast<size_t>(row) * task.padded_key_rows;
         llmc_float16 *probability_row =
-            probabilities.data() + static_cast<size_t>(row) * padded_key_rows;
+            scratch.probabilities.data() +
+            static_cast<size_t>(row) * task.padded_key_rows;
         float maximum = -std::numeric_limits<float>::infinity();
-        for (int column = 0; column < key_rows; ++column) {
+        for (int column = 0; column < task.key_rows; ++column)
           maximum = std::max(maximum, static_cast<float>(score_row[column]));
-        }
         double total = 0.0;
-        for (int column = 0; column < key_rows; ++column) {
+        for (int column = 0; column < task.key_rows; ++column)
           total += std::exp(static_cast<float>(score_row[column]) - maximum);
-        }
         const float inverse = static_cast<float>(1.0 / total);
-        for (int column = 0; column < key_rows; ++column) {
+        for (int column = 0; column < task.key_rows; ++column) {
           probability_row[column] = static_cast<llmc_float16>(
               std::exp(static_cast<float>(score_row[column]) - maximum) *
               inverse);
         }
-        std::fill(probability_row + key_rows, probability_row + padded_key_rows,
+        std::fill(probability_row + task.key_rows,
+                  probability_row + task.padded_key_rows,
                   static_cast<llmc_float16>(0.0f));
       }
-      pv.run(probabilities.data(), v.data(), head_output.data());
-      for (int row = 0; row < query_rows; ++row) {
+      result = task.pv->run_on_worker(
+          task.worker_index, scratch.probabilities.data(), packed_value,
+          scratch.head_output.data());
+      if (result != RKNN_SUCC)
+        return result;
+      for (int row = 0; row < task.query_rows; ++row) {
         for (int column = 0; column < kHead; ++column) {
-          output[static_cast<size_t>(row) * kModel + head * kHead + column] =
-              head_output[static_cast<size_t>(row) * kHead + column];
+          task.output[static_cast<size_t>(row) * kModel + head * kHead +
+                      column] =
+              scratch.head_output[static_cast<size_t>(row) * kHead + column];
         }
       }
-      runs_ += 2;
     }
+    return RKNN_SUCC;
+  }
+
+  void run(const llmc_float16 *query, const llmc_float16 *key,
+           const llmc_float16 *value, llmc_float16 *output, int query_rows,
+           int key_rows, int padded_key_rows, bool prepacked_key_value,
+           llmc::WorkerF16Matmul &qk, llmc::WorkerF16Matmul &pv) {
+    const auto begin = Clock::now();
+    std::array<HeadTask, llmc::StaticNpuScheduler::kWorkerCount> jobs{};
+    std::array<llmc::StaticNpuScheduler::Task,
+               llmc::StaticNpuScheduler::kWorkerCount>
+        tasks{};
+    for (size_t index = 0; index < jobs.size(); ++index) {
+      jobs[index] = {this, query, key, value, output, query_rows, key_rows,
+                     padded_key_rows, prepacked_key_value, &qk, &pv, index};
+      tasks[index] = {run_heads_task, &jobs[index]};
+    }
+    scheduler_.dispatch(tasks);
+    for (const auto &job : jobs) {
+      if (job.result != RKNN_SUCC) {
+        throw std::runtime_error("head-parallel attention failed: " +
+                                 std::to_string(job.result));
+      }
+    }
+    runs_ += kHeads * 2;
+    ++dispatches_;
     wall_ms_ += elapsed_ms(begin, Clock::now());
   }
 
-  llmc::F16Matmul encoder_qk_;
-  llmc::F16Matmul encoder_pv_;
-  llmc::F16Matmul decoder_self_qk_;
-  llmc::F16Matmul decoder_self_pv_;
-  llmc::F16Matmul decoder_cross_qk_;
-  llmc::F16Matmul decoder_cross_pv_;
+  llmc::StaticNpuScheduler &scheduler_;
+  llmc::WorkerF16Matmul encoder_qk_;
+  llmc::WorkerF16Matmul encoder_pv_;
+  llmc::WorkerF16Matmul decoder_self_qk_;
+  llmc::WorkerF16Matmul decoder_self_pv_;
+  llmc::WorkerF16Matmul decoder_cross_qk_;
+  llmc::WorkerF16Matmul decoder_cross_pv_;
+  std::array<Scratch, llmc::StaticNpuScheduler::kWorkerCount> scratch_;
   uint64_t runs_ = 0;
+  uint64_t dispatches_ = 0;
   double wall_ms_ = 0.0;
 };
 
 struct CrossCache {
+  CrossCache() {
+    const size_t key_elements =
+        static_cast<size_t>(kHeads) * kHead * kEncoderPaddedFrames;
+    const size_t value_elements =
+        static_cast<size_t>(kHeads) * kEncoderPaddedFrames * kHead;
+    for (int layer = 0; layer < kDecoderLayers; ++layer) {
+      key[layer].assign(key_elements, static_cast<llmc_float16>(0.0f));
+      value[layer].assign(value_elements, static_cast<llmc_float16>(0.0f));
+    }
+  }
+
+  void pack(int layer, const llmc_float16 *row_major_key,
+            const llmc_float16 *row_major_value) {
+    for (int head = 0; head < kHeads; ++head) {
+      llmc_float16 *head_key =
+          key[layer].data() +
+          static_cast<size_t>(head) * kHead * kEncoderPaddedFrames;
+      llmc_float16 *head_value =
+          value[layer].data() +
+          static_cast<size_t>(head) * kEncoderPaddedFrames * kHead;
+      for (int row = 0; row < kEncoderFrames; ++row) {
+        for (int column = 0; column < kHead; ++column) {
+          const size_t source = static_cast<size_t>(row) * kModel +
+                                head * kHead + column;
+          head_key[static_cast<size_t>(column) * kEncoderPaddedFrames + row] =
+              row_major_key[source];
+          head_value[static_cast<size_t>(row) * kHead + column] =
+              row_major_value[source];
+        }
+      }
+    }
+  }
+
   std::array<std::vector<llmc_float16>, kDecoderLayers> key;
   std::array<std::vector<llmc_float16>, kDecoderLayers> value;
 };
 
-std::vector<llmc_float16> run_encoder(const std::vector<llmc_float16> &features,
-                                      const llmc::W4Model &model,
-                                      LinearExecutor &linear,
-                                      AttentionExecutor &attention,
-                                      CrossCache &cross) {
+struct EncoderWorkspace {
+  EncoderWorkspace()
+      : conv1_input(static_cast<size_t>(kFrames) * kMels * 3),
+        conv1(static_cast<size_t>(kFrames) * kModel),
+        conv2_input(static_cast<size_t>(kEncoderFrames) * kModel * 3),
+        hidden(static_cast<size_t>(kEncoderFrames) * kModel),
+        normalized(hidden.size()), query(hidden.size()), key(hidden.size()),
+        value(hidden.size()), attended(hidden.size()), projected(hidden.size()),
+        expanded(static_cast<size_t>(kEncoderFrames) * kFfn) {}
+
+  std::vector<llmc_float16> conv1_input;
+  std::vector<llmc_float16> conv1;
+  std::vector<llmc_float16> conv2_input;
+  std::vector<llmc_float16> hidden;
+  std::vector<llmc_float16> normalized;
+  std::vector<llmc_float16> query;
+  std::vector<llmc_float16> key;
+  std::vector<llmc_float16> value;
+  std::vector<llmc_float16> attended;
+  std::vector<llmc_float16> projected;
+  std::vector<llmc_float16> expanded;
+};
+
+void run_encoder(const std::vector<llmc_float16> &features,
+                 const llmc::W4Model &model, LinearExecutor &linear,
+                 AttentionExecutor &attention, CrossCache &cross,
+                 EncoderWorkspace &workspace) {
   if (features.size() != static_cast<size_t>(kMels) * kFrames) {
     throw std::runtime_error("feature shape must be [128, 3000]");
   }
-  std::vector<llmc_float16> conv1_input(static_cast<size_t>(kFrames) * kMels *
-                                            3,
-                                        static_cast<llmc_float16>(0.0f));
+  auto &conv1_input = workspace.conv1_input;
   for (int frame = 0; frame < kFrames; ++frame) {
     for (int mel = 0; mel < kMels; ++mel) {
       for (int kernel = 0; kernel < 3; ++kernel) {
@@ -576,14 +761,12 @@ std::vector<llmc_float16> run_encoder(const std::vector<llmc_float16> &features,
       }
     }
   }
-  std::vector<llmc_float16> conv1(static_cast<size_t>(kFrames) * kModel);
+  auto &conv1 = workspace.conv1;
   linear.encoder("model.encoder.conv1.weight", conv1_input.data(), conv1.data(),
                  kFrames, "model.encoder.conv1.bias");
   gelu_in_place(conv1.data(), conv1.size());
 
-  std::vector<llmc_float16> conv2_input(static_cast<size_t>(kEncoderFrames) *
-                                            kModel * 3,
-                                        static_cast<llmc_float16>(0.0f));
+  auto &conv2_input = workspace.conv2_input;
   for (int frame = 0; frame < kEncoderFrames; ++frame) {
     for (int channel = 0; channel < kModel; ++channel) {
       for (int kernel = 0; kernel < 3; ++kernel) {
@@ -596,8 +779,7 @@ std::vector<llmc_float16> run_encoder(const std::vector<llmc_float16> &features,
       }
     }
   }
-  std::vector<llmc_float16> hidden(static_cast<size_t>(kEncoderFrames) *
-                                   kModel);
+  auto &hidden = workspace.hidden;
   linear.encoder("model.encoder.conv2.weight", conv2_input.data(),
                  hidden.data(), kEncoderFrames, "model.encoder.conv2.bias");
   gelu_in_place(hidden.data(), hidden.size());
@@ -605,14 +787,13 @@ std::vector<llmc_float16> run_encoder(const std::vector<llmc_float16> &features,
       fp16(model.require("model.encoder.embed_positions.weight"));
   add_in_place(hidden.data(), positions, hidden.size());
 
-  std::vector<llmc_float16> normalized(hidden.size());
-  std::vector<llmc_float16> query(hidden.size());
-  std::vector<llmc_float16> key(hidden.size());
-  std::vector<llmc_float16> value(hidden.size());
-  std::vector<llmc_float16> attended(hidden.size());
-  std::vector<llmc_float16> projected(hidden.size());
-  std::vector<llmc_float16> expanded(static_cast<size_t>(kEncoderFrames) *
-                                     kFfn);
+  auto &normalized = workspace.normalized;
+  auto &query = workspace.query;
+  auto &key = workspace.key;
+  auto &value = workspace.value;
+  auto &attended = workspace.attended;
+  auto &projected = workspace.projected;
+  auto &expanded = workspace.expanded;
 
   for (int layer = 0; layer < kEncoderLayers; ++layer) {
     const std::string prefix =
@@ -652,23 +833,79 @@ std::vector<llmc_float16> run_encoder(const std::vector<llmc_float16> &features,
   for (int layer = 0; layer < kDecoderLayers; ++layer) {
     const std::string prefix =
         "model.decoder.layers." + std::to_string(layer) + ".encoder_attn.";
-    cross.key[layer].resize(hidden.size());
-    cross.value[layer].resize(hidden.size());
-    linear.encoder(prefix + "k_proj.weight", hidden.data(),
-                   cross.key[layer].data(), kEncoderFrames);
-    linear.encoder(prefix + "v_proj.weight", hidden.data(),
-                   cross.value[layer].data(), kEncoderFrames,
-                   prefix + "v_proj.bias");
+    linear.encoder(prefix + "k_proj.weight", hidden.data(), key.data(),
+                   kEncoderFrames);
+    linear.encoder(prefix + "v_proj.weight", hidden.data(), value.data(),
+                   kEncoderFrames, prefix + "v_proj.bias");
+    cross.pack(layer, key.data(), value.data());
   }
-  return hidden;
 }
+
+struct DecoderLayerNames {
+  void initialize(int layer) {
+    const std::string prefix =
+        "model.decoder.layers." + std::to_string(layer) + ".";
+    self_norm_weight = prefix + "self_attn_layer_norm.weight";
+    self_norm_bias = prefix + "self_attn_layer_norm.bias";
+    self_q_weight = prefix + "self_attn.q_proj.weight";
+    self_q_bias = prefix + "self_attn.q_proj.bias";
+    self_k_weight = prefix + "self_attn.k_proj.weight";
+    self_v_weight = prefix + "self_attn.v_proj.weight";
+    self_v_bias = prefix + "self_attn.v_proj.bias";
+    self_out_weight = prefix + "self_attn.out_proj.weight";
+    self_out_bias = prefix + "self_attn.out_proj.bias";
+    cross_norm_weight = prefix + "encoder_attn_layer_norm.weight";
+    cross_norm_bias = prefix + "encoder_attn_layer_norm.bias";
+    cross_q_weight = prefix + "encoder_attn.q_proj.weight";
+    cross_q_bias = prefix + "encoder_attn.q_proj.bias";
+    cross_out_weight = prefix + "encoder_attn.out_proj.weight";
+    cross_out_bias = prefix + "encoder_attn.out_proj.bias";
+    final_norm_weight = prefix + "final_layer_norm.weight";
+    final_norm_bias = prefix + "final_layer_norm.bias";
+    fc1_weight = prefix + "fc1.weight";
+    fc1_bias = prefix + "fc1.bias";
+    fc2_weight = prefix + "fc2.weight";
+    fc2_bias = prefix + "fc2.bias";
+  }
+
+  std::string self_norm_weight;
+  std::string self_norm_bias;
+  std::string self_q_weight;
+  std::string self_q_bias;
+  std::string self_k_weight;
+  std::string self_v_weight;
+  std::string self_v_bias;
+  std::string self_out_weight;
+  std::string self_out_bias;
+  std::string cross_norm_weight;
+  std::string cross_norm_bias;
+  std::string cross_q_weight;
+  std::string cross_q_bias;
+  std::string cross_out_weight;
+  std::string cross_out_bias;
+  std::string final_norm_weight;
+  std::string final_norm_bias;
+  std::string fc1_weight;
+  std::string fc1_bias;
+  std::string fc2_weight;
+  std::string fc2_bias;
+};
 
 class Decoder {
 public:
   Decoder(const llmc::W4Model &model, LinearExecutor &linear,
           AttentionExecutor &attention, const CrossCache &cross)
-      : model_(model), linear_(linear), attention_(attention), cross_(cross) {
+      : model_(model), linear_(linear), attention_(attention), cross_(cross),
+        embeddings_(fp16(model.require("model.decoder.embed_tokens.weight"))),
+        positions_(fp16(model.require("model.decoder.embed_positions.weight"))),
+        final_norm_weight_(
+            fp16(model.require("model.decoder.layer_norm.weight"))),
+        final_norm_bias_(fp16(model.require("model.decoder.layer_norm.bias"))),
+        hidden_(kModel), normalized_(kModel), query_(kModel), key_(kModel),
+        value_(kModel), attended_(kModel), projected_(kModel), expanded_(kFfn),
+        logits_(51904) {
     for (int layer = 0; layer < kDecoderLayers; ++layer) {
+      names_[layer].initialize(layer);
       self_key_[layer].assign(static_cast<size_t>(kDecoderPositions) * kModel,
                               static_cast<llmc_float16>(0.0f));
       self_value_[layer].assign(static_cast<size_t>(kDecoderPositions) * kModel,
@@ -681,79 +918,62 @@ public:
         position >= kDecoderPositions) {
       throw std::runtime_error("decoder token or position out of range");
     }
-    const llmc_float16 *embeddings =
-        fp16(model_.require("model.decoder.embed_tokens.weight"));
-    const llmc_float16 *positions =
-        fp16(model_.require("model.decoder.embed_positions.weight"));
-    std::vector<llmc_float16> hidden(kModel);
     for (int column = 0; column < kModel; ++column) {
-      hidden[column] = static_cast<llmc_float16>(
+      hidden_[column] = static_cast<llmc_float16>(
           static_cast<float>(
-              embeddings[static_cast<size_t>(token) * kModel + column]) +
+              embeddings_[static_cast<size_t>(token) * kModel + column]) +
           static_cast<float>(
-              positions[static_cast<size_t>(position) * kModel + column]));
+              positions_[static_cast<size_t>(position) * kModel + column]));
     }
-
-    std::vector<llmc_float16> normalized(kModel);
-    std::vector<llmc_float16> query(kModel);
-    std::vector<llmc_float16> key(kModel);
-    std::vector<llmc_float16> value(kModel);
-    std::vector<llmc_float16> attended(kModel);
-    std::vector<llmc_float16> projected(kModel);
-    std::vector<llmc_float16> expanded(kFfn);
 
     for (int layer = 0; layer < kDecoderLayers; ++layer) {
-      const std::string prefix =
-          "model.decoder.layers." + std::to_string(layer) + ".";
-      layer_norm(hidden.data(), normalized.data(), 1, kModel,
-                 fp16(model_.require(prefix + "self_attn_layer_norm.weight")),
-                 fp16(model_.require(prefix + "self_attn_layer_norm.bias")));
-      linear_.decoder(prefix + "self_attn.q_proj.weight", normalized.data(),
-                      query.data(), prefix + "self_attn.q_proj.bias");
-      linear_.decoder(prefix + "self_attn.k_proj.weight", normalized.data(),
-                      key.data());
-      linear_.decoder(prefix + "self_attn.v_proj.weight", normalized.data(),
-                      value.data(), prefix + "self_attn.v_proj.bias");
-      std::copy(key.begin(), key.end(),
+      const DecoderLayerNames &names = names_[layer];
+      layer_norm(hidden_.data(), normalized_.data(), 1, kModel,
+                 fp16(model_.require(names.self_norm_weight)),
+                 fp16(model_.require(names.self_norm_bias)));
+      linear_.decoder(names.self_q_weight, normalized_.data(), query_.data(),
+                      names.self_q_bias);
+      linear_.decoder(names.self_k_weight, normalized_.data(), key_.data());
+      linear_.decoder(names.self_v_weight, normalized_.data(), value_.data(),
+                      names.self_v_bias);
+      std::copy(key_.begin(), key_.end(),
                 self_key_[layer].begin() +
                     static_cast<size_t>(position) * kModel);
-      std::copy(value.begin(), value.end(),
+      std::copy(value_.begin(), value_.end(),
                 self_value_[layer].begin() +
                     static_cast<size_t>(position) * kModel);
-      attention_.decoder_self(query.data(), self_key_[layer].data(),
+      attention_.decoder_self(query_.data(), self_key_[layer].data(),
                               self_value_[layer].data(), position + 1,
-                              attended.data());
-      linear_.decoder(prefix + "self_attn.out_proj.weight", attended.data(),
-                      projected.data(), prefix + "self_attn.out_proj.bias");
-      add_in_place(hidden.data(), projected.data(), hidden.size());
+                              attended_.data());
+      linear_.decoder(names.self_out_weight, attended_.data(),
+                      projected_.data(), names.self_out_bias);
+      add_in_place(hidden_.data(), projected_.data(), hidden_.size());
 
       layer_norm(
-          hidden.data(), normalized.data(), 1, kModel,
-          fp16(model_.require(prefix + "encoder_attn_layer_norm.weight")),
-          fp16(model_.require(prefix + "encoder_attn_layer_norm.bias")));
-      linear_.decoder(prefix + "encoder_attn.q_proj.weight", normalized.data(),
-                      query.data(), prefix + "encoder_attn.q_proj.bias");
-      attention_.decoder_cross(query.data(), cross_.key[layer].data(),
-                               cross_.value[layer].data(), attended.data());
-      linear_.decoder(prefix + "encoder_attn.out_proj.weight", attended.data(),
-                      projected.data(), prefix + "encoder_attn.out_proj.bias");
-      add_in_place(hidden.data(), projected.data(), hidden.size());
+          hidden_.data(), normalized_.data(), 1, kModel,
+          fp16(model_.require(names.cross_norm_weight)),
+          fp16(model_.require(names.cross_norm_bias)));
+      linear_.decoder(names.cross_q_weight, normalized_.data(), query_.data(),
+                      names.cross_q_bias);
+      attention_.decoder_cross(query_.data(), cross_.key[layer].data(),
+                               cross_.value[layer].data(), attended_.data());
+      linear_.decoder(names.cross_out_weight, attended_.data(),
+                      projected_.data(), names.cross_out_bias);
+      add_in_place(hidden_.data(), projected_.data(), hidden_.size());
 
-      layer_norm(hidden.data(), normalized.data(), 1, kModel,
-                 fp16(model_.require(prefix + "final_layer_norm.weight")),
-                 fp16(model_.require(prefix + "final_layer_norm.bias")));
-      linear_.decoder(prefix + "fc1.weight", normalized.data(), expanded.data(),
-                      prefix + "fc1.bias");
-      gelu_in_place(expanded.data(), expanded.size());
-      linear_.decoder(prefix + "fc2.weight", expanded.data(), projected.data(),
-                      prefix + "fc2.bias");
-      add_in_place(hidden.data(), projected.data(), hidden.size());
+      layer_norm(hidden_.data(), normalized_.data(), 1, kModel,
+                 fp16(model_.require(names.final_norm_weight)),
+                 fp16(model_.require(names.final_norm_bias)));
+      linear_.decoder(names.fc1_weight, normalized_.data(), expanded_.data(),
+                      names.fc1_bias);
+      gelu_in_place(expanded_.data(), expanded_.size());
+      linear_.decoder(names.fc2_weight, expanded_.data(), projected_.data(),
+                      names.fc2_bias);
+      add_in_place(hidden_.data(), projected_.data(), hidden_.size());
     }
-    layer_norm(hidden.data(), normalized.data(), 1, kModel,
-               fp16(model_.require("model.decoder.layer_norm.weight")),
-               fp16(model_.require("model.decoder.layer_norm.bias")));
-    logits_.resize(51904);
-    linear_.decoder("model.proj_out.weight", normalized.data(), logits_.data());
+    layer_norm(hidden_.data(), normalized_.data(), 1, kModel,
+               final_norm_weight_, final_norm_bias_);
+    linear_.decoder("model.proj_out.weight", normalized_.data(), logits_.data());
     return logits_;
   }
 
@@ -762,8 +982,21 @@ private:
   LinearExecutor &linear_;
   AttentionExecutor &attention_;
   const CrossCache &cross_;
+  const llmc_float16 *embeddings_ = nullptr;
+  const llmc_float16 *positions_ = nullptr;
+  const llmc_float16 *final_norm_weight_ = nullptr;
+  const llmc_float16 *final_norm_bias_ = nullptr;
+  std::array<DecoderLayerNames, kDecoderLayers> names_;
   std::array<std::vector<llmc_float16>, kDecoderLayers> self_key_;
   std::array<std::vector<llmc_float16>, kDecoderLayers> self_value_;
+  std::vector<llmc_float16> hidden_;
+  std::vector<llmc_float16> normalized_;
+  std::vector<llmc_float16> query_;
+  std::vector<llmc_float16> key_;
+  std::vector<llmc_float16> value_;
+  std::vector<llmc_float16> attended_;
+  std::vector<llmc_float16> projected_;
+  std::vector<llmc_float16> expanded_;
   std::vector<llmc_float16> logits_;
 };
 
@@ -1033,6 +1266,9 @@ int main(int argc, char **argv) {
     const auto vocabulary = load_vocabulary(argv[3]);
     LinearExecutor linear(encoder_model, decoder_model, mode, core_masks);
     AttentionExecutor attention(core_masks);
+    CrossCache cross;
+    EncoderWorkspace encoder_workspace;
+    Decoder decoder(decoder_model, linear, attention, cross);
     linear.prepare();
     const auto init_end = Clock::now();
 
@@ -1046,16 +1282,18 @@ int main(int argc, char **argv) {
 
     NpuLoadMonitor monitor;
     monitor.start();
-    CrossCache cross;
     monitor.stage(NpuLoadMonitor::Stage::kEncoder);
     const auto encoder_begin = Clock::now();
-    const auto encoder_hidden =
-        run_encoder(features, encoder_model, linear, attention, cross);
+    run_encoder(features, encoder_model, linear, attention, cross,
+                encoder_workspace);
     const auto encoder_end = Clock::now();
+    const double encoder_linear_wall_ms = linear.wall_ms();
+    const double encoder_attention_wall_ms = attention.wall_ms();
     monitor.stage(NpuLoadMonitor::Stage::kDecoder);
-    Decoder decoder(decoder_model, linear, attention, cross);
     std::vector<int> tokens = {kSot, kEnglish, kTranscribe, kNoTimestamps};
+    tokens.reserve(kMaxNewTokens + 4);
     std::vector<double> decoder_steps;
+    decoder_steps.reserve(kMaxNewTokens + 4);
     const std::vector<llmc_float16> *logits = nullptr;
     for (size_t position = 0; position < tokens.size(); ++position) {
       const auto begin = Clock::now();
@@ -1092,7 +1330,7 @@ int main(int argc, char **argv) {
     double decoder_total = 0.0;
     for (double value : decoder_steps)
       decoder_total += value;
-    std::printf("runtime: llmc-native-cpp-rknpu2-fp16-matmul\n");
+    std::printf("runtime: llmc-native-cpp-aot-w4-rknpu2-fp16-matmul\n");
     std::printf("quantization: cpu-w4-group32-to-npu-fp16\n");
     std::printf("mode: %s\n", llmc::run_mode_name(mode));
     std::printf("audio_seconds: %.3f\n", audio_seconds);
@@ -1112,20 +1350,35 @@ int main(int argc, char **argv) {
                 static_cast<unsigned long long>(linear.runs()));
     std::printf("fp16_attention_matmul_runs: %llu\n",
                 static_cast<unsigned long long>(attention.runs()));
+    std::printf("attention_host_dispatches: %llu\n",
+                static_cast<unsigned long long>(attention.dispatches()));
     std::printf(
         "baseline_weight_uploads: %llu\n",
         static_cast<unsigned long long>(linear.baseline_weight_uploads()));
+    std::printf("aot_linear_plans: %zu\n", linear.aot_plan_count());
+    std::printf("aot_prepared_weights: %zu\n", linear.aot_weight_count());
+    std::printf("aot_resident_weight_bytes: %llu\n",
+                static_cast<unsigned long long>(linear.aot_weight_bytes()));
     std::printf("w4_linear_wall_ms: %.3f\n", linear.wall_ms());
     std::printf("attention_wall_ms: %.3f\n", attention.wall_ms());
+    std::printf("encoder_w4_linear_wall_ms: %.3f\n",
+                encoder_linear_wall_ms);
+    std::printf("decoder_w4_linear_wall_ms: %.3f\n",
+                linear.wall_ms() - encoder_linear_wall_ms);
+    std::printf("encoder_attention_wall_ms: %.3f\n",
+                encoder_attention_wall_ms);
+    std::printf("decoder_attention_wall_ms: %.3f\n",
+                attention.wall_ms() - encoder_attention_wall_ms);
     std::printf("npu_scheduler: %s\n", scheduler_text);
-    std::printf("npu_sharding: output-columns-N-aligned16\n");
+    std::printf("npu_sharding: output-columns-N-aligned32\n");
+    std::printf("attention_scheduler: static-head-round-robin-Core0-Core1-Core2\n");
+    std::printf("npu_worker_model: one-persistent-thread-per-core\n");
     std::printf("npu_configured_cores: 3\n");
     monitor.print();
     std::printf("token_ids:");
     for (int token : tokens)
       std::printf(" %d", token);
     std::printf("\ntext:\n%s\n", text.c_str());
-    (void)encoder_hidden;
   } catch (const std::exception &error) {
     std::fprintf(stderr, "error: %s\n", error.what());
     return 1;

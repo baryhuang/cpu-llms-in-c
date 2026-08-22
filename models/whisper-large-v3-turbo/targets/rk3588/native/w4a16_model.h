@@ -14,7 +14,15 @@ namespace llmc {
 enum class W4Encoding : uint8_t {
   kFloat16 = 0,
   kW4A16Group = 1,
+  // CPU-ready N32 x K32 tiles. Each 64-byte-aligned record contains 32 FP32
+  // scales followed by the corresponding 32 x 32 signed INT4 values.
+  kW4A16GroupTiled = 2,
 };
+
+inline bool is_w4_encoding(W4Encoding encoding) {
+  return encoding == W4Encoding::kW4A16Group ||
+         encoding == W4Encoding::kW4A16GroupTiled;
+}
 
 struct W4Tensor {
   std::string name;
@@ -49,6 +57,8 @@ public:
   ~W4Model();
 
   const W4Tensor &require(std::string_view name) const;
+  const W4Tensor &require(const std::string &name) const;
+  const W4Tensor &require(const char *name) const;
   bool contains(std::string_view name) const;
   size_t tensor_count() const { return tensors_.size(); }
   uint64_t file_size() const { return file_size_; }

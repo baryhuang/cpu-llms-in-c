@@ -5,8 +5,8 @@ ROOT=${1:-.}
 NPU_SCHEDULER=${NPU_SCHEDULER:-parallel3}
 OUT=${OUT:-"$ROOT/logs"}
 
-ENCODER="$ROOT/models/whisper-large-v3-turbo-encoder-w4a16-v2.llmc"
-DECODER="$ROOT/models/whisper-large-v3-turbo-decoder-w4a16-v2.llmc"
+ENCODER="$ROOT/models/whisper-large-v3-turbo-encoder-w4a16-v3.llmc"
+DECODER="$ROOT/models/whisper-large-v3-turbo-decoder-w4a16-v3.llmc"
 VOCAB="$ROOT/vocab.json"
 AUDIO="$ROOT/std30.wav"
 BIN="$ROOT/bin"

@@ -1,0 +1,74 @@
+runtime: llmc-native-cpp-aot-w4-rknpu2-fp16-matmul
+quantization: cpu-w4-group32-to-npu-fp16
+mode: llmc
+audio_seconds: 27.270
+model_init_ms: 3500.280
+preprocess_ms: 88.470
+encoder_ms: 21940.541
+decoder_steps: 90
+decoder_total_ms: 21082.896
+avg_decoder_step_ms: 234.254
+inference_ms: 43775.668
+generated_tokens: 87
+w4_linear_runs: 3172
+fp16_attention_matmul_runs: 30080
+attention_host_dispatches: 752
+baseline_weight_uploads: 0
+aot_linear_plans: 9
+aot_prepared_weights: 235
+aot_resident_weight_bytes: 1611694080
+w4_linear_wall_ms: 25225.976
+attention_wall_ms: 13782.408
+encoder_w4_linear_wall_ms: 7072.425
+decoder_w4_linear_wall_ms: 18153.551
+encoder_attention_wall_ms: 10974.573
+decoder_attention_wall_ms: 2807.835
+npu_scheduler: parallel3
+npu_sharding: output-columns-N-aligned32
+attention_scheduler: static-head-round-robin-Core0-Core1-Core2
+npu_worker_model: one-persistent-thread-per-core
+npu_configured_cores: 3
+npu_load_source: /sys/kernel/debug/rknpu/load
+npu_load_sample_interval_ms: 10
+npu_load_status: sampled
+npu_encoder_load_samples: 2151
+npu_encoder_core0_avg_load_pct: 26.19
+npu_encoder_core0_max_load_pct: 36
+npu_encoder_core1_avg_load_pct: 25.91
+npu_encoder_core1_max_load_pct: 36
+npu_encoder_core2_avg_load_pct: 25.27
+npu_encoder_core2_max_load_pct: 36
+npu_decoder_load_samples: 2118
+npu_decoder_core0_avg_load_pct: 8.07
+npu_decoder_core0_max_load_pct: 30
+npu_decoder_core1_avg_load_pct: 8.07
+npu_decoder_core1_max_load_pct: 30
+npu_decoder_core2_avg_load_pct: 7.30
+npu_decoder_core2_max_load_pct: 29
+npu_observed_active_cores: 3
+token_ids: 50258 50259 50360 50364 18200 765 8752 281 1080 1081 30153 372 264 39283 13 440 3669 2128 292 281 264 5522 42853 295 8085 11 295 597 436 632 1027 257 499 317 2069 17225 281 12044 264 18365 295 264 2037 14742 13 440 5522 11 294 2736 11 9185 264 3669 281 257 44185 11 597 390 281 312 2212 264 958 786 13 9694 645 23270 294 3564 264 14742 5315 1830 720 4671 13 509 486 312 10455 365 385 30 286 1009 669 13 50257
+text:
+Concord returned to its place amidst the tents. The English forwarded to the French baskets of flowers, of which they had made a plentiful provision to greet the arrival of the young princess. The French, in return, invited the English to a supper, which was to be given the next day. Congratulations were poured in upon the princess everywhere during her journey. You will be frank with me? I always am.
+	Command being timed: "./bin/whisper_rknpu2_w4a16 models/whisper-large-v3-turbo-encoder-w4a16-v3.llmc models/whisper-large-v3-turbo-decoder-w4a16-v3.llmc vocab.json std30.wav llmc --npu-scheduler parallel3"
+	User time (seconds): 96.04
+	System time (seconds): 4.62
+	Percent of CPU this job got: 206%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:48.63
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2582776
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 48580
+	Voluntary context switches: 69943
+	Involuntary context switches: 383
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

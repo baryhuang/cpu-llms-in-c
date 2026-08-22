@@ -47,13 +47,47 @@ void validate_cpu_dequantization() {
           "synthetic W4A16 column-shard dequantization failed");
     }
   }
+
+  constexpr size_t kTiledColumns = 32;
+  constexpr size_t kScaleBytes = kTiledColumns * sizeof(float);
+  constexpr size_t kPackedBytes = kTiledColumns * kInner / 2;
+  std::vector<uint8_t> tiled(kScaleBytes + kPackedBytes);
+  auto *tiled_scales = reinterpret_cast<float *>(tiled.data());
+  for (size_t column = 0; column < kTiledColumns; ++column)
+    tiled_scales[column] = 0.125f * static_cast<float>(column + 1);
+  auto *tiled_packed = tiled.data() + kScaleBytes;
+  for (size_t index = 0; index < kTiledColumns * kInner; index += 2) {
+    const int low = static_cast<int>(index % 16) - 8;
+    const int high = static_cast<int>((index + 1) % 16) - 8;
+    tiled_packed[index / 2] =
+        static_cast<uint8_t>((low & 0x0f) | ((high & 0x0f) << 4));
+  }
+  tensor.encoding = llmc::W4Encoding::kW4A16GroupTiled;
+  tensor.shape = {kTiledColumns, kInner, 0, 0};
+  tensor.data = tiled.data();
+  tensor.data_size = tiled.size();
+  tensor.scales = nullptr;
+  tensor.scale_size = 0;
+  output.assign(kTiledColumns * kInner, static_cast<llmc_float16>(0.0f));
+  llmc::dequantize_w4a16_to_fp16_kn(tensor, output.data(), output.size());
+  for (size_t index = 0; index < output.size(); ++index) {
+    const int quantized = static_cast<int>(index % 16) - 8;
+    const size_t column = index % kTiledColumns;
+    const float expected = quantized * tiled_scales[column];
+    if (static_cast<float>(output[index]) != expected) {
+      throw std::runtime_error("synthetic tiled W4 CPU dequantization failed");
+    }
+  }
 }
 
 void require_shape(const llmc::W4Model &model, const std::string &name,
                    uint32_t rows, uint32_t columns, llmc::W4Encoding encoding) {
   const auto &tensor = model.require(name);
   if (tensor.dimensions != 2 || tensor.shape[0] != rows ||
-      tensor.shape[1] != columns || tensor.encoding != encoding) {
+      tensor.shape[1] != columns ||
+      (encoding == llmc::W4Encoding::kW4A16Group
+           ? !llmc::is_w4_encoding(tensor.encoding)
+           : tensor.encoding != encoding)) {
     throw std::runtime_error("unexpected tensor definition: " + name);
   }
 }
@@ -72,18 +106,20 @@ void validate_tensor_payloads(const llmc::W4Model &model) {
   size_t fp16 = 0;
   for (const auto &pair : model.tensors()) {
     const auto &tensor = pair.second;
-    if (tensor.encoding == llmc::W4Encoding::kW4A16Group) {
+    if (llmc::is_w4_encoding(tensor.encoding)) {
       ++quantized;
       if (tensor.shape[0] % 64 != 0 || tensor.shape[1] % 32 != 0) {
         throw std::runtime_error("RK3588 INT4 alignment failure: " +
                                  tensor.name);
       }
-      const size_t scale_count = tensor.scale_size / sizeof(float);
-      for (size_t index = 0; index < scale_count; ++index) {
-        if (!std::isfinite(tensor.scales[index]) ||
-            tensor.scales[index] <= 0.0f) {
-          throw std::runtime_error("invalid quantization scale: " +
-                                   tensor.name);
+      if (tensor.encoding == llmc::W4Encoding::kW4A16Group) {
+        const size_t scale_count = tensor.scale_size / sizeof(float);
+        for (size_t index = 0; index < scale_count; ++index) {
+          if (!std::isfinite(tensor.scales[index]) ||
+              tensor.scales[index] <= 0.0f) {
+            throw std::runtime_error("invalid quantization scale: " +
+                                     tensor.name);
+          }
         }
       }
     } else {

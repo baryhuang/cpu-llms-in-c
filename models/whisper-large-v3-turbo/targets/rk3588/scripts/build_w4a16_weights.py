@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Build an RK3588 MatMul-API W4A16 weight package.
+"""Build an RK3588 CPU-tiled W4 weight package.
 
-The RKNN graph compiler does not expose W4A16 for RK3588.  RKNPU2's MatMul
-API does expose FP16 x INT4 with per-group scales, so the native target uses a
-small, mmap-friendly container instead of pretending that an incompatible
-RK3576 .rknn graph can be deployed on RK3588.
+The RKNN graph compiler and MatMul API do not execute W4A16 on RK3588. The
+native runtime therefore expands CPU-friendly W4 tiles into resident FP16 NPU
+weight shards during its ahead-of-time initialization phase.
 
 Python is a build-time dependency only.  The target runtime reads this format
 directly from C++ and does not embed Python.
@@ -27,11 +26,12 @@ from safetensors import safe_open
 
 
 MAGIC = b"LLMCW4A\0"
-VERSION = 2
+VERSION = 3
 ALIGNMENT = 64
 GROUP_SIZE = 32
+TILE_COLUMNS = 32
 ENCODING_FP16 = 0
-ENCODING_W4A16_GROUP = 1
+ENCODING_W4A16_GROUP_TILED = 2
 HEADER = struct.Struct("<8sIIQ")
 ENTRY = struct.Struct("<IBBH4IIIQQQQ")
 
@@ -128,20 +128,50 @@ def quantize_w4a16_group32(
     sum_squared_error = float(torch.sum(error * error).item())
     max_abs_error = float(torch.max(torch.abs(error)).item())
 
-    q_kn = q_nk.view(n, k).transpose(0, 1).contiguous().view(-1)
-    if q_kn.numel() % 2:
-        q_kn = torch.cat((q_kn, torch.zeros(1, dtype=torch.int8)))
-    low = torch.bitwise_and(q_kn[0::2].to(torch.int16), 0x0F)
-    high = torch.bitwise_left_shift(
-        torch.bitwise_and(q_kn[1::2].to(torch.int16), 0x0F), 4
-    )
-    packed = torch.bitwise_or(low, high).to(torch.uint8).numpy().tobytes()
-    # RKNPU2 consumes per-group scales as [K / group_size, N], not the
-    # [N, K / group_size] order used naturally while quantizing PyTorch's
-    # Linear [N, K] weights.  Version 1 packages used the latter order and
-    # must not be accepted by the native runtime.
-    scale_bytes = scales.transpose(0, 1).contiguous().numpy().tobytes()
-    return packed, scale_bytes, sum_squared_error, max_abs_error
+    if n % TILE_COLUMNS:
+        raise ValueError(f"N={n} is not divisible by tile width {TILE_COLUMNS}")
+    inner_tiles = k // GROUP_SIZE
+    column_tiles = n // TILE_COLUMNS
+    scale_bytes_per_record = TILE_COLUMNS * 4
+    packed_bytes_per_record = TILE_COLUMNS * GROUP_SIZE // 2
+    record_bytes = scale_bytes_per_record + packed_bytes_per_record
+    if record_bytes % ALIGNMENT:
+        raise AssertionError("tiled W4 record must stay cache-line aligned")
+    tiled = bytearray(column_tiles * inner_tiles * record_bytes)
+    cursor = 0
+    for column_tile in range(column_tiles):
+        n_begin = column_tile * TILE_COLUMNS
+        n_end = n_begin + TILE_COLUMNS
+        for inner_tile in range(inner_tiles):
+            tiled[cursor : cursor + scale_bytes_per_record] = (
+                scales[n_begin:n_end, inner_tile]
+                .contiguous()
+                .numpy()
+                .tobytes()
+            )
+            cursor += scale_bytes_per_record
+            k_begin = inner_tile * GROUP_SIZE
+            k_end = k_begin + GROUP_SIZE
+            # Runtime output B is [K, N], so each record is K-lane major and
+            # each CPU store writes 32 adjacent N columns.
+            block_kn = (
+                q_nk[n_begin:n_end, inner_tile, :]
+                .transpose(0, 1)
+                .contiguous()
+                .view(-1)
+            )
+            low = torch.bitwise_and(block_kn[0::2].to(torch.int16), 0x0F)
+            high = torch.bitwise_left_shift(
+                torch.bitwise_and(block_kn[1::2].to(torch.int16), 0x0F), 4
+            )
+            packed = torch.bitwise_or(low, high).to(torch.uint8).numpy().tobytes()
+            if len(packed) != packed_bytes_per_record or k_end > k:
+                raise AssertionError("internal tiled W4 packing error")
+            tiled[cursor : cursor + packed_bytes_per_record] = packed
+            cursor += packed_bytes_per_record
+    if cursor != len(tiled):
+        raise AssertionError("internal tiled W4 size error")
+    return bytes(tiled), b"", sum_squared_error, max_abs_error
 
 
 def validate_package(path: Path) -> None:
@@ -174,17 +204,22 @@ def validate_package(path: Path) -> None:
             if encoding == ENCODING_FP16:
                 if data_size != elements * 2 or scale_size != 0:
                     raise ValueError(f"{path}: invalid FP16 payload for {name}")
-            elif encoding == ENCODING_W4A16_GROUP:
-                expected_scales = dims[0] * (dims[1] // group_size) * 4
+            elif encoding == ENCODING_W4A16_GROUP_TILED:
+                expected_records = (dims[0] // TILE_COLUMNS) * (
+                    dims[1] // GROUP_SIZE
+                )
+                expected_data = expected_records * (
+                    TILE_COLUMNS * 4 + TILE_COLUMNS * GROUP_SIZE // 2
+                )
                 if (
                     ndim != 2
                     or group_size != GROUP_SIZE
-                    or data_size != (elements + 1) // 2
-                    or scale_size != expected_scales
-                    or scale_offset < payload_start
-                    or scale_offset + scale_size > file_size
+                    or dims[0] % TILE_COLUMNS
+                    or dims[1] % GROUP_SIZE
+                    or data_size != expected_data
+                    or scale_size != 0
                 ):
-                    raise ValueError(f"{path}: invalid W4A16 payload for {name}")
+                    raise ValueError(f"{path}: invalid tiled W4 payload for {name}")
             else:
                 raise ValueError(f"{path}: invalid encoding {encoding} for {name}")
         if stream.tell() > payload_start:
@@ -224,7 +259,7 @@ def build(checkpoint: Path, output: Path, scope: str) -> dict[str, object]:
                         data, scales, squared_error, tensor_max_error = (
                             quantize_w4a16_group32(tensor)
                         )
-                        encoding = ENCODING_W4A16_GROUP
+                        encoding = ENCODING_W4A16_GROUP_TILED
                         group_size = GROUP_SIZE
                         quantized_elements += tensor.numel()
                         sum_squared_error += squared_error
@@ -307,16 +342,16 @@ def build(checkpoint: Path, output: Path, scope: str) -> dict[str, object]:
         "sha256": digest.hexdigest(),
         "tensor_count": len(entries),
         "quantized_tensors": sum(
-            item.encoding == ENCODING_W4A16_GROUP for item in entries
+            item.encoding == ENCODING_W4A16_GROUP_TILED for item in entries
         ),
         "quantized_elements": quantized_elements,
         "fp16_elements": fp16_elements,
         "group_size": GROUP_SIZE,
         "quantization": "symmetric INT4 weights, FP16 activations, per-K-group scales",
-        "scale_layout": "K-group-major [K/32, N] (RKNPU2 order)",
+        "storage_layout": "N32 outer, K32 inner; each 640-byte record is 32 FP32 scales then 32x32 packed INT4",
         "rmse": (sum_squared_error / total_quantized) ** 0.5,
         "max_abs_error": max_abs_error,
-        "rknpu2_matmul_type": "RKNN_FLOAT16_MM_INT4_TO_FLOAT16",
+        "rknpu2_matmul_type": "CPU W4 tile expansion then RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT16",
     }
     print(json.dumps(summary, indent=2), flush=True)
     return summary

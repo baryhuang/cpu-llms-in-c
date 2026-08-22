@@ -92,7 +92,7 @@
       "weight_storage": "signed INT4, group size 32",
       "cpu_role": "unpack INT4 and apply group scales into aligned FP16 output-column shards",
       "npu_role": "RKNN_FLOAT16_MM_FLOAT16_TO_FLOAT16 only",
-      "scheduler": "three independent contexts pinned to Core0, Core1 and Core2; 16-aligned N sharding",
+      "scheduler": "retained v2 used 16-aligned N sharding; appended AOT v3 uses 32-aligned N sharding, with three independent contexts pinned to Core0, Core1 and Core2",
       "combined_mask_result": "Core0+1 and Core0+1+2 rejected with -1; RKNN_NPU_CORE_ALL executes on one core",
       "quality": "baseline and LLMC generated identical 87-token sequences on std30.wav"
     },
@@ -192,6 +192,79 @@
         "decoder_speedup": 16.829,
         "e2e_speedup": 3.565
       }
+    },
+    "custom_w4_fp16_parallel3_aot_v3": {
+      "status": "current appended result; retained v2 measurements remain unchanged",
+      "packages": {
+        "layout": "version 3: N32 outer, K32 inner; each 640-byte record stores 32 FP32 scales followed by packed 32x32 signed INT4",
+        "encoder": {
+          "bytes": 409684160,
+          "sha256": "6fdbc0d6ab97404b14487b06bf938bcbde12dc9879c4ecfeea59ce36ba3a5b1b"
+        },
+        "decoder": {
+          "bytes": 241173248,
+          "sha256": "18cad5ac4d4fcd331dc49d25cff6984c9df1339d8659320ff8710ac29c8bc2e4"
+        }
+      },
+      "runtime": {
+        "language": "C++17 target inference; Python is offline package build only",
+        "worker_model": "one persistent host thread per NPU core",
+        "scheduler": "three fixed task slots; no inference-time thread, queue, promise, context or DMA allocation",
+        "linear": "32-aligned output-N sharding across Core0/Core1/Core2; nine shape-shared AOT plans; 235 resident weights",
+        "attention": "complete heads statically assigned by head modulo 3; one host dispatch per attention block",
+        "cross_attention": "encoder K/V transposed and packed once for decoder reuse",
+        "aot_resident_weight_bytes": 1611694080
+      },
+      "thread_stress_gate": {
+        "shape_mkn": [1, 1280, 51904],
+        "runs": 1000,
+        "npu_jobs": 3000,
+        "avg_three_core_matmul_ms": 4.730,
+        "cpu_npu_cosine": 0.999999978,
+        "cpu_reference_max_abs_error": 0.000485539,
+        "dynamic_fp16_rebind_cosine": 0.999999977,
+        "npu_max_load_percent": [90, 90, 90],
+        "crash": false
+      },
+      "baseline": {
+        "runner": "same native C++17 binary; W4 weights re-expanded and re-prepared on every linear use",
+        "npu_scheduler": "persistent-thread parallel3 N-sharding",
+        "generated_tokens": 87,
+        "decoder_steps": 90,
+        "encoder_ms": 34930.022,
+        "decoder_total_ms": 125994.137,
+        "avg_decoder_step_ms": 1399.935,
+        "e2e_ms": 161158.443,
+        "peak_rss_kib": 948320,
+        "npu_encoder_max_load_percent": [43, 45, 44],
+        "npu_decoder_max_load_percent": [17, 16, 16]
+      },
+      "llmc_median": {
+        "runner": "native C++17 AOT W4 v3 runtime",
+        "npu_scheduler": "persistent-thread parallel3 N-sharding plus static head scheduling",
+        "generated_tokens": 87,
+        "decoder_steps": 90,
+        "encoder_ms": 21796.097,
+        "decoder_total_ms": 20733.231,
+        "avg_decoder_step_ms": 230.369,
+        "e2e_ms": 42479.700,
+        "peak_rss_kib": 2582468,
+        "active_npu_cores": 3
+      },
+      "llmc_trials": [
+        {"encoder_ms": 21940.541, "decoder_total_ms": 21082.896, "avg_decoder_step_ms": 234.254, "e2e_ms": 43775.668, "peak_rss_kib": 2582776},
+        {"encoder_ms": 21796.097, "decoder_total_ms": 20410.385, "avg_decoder_step_ms": 226.782, "e2e_ms": 42440.521, "peak_rss_kib": 2581864},
+        {"encoder_ms": 21512.334, "decoder_total_ms": 20733.231, "avg_decoder_step_ms": 230.369, "e2e_ms": 42479.700, "peak_rss_kib": 2582468}
+      ],
+      "gains": {
+        "encoder_speedup": 1.603,
+        "decoder_speedup": 6.077,
+        "decoder_step_speedup": 6.077,
+        "e2e_speedup": 3.794,
+        "versus_retained_v2_llmc_speedup": 1.874,
+        "e2e_slowdown_versus_fused_fp16": 2.369
+      },
+      "quality": "baseline and all three LLMC trials produced identical 87-token sequences"
     }
   },
   "tuning": {
@@ -248,6 +321,9 @@
     "w4_fp16_parallel3_matmul_gate": "benchmarks/rknpu2/w4a16/matmul-parallel3-resident-gate.log",
     "w4_fp16_parallel3_baseline": "benchmarks/rknpu2/w4a16/std30-w4fp16-parallel3-baseline.log",
     "w4_fp16_parallel3_llmc": "benchmarks/rknpu2/w4a16/std30-w4fp16-parallel3-llmc.log",
+    "w4_aot_v3_thread_stress": "benchmarks/rknpu2/w4a16/aot-v3/matmul-v3-final-thread-stress.log",
+    "w4_aot_v3_baseline": "benchmarks/rknpu2/w4a16/aot-v3/std30-w4aot-v3-final-baseline.log",
+    "w4_aot_v3_llmc_trials": "benchmarks/rknpu2/w4a16/aot-v3/std30-w4aot-v3-final-llmc*.log",
     "native_source": "native/whisper_rknpu2_llmc.cc",
     "native_tuned_runner": "native/run_std30_tuned.sh"
   }

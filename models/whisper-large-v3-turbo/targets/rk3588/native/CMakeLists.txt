@@ -48,6 +48,7 @@ target_compile_options(pcm16_wav_test PRIVATE -O3 -DNDEBUG)
 
 add_executable(w4a16_matmul_smoke
   w4a16_matmul_smoke.cc
+  static_npu_scheduler.cc
   w4a16_matmul.cc
   w4a16_model.cc
 )
@@ -65,6 +66,7 @@ set_target_properties(w4a16_matmul_smoke PROPERTIES
 
 add_executable(whisper_rknpu2_w4a16
   whisper_rknpu2_w4a16.cc
+  static_npu_scheduler.cc
   w4a16_matmul.cc
   w4a16_model.cc
   pcm16_wav.cc

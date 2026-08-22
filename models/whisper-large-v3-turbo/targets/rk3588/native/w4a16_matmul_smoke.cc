@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
     // Exercise two different inputs through one persistent FP16 context so
     // attention MatMuls cannot silently reuse stale DMA contents.
     const int dynamic_columns =
-        16 * static_cast<int>(core_masks.size());
+        32 * static_cast<int>(core_masks.size());
     llmc::F16Matmul dynamic_fp16(1, 32, dynamic_columns, core_masks);
     std::vector<llmc_float16> dynamic_a(32);
     std::vector<llmc_float16> dynamic_b(32 * dynamic_columns);

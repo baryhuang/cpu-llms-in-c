@@ -16,7 +16,14 @@ namespace {
 constexpr std::array<char, 8> kMagic = {'L', 'L', 'M', 'C',
                                         'W', '4', 'A', '\0'};
 constexpr uint32_t kVersion = 2;
+constexpr uint32_t kTiledVersion = 3;
 constexpr uint64_t kAlignment = 64;
+constexpr uint64_t kTileColumns = 32;
+constexpr uint64_t kTileInner = 32;
+constexpr uint64_t kTileScaleBytes = kTileColumns * sizeof(float);
+constexpr uint64_t kTilePackedBytes = kTileColumns * kTileInner / 2;
+constexpr uint64_t kTileRecordBytes = kTileScaleBytes + kTilePackedBytes;
+static_assert(kTileRecordBytes % kAlignment == 0);
 
 #pragma pack(push, 1)
 struct FileHeader {
@@ -88,9 +95,9 @@ W4Model::W4Model(const char *path) {
     const auto *bytes = static_cast<const uint8_t *>(mapping_);
     const auto *header = reinterpret_cast<const FileHeader *>(bytes);
     if (!std::equal(kMagic.begin(), kMagic.end(), header->magic) ||
-        header->version != kVersion) {
+        (header->version != kVersion && header->version != kTiledVersion)) {
       throw std::runtime_error(
-          "invalid W4A16 model header (expected format version 2)");
+          "invalid W4A16 model header (expected format version 2 or 3)");
     }
     if (header->payload_start % kAlignment != 0 ||
         header->payload_start > file_size_) {
@@ -162,6 +169,19 @@ W4Model::W4Model(const char *path) {
         tensor.scales =
             reinterpret_cast<const float *>(bytes + entry->scale_offset);
         tensor.scale_size = entry->scale_size;
+      } else if (tensor.encoding == W4Encoding::kW4A16GroupTiled) {
+        if (header->version != kTiledVersion || entry->dimensions != 2 ||
+            entry->group_size != kTileInner ||
+            entry->shape[0] % kTileColumns != 0 ||
+            entry->shape[1] % kTileInner != 0 || entry->scale_size != 0) {
+          throw std::runtime_error("invalid tiled W4 tensor: " + name);
+        }
+        const uint64_t expected_data_size =
+            (entry->shape[0] / kTileColumns) *
+            (entry->shape[1] / kTileInner) * kTileRecordBytes;
+        if (entry->data_size != expected_data_size) {
+          throw std::runtime_error("invalid tiled W4 payload: " + name);
+        }
       } else {
         throw std::runtime_error("unknown tensor encoding: " + name);
       }
@@ -200,6 +220,17 @@ const W4Tensor &W4Model::require(std::string_view name) const {
   return found->second;
 }
 
+const W4Tensor &W4Model::require(const std::string &name) const {
+  const auto found = tensors_.find(name);
+  if (found == tensors_.end())
+    throw std::runtime_error("missing tensor: " + name);
+  return found->second;
+}
+
+const W4Tensor &W4Model::require(const char *name) const {
+  return require(std::string_view(name));
+}
+
 bool W4Model::contains(std::string_view name) const {
   return tensors_.find(std::string(name)) != tensors_.end();
 }
@@ -216,7 +247,7 @@ void dequantize_w4a16_columns_to_fp16_kn(const W4Tensor &tensor,
                                          size_t column_count,
                                          llmc_float16 *output,
                                          size_t output_elements) {
-  if (tensor.encoding != W4Encoding::kW4A16Group ||
+  if (!is_w4_encoding(tensor.encoding) ||
       tensor.dimensions != 2 || tensor.group_size == 0 ||
       tensor.shape[1] % tensor.group_size != 0 || output == nullptr) {
     throw std::runtime_error("invalid tensor for W4A16 CPU dequantization");
@@ -233,11 +264,62 @@ void dequantize_w4a16_columns_to_fp16_kn(const W4Tensor &tensor,
   }
   const size_t source_elements = inner * columns;
   const size_t output_required = inner * column_count;
-  if (output_elements < output_required ||
-      tensor.data_size < (source_elements + 1) / 2 ||
+  if (output_elements < output_required) {
+    throw std::runtime_error("undersized W4A16 dequantization buffer");
+  }
+
+  if (tensor.encoding == W4Encoding::kW4A16GroupTiled) {
+    if (column_offset % kTileColumns != 0 ||
+        column_count % kTileColumns != 0) {
+      throw std::runtime_error("tiled W4 shard is not N32 aligned");
+    }
+    const size_t inner_tiles = inner / kTileInner;
+    const size_t first_column_tile = column_offset / kTileColumns;
+    const size_t column_tiles = column_count / kTileColumns;
+    const size_t required_bytes =
+        (columns / kTileColumns) * inner_tiles * kTileRecordBytes;
+    if (tensor.data_size < required_bytes) {
+      throw std::runtime_error("undersized tiled W4 payload");
+    }
+    const auto *payload = static_cast<const uint8_t *>(tensor.data);
+    for (size_t local_column_tile = 0; local_column_tile < column_tiles;
+         ++local_column_tile) {
+      const size_t source_column_tile =
+          first_column_tile + local_column_tile;
+      for (size_t inner_tile = 0; inner_tile < inner_tiles; ++inner_tile) {
+        const size_t record_index = source_column_tile * inner_tiles +
+                                    inner_tile;
+        const uint8_t *record = payload + record_index * kTileRecordBytes;
+        const auto *scales = reinterpret_cast<const float *>(record);
+        const uint8_t *packed = record + kTileScaleBytes;
+        for (size_t inner_lane = 0; inner_lane < kTileInner; ++inner_lane) {
+          llmc_float16 *row =
+              output + (inner_tile * kTileInner + inner_lane) * column_count +
+              local_column_tile * kTileColumns;
+          for (size_t column_lane = 0; column_lane < kTileColumns;
+               ++column_lane) {
+            const size_t index = inner_lane * kTileColumns + column_lane;
+            const uint8_t byte = packed[index / 2];
+            const uint8_t nibble =
+                index & 1 ? static_cast<uint8_t>(byte >> 4)
+                          : static_cast<uint8_t>(byte & 0x0f);
+            const int8_t quantized =
+                nibble < 8
+                    ? static_cast<int8_t>(nibble)
+                    : static_cast<int8_t>(static_cast<int>(nibble) - 16);
+            row[column_lane] = static_cast<llmc_float16>(
+                static_cast<float>(quantized) * scales[column_lane]);
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  if (tensor.data_size < (source_elements + 1) / 2 ||
       tensor.scale_size <
           (inner / tensor.group_size) * columns * sizeof(float)) {
-    throw std::runtime_error("undersized W4A16 dequantization buffer");
+    throw std::runtime_error("undersized W4A16 v2 dequantization buffer");
   }
 
   const auto *packed = static_cast<const uint8_t *>(tensor.data);
