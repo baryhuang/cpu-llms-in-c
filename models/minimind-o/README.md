@@ -8,7 +8,8 @@ path do not embed or launch Python.
 
 Implemented components include the Q8 Thinker and Talker, tokenizer,
 SenseVoice audio encoder/projector, stateful Mimi decoder, continuous ALSA
-capture/VAD, Cortex-A53 NEON kernels and four-core OpenMP scheduling. Target
+capture/VAD, Cortex-A53 NEON kernels and a persistent four-core SPSC worker
+pool. Target
 architecture, correctness gates and measurements are in the
 [A113X target record](targets/a113x/README.md).
 

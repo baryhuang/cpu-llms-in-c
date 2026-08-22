@@ -1,4 +1,5 @@
 #include "minimindo_mimi.h"
+#include "minimindo_parallel.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -87,6 +88,8 @@ int main(int argc, char **argv)
     const size_t capacity_samples = minimindo_mimi_samples_for_frames(model, frames);
     float *audio = malloc(capacity_samples * sizeof(float)); size_t samples = 0;
     int decode_result = 0;
+    (void)minimindo_parallel_pin_current(0U);
+    (void)minimindo_parallel_session_begin(4U);
     if (audio == NULL) {
         decode_result = -1;
     } else if (stream_frames == 0) {
@@ -119,6 +122,7 @@ int main(int argc, char **argv)
         free(chunk_codes);
         minimindo_mimi_stream_close(stream);
     }
+    minimindo_parallel_session_end();
     if (decode_result != 0) {
         fprintf(stderr, "%s\n", error); return 5;
     }

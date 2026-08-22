@@ -1,3 +1,4 @@
+#include "minimindo_parallel.h"
 #include "minimindo_audio_encoder.h"
 
 #include <math.h>
@@ -28,7 +29,11 @@ int main(int argc,char **argv)
     int16_t *samples=NULL;size_t sample_count=0;if(load_wav(argv[2],&samples,&sample_count)){fprintf(stderr,"invalid 16k mono PCM WAV\n");return 3;}
     size_t capacity=minimindo_audio_encoder_frames(sample_count);float *output=malloc(capacity*768*sizeof(float));char error[256]={0};size_t frames=0;
     minimindo_audio_encoder *model=minimindo_audio_encoder_open(argv[1],error,sizeof(error));
-    if(!model||!output||minimindo_audio_encoder_encode_pcm16(model,samples,sample_count,output,capacity*768,&frames,error,sizeof(error))){fprintf(stderr,"%s\n",error);return 4;}
+    if(!model||!output){fprintf(stderr,"%s\n",error);return 4;}
+    if(minimindo_parallel_session_begin(4U)!=0)return 4;
+    int encode_result=minimindo_audio_encoder_encode_pcm16(model,samples,sample_count,output,capacity*768,&frames,error,sizeof(error));
+    minimindo_parallel_session_end();
+    if(encode_result){fprintf(stderr,"%s\n",error);return 4;}
     double sum=0,peak=0;for(size_t i=0;i<frames*768;++i){sum+=(double)output[i]*output[i];if(fabs(output[i])>peak)peak=fabs(output[i]);}
     if(argc==4){FILE *f=fopen(argv[3],"wb");if(!f||fwrite(output,sizeof(float),frames*768,f)!=frames*768)return 5;fclose(f);}
     printf("{\"samples\":%zu,\"frames\":%zu,\"rms\":%.9g,\"peak\":%.9g}\n",sample_count,frames,sqrt(sum/(frames*768)),peak);

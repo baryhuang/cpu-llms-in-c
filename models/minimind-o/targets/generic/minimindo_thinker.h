@@ -58,7 +58,9 @@ int minimindo_thinker_prefill_embedding(minimindo_thinker *model,
  * Process a complete prompt layer-by-layer.  replacement_mask selects rows in
  * replacement_embeddings (token_count * hidden floats), which is how projected
  * audio embeddings replace audio-pad token embeddings.  Every bridge state is
- * returned in sequence order; logits contains only the final prompt position.
+ * returned in sequence order; when logits is non-NULL it contains only the
+ * final position. Passing NULL skips the language head for deterministic
+ * audio-drain precomputation.
  */
 int minimindo_thinker_prefill_sequence(
     minimindo_thinker *model,

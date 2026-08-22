@@ -1,23 +1,26 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include "minimindo_audio_encoder.h"
 #include "minimindo_mimi.h"
+#include "minimindo_parallel.h"
 #include "minimindo_talker.h"
 #include "minimindo_thinker.h"
 #include "minimindo_tokenizer.h"
 
 #include <math.h>
 #include <pthread.h>
+#if defined(__linux__)
+#include <sched.h>
+#include <sys/syscall.h>
+#endif
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-#if defined(_OPENMP)
-#include <omp.h>
-#endif
 
 typedef struct { float score; uint32_t id; } candidate;
 
@@ -202,18 +205,21 @@ typedef struct {
     minimindo_mimi *model;
     minimindo_mimi_stream *stream;
     pthread_t thread;
-    pthread_mutex_t mutex;
+    /* This mutex protects only the condition-variable sleep boundary.  The
+     * SPSC rings below are published with release/acquire atomics; model,
+     * codes and PCM each have exactly one writer. */
+    pthread_mutex_t wait_mutex;
     pthread_cond_t ready;
     uint32_t *codes;
     float *audio;
     size_t capacity_frames;
-    size_t queued_frames;
-    size_t decoded_frames;
+    atomic_size_t queued_frames;
+    atomic_size_t decoded_frames;
     size_t decode_overlap_frames;
     size_t samples;
     int drain_threads;
-    int producer_done;
-    int failed;
+    atomic_int producer_done;
+    atomic_int failed;
     unsigned turn;
     double inference_start;
     double decode_end;
@@ -221,73 +227,132 @@ typedef struct {
     char error[256];
 } mimi_decode_worker;
 
+static inline void speech_spin_pause(void)
+{
+#if defined(__aarch64__)
+    __asm__ volatile("yield" ::: "memory");
+#elif defined(__x86_64__)
+    __asm__ volatile("pause" ::: "memory");
+#else
+    atomic_signal_fence(memory_order_seq_cst);
+#endif
+}
+
+static void log_thread_placement(const char *stage, unsigned turn,
+                                 int requested_threads)
+{
+#if defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    const int affinity_result = sched_getaffinity(0, sizeof(set), &set);
+    char cpus[64];
+    size_t used = 0;
+    cpus[0] = '\0';
+    if (affinity_result == 0) {
+        for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+            if (!CPU_ISSET(cpu, &set)) continue;
+            const int written = snprintf(cpus + used, sizeof(cpus) - used,
+                                         "%s%d", used == 0 ? "" : ",", cpu);
+            if (written < 0 || (size_t)written >= sizeof(cpus) - used) break;
+            used += (size_t)written;
+        }
+    }
+    printf("THREAD stage=%s turn=%u tid=%ld cpu=%d affinity=%s "
+           "threads=%d\n", stage, turn, (long)syscall(SYS_gettid),
+           sched_getcpu(), affinity_result == 0 ? cpus : "error",
+           requested_threads);
+#else
+    printf("THREAD stage=%s turn=%u threads=%d\n",
+           stage, turn, requested_threads);
+#endif
+    fflush(stdout);
+}
+
 static void *mimi_decode_thread(void *opaque)
 {
     mimi_decode_worker *worker = opaque;
     const size_t samples_per_frame =
         minimindo_mimi_samples_for_frames(worker->model, 1);
-#if defined(_OPENMP)
-    int active_threads = 0;
-#endif
+    int drain_session = 0;
+    (void)minimindo_parallel_pin_current(3U);
+    minimindo_parallel_set_threads(1U);
+    log_thread_placement("mimi_start", worker->turn, 1);
     while (1) {
         uint32_t frame[MINIMINDO_MIMI_CODEBOOKS];
-        pthread_mutex_lock(&worker->mutex);
-        while (worker->decoded_frames == worker->queued_frames &&
-               !worker->producer_done && !worker->failed)
-            pthread_cond_wait(&worker->ready, &worker->mutex);
-        if (worker->failed ||
-            (worker->producer_done &&
-             worker->decoded_frames == worker->queued_frames)) {
-            if (!worker->failed) {
+        const size_t decoded = atomic_load_explicit(
+            &worker->decoded_frames, memory_order_relaxed);
+        const size_t queued = atomic_load_explicit(
+            &worker->queued_frames, memory_order_acquire);
+        const int producer_done = atomic_load_explicit(
+            &worker->producer_done, memory_order_acquire);
+        const int failed = atomic_load_explicit(
+            &worker->failed, memory_order_acquire);
+        if (failed || (producer_done && decoded == queued)) {
+            if (!failed) {
                 worker->decode_end = monotonic_seconds();
                 worker->decode_cpu_end = process_cpu_seconds();
             }
-            pthread_mutex_unlock(&worker->mutex);
             break;
         }
-        const size_t index = worker->decoded_frames;
-        const int producer_done = worker->producer_done;
+        if (decoded == queued) {
+            /* This thread owns CPU 3 while Talker is active.  Spinning here
+             * avoids a futex round trip for every 80 ms codec frame. */
+            speech_spin_pause();
+            continue;
+        }
+        const size_t index = decoded;
         for (uint32_t codebook = 0;
              codebook < MINIMINDO_MIMI_CODEBOOKS; ++codebook)
             frame[codebook] =
                 worker->codes[index*MINIMINDO_MIMI_CODEBOOKS+codebook];
-        pthread_mutex_unlock(&worker->mutex);
-#if defined(_OPENMP)
-        /* Keep all four cores on Thinker/Talker while they are producing, but
-         * consume Mimi frames on one competing thread instead of sleeping.
-         * Once the producer stops, Mimi expands to the full four-core team. */
-        const int wanted_threads = producer_done ? worker->drain_threads : 1;
-        if (active_threads != wanted_threads) {
-            omp_set_num_threads(wanted_threads);
-            active_threads = wanted_threads;
+        if (producer_done && !drain_session) {
+            (void)minimindo_parallel_pin_current(0U);
+            (void)minimindo_parallel_session_begin(
+                (unsigned)worker->drain_threads);
+            drain_session = 1;
+            log_thread_placement("mimi_drain",worker->turn,
+                                 worker->drain_threads);
         }
-#else
-        (void)producer_done;
-#endif
         size_t produced = 0;
+        const double frame_start = monotonic_seconds();
+        const double frame_cpu_start = process_cpu_seconds();
         const int result = minimindo_mimi_stream_decode(
             worker->stream, frame, 1,
             worker->audio + index * samples_per_frame,
             samples_per_frame,
             &produced, worker->error, sizeof(worker->error));
-        pthread_mutex_lock(&worker->mutex);
         if (result != 0 || produced != samples_per_frame) {
-            worker->failed = 1;
+            atomic_store_explicit(&worker->failed, 1, memory_order_release);
         } else {
-            ++worker->decoded_frames;
             worker->samples += produced;
+            atomic_store_explicit(&worker->decoded_frames, index + 1U,
+                                  memory_order_release);
         }
-        const size_t decoded_snapshot = worker->decoded_frames;
-        const size_t queued_snapshot = worker->queued_frames;
-        const int done_snapshot = worker->producer_done;
+        const size_t decoded_snapshot = atomic_load_explicit(
+            &worker->decoded_frames, memory_order_relaxed);
+        const size_t queued_snapshot = atomic_load_explicit(
+            &worker->queued_frames, memory_order_acquire);
+        const int done_snapshot = atomic_load_explicit(
+            &worker->producer_done, memory_order_acquire);
+        pthread_mutex_lock(&worker->wait_mutex);
         pthread_cond_broadcast(&worker->ready);
-        pthread_mutex_unlock(&worker->mutex);
+        pthread_mutex_unlock(&worker->wait_mutex);
+        const double frame_ms =
+            (monotonic_seconds() - frame_start) * 1000.0;
+        const double frame_cpu_ms =
+            (process_cpu_seconds() - frame_cpu_start) * 1000.0;
+        const double audio_ms = produced * 1000.0 /
+            minimindo_mimi_sample_rate(worker->model);
         printf("STREAM stage=mimi_decode turn=%u frame=%zu queued=%zu "
-               "producer_done=%d elapsed_ms=%.0f\n",
+               "producer_done=%d frame_ms=%.1f frame_cpu_ms=%.1f "
+               "rtf=%.3f elapsed_ms=%.0f\n",
                worker->turn,decoded_snapshot,queued_snapshot,done_snapshot,
+               frame_ms, frame_cpu_ms,
+               audio_ms > 0.0 ? frame_ms / audio_ms : 0.0,
                (monotonic_seconds()-worker->inference_start)*1000.0);
         fflush(stdout);
     }
+    if (drain_session) minimindo_parallel_session_end();
     return NULL;
 }
 
@@ -301,11 +366,11 @@ static int mimi_decode_worker_start(mimi_decode_worker *worker,
     worker->capacity_frames = capacity_frames;
     worker->turn = turn;
     worker->inference_start = inference_start;
-#if defined(_OPENMP)
-    worker->drain_threads = omp_get_max_threads();
-#else
-    worker->drain_threads = 1;
-#endif
+    worker->drain_threads = 4;
+    atomic_init(&worker->queued_frames, 0U);
+    atomic_init(&worker->decoded_frames, 0U);
+    atomic_init(&worker->producer_done, 0);
+    atomic_init(&worker->failed, 0);
     const size_t capacity_samples =
         minimindo_mimi_samples_for_frames(model, capacity_frames);
     worker->codes = calloc(capacity_frames * MINIMINDO_MIMI_CODEBOOKS,
@@ -315,14 +380,14 @@ static int mimi_decode_worker_start(mimi_decode_worker *worker,
         model, worker->error, sizeof(worker->error));
     if (worker->codes == NULL || worker->audio == NULL ||
         worker->stream == NULL) goto fail;
-    if (pthread_mutex_init(&worker->mutex, NULL) != 0) goto fail;
+    if (pthread_mutex_init(&worker->wait_mutex, NULL) != 0) goto fail;
     if (pthread_cond_init(&worker->ready, NULL) != 0) {
-        pthread_mutex_destroy(&worker->mutex);
+        pthread_mutex_destroy(&worker->wait_mutex);
         goto fail;
     }
     if (pthread_create(&worker->thread, NULL, mimi_decode_thread, worker) != 0) {
         pthread_cond_destroy(&worker->ready);
-        pthread_mutex_destroy(&worker->mutex);
+        pthread_mutex_destroy(&worker->wait_mutex);
         goto fail;
     }
     return 0;
@@ -339,19 +404,18 @@ fail:
 static int mimi_decode_worker_push(mimi_decode_worker *worker,
                                    const uint32_t frame[MINIMINDO_MIMI_CODEBOOKS])
 {
-    pthread_mutex_lock(&worker->mutex);
-    if (worker->failed || worker->queued_frames >= worker->capacity_frames) {
-        pthread_mutex_unlock(&worker->mutex);
+    if (atomic_load_explicit(&worker->failed, memory_order_acquire))
         return -1;
-    }
+    const size_t queued = atomic_load_explicit(
+        &worker->queued_frames, memory_order_relaxed);
+    if (queued >= worker->capacity_frames) return -1;
     for (uint32_t codebook = 0;
          codebook < MINIMINDO_MIMI_CODEBOOKS; ++codebook)
-        worker->codes[worker->queued_frames * MINIMINDO_MIMI_CODEBOOKS +
+        worker->codes[queued * MINIMINDO_MIMI_CODEBOOKS +
                       codebook] = frame[codebook];
-    ++worker->queued_frames;
-    const size_t queued_snapshot = worker->queued_frames;
-    pthread_cond_broadcast(&worker->ready);
-    pthread_mutex_unlock(&worker->mutex);
+    const size_t queued_snapshot = queued + 1U;
+    atomic_store_explicit(&worker->queued_frames, queued_snapshot,
+                          memory_order_release);
     printf("STREAM stage=talker_produce turn=%u frame=%zu elapsed_ms=%.0f\n",
            worker->turn,queued_snapshot,
            (monotonic_seconds()-worker->inference_start)*1000.0);
@@ -361,15 +425,18 @@ static int mimi_decode_worker_push(mimi_decode_worker *worker,
 
 static void mimi_decode_worker_signal_done(mimi_decode_worker *worker)
 {
-    pthread_mutex_lock(&worker->mutex);
-    const int was_done = worker->producer_done;
+    const int was_done = atomic_exchange_explicit(
+        &worker->producer_done, 1, memory_order_acq_rel);
     if (!was_done)
-        worker->decode_overlap_frames = worker->decoded_frames;
-    worker->producer_done = 1;
-    const size_t queued_snapshot = worker->queued_frames;
-    const size_t decoded_snapshot = worker->decoded_frames;
+        worker->decode_overlap_frames = atomic_load_explicit(
+            &worker->decoded_frames, memory_order_acquire);
+    const size_t queued_snapshot = atomic_load_explicit(
+        &worker->queued_frames, memory_order_acquire);
+    const size_t decoded_snapshot = atomic_load_explicit(
+        &worker->decoded_frames, memory_order_acquire);
+    pthread_mutex_lock(&worker->wait_mutex);
     pthread_cond_broadcast(&worker->ready);
-    pthread_mutex_unlock(&worker->mutex);
+    pthread_mutex_unlock(&worker->wait_mutex);
     if (!was_done) {
         printf("STREAM stage=talker_done turn=%u frames=%zu decoded=%zu "
                "elapsed_ms=%.0f\n",worker->turn,queued_snapshot,
@@ -384,12 +451,12 @@ static int mimi_decode_worker_finish(mimi_decode_worker *worker)
     mimi_decode_worker_signal_done(worker);
     pthread_join(worker->thread, NULL);
     pthread_cond_destroy(&worker->ready);
-    pthread_mutex_destroy(&worker->mutex);
+    pthread_mutex_destroy(&worker->wait_mutex);
     minimindo_mimi_stream_close(worker->stream);
     worker->stream = NULL;
     free(worker->codes);
     worker->codes = NULL;
-    return worker->failed ? -1 : 0;
+    return atomic_load_explicit(&worker->failed, memory_order_acquire) ? -1 : 0;
 }
 
 static int16_t pcm16(float sample)
@@ -401,11 +468,12 @@ static int16_t pcm16(float sample)
 
 static size_t playback_start_frames(size_t total_frames)
 {
-    if (total_frames <= 4U) return total_frames;
-    size_t frames = (total_frames * 3U + 3U) / 4U;
-    if (frames < 4U) frames = 4U;
-    if (frames >= total_frames) frames = total_frames - 1U;
-    return frames;
+    (void)total_frames;
+    /* Two codec frames are 160 ms. This is the only production policy: PCM
+     * starts while Talker is still producing; response length is never used
+     * as a gate. Decoder RTF and underruns are measured instead of hidden by
+     * buffering most of the answer. */
+    return 2U;
 }
 
 static int stream_worker_to_alsa(mimi_decode_worker *worker,
@@ -417,26 +485,31 @@ static int stream_worker_to_alsa(mimi_decode_worker *worker,
 {
     const size_t samples_per_frame =
         minimindo_mimi_samples_for_frames(worker->model, 1);
-    /*
-     * Do not let ALSA consume until the producer has declared the final frame
-     * count.  Mimi is about 0.5x real time on this A53, so a fixed threshold
-     * can exhaust the pipe on a longer response.  Keeping 75% decoded lets
-     * the final quarter continue in parallel without starving playback.  Very
-     * short responses are decoded completely because no useful overlap exists.
-     */
-    pthread_mutex_lock(&worker->mutex);
-    while (!worker->failed) {
-        if (worker->producer_done && worker->queued_frames != 0U &&
-            worker->decoded_frames >=
-                playback_start_frames(worker->queued_frames)) break;
-        pthread_cond_wait(&worker->ready, &worker->mutex);
+    /* Start from a fixed low watermark. Waiting for producer_done made the old
+     * implementation decoder-to-ALSA streaming only, not end-to-end streaming. */
+    pthread_mutex_lock(&worker->wait_mutex);
+    while (!atomic_load_explicit(&worker->failed, memory_order_acquire)) {
+        const size_t queued = atomic_load_explicit(
+            &worker->queued_frames, memory_order_acquire);
+        const size_t decoded = atomic_load_explicit(
+            &worker->decoded_frames, memory_order_acquire);
+        const int done = atomic_load_explicit(
+            &worker->producer_done, memory_order_acquire);
+        const size_t target = playback_start_frames(queued);
+        if (decoded >= target || (done && decoded != 0U)) break;
+        pthread_cond_wait(&worker->ready, &worker->wait_mutex);
     }
-    const size_t buffered_frames = worker->decoded_frames;
+    const size_t buffered_frames = atomic_load_explicit(
+        &worker->decoded_frames, memory_order_acquire);
+    const size_t queued_at_start = atomic_load_explicit(
+        &worker->queued_frames, memory_order_acquire);
     const size_t target_frames =
-        playback_start_frames(worker->queued_frames);
-    const int failed = worker->failed;
-    const int empty = worker->producer_done && worker->queued_frames == 0U;
-    pthread_mutex_unlock(&worker->mutex);
+        playback_start_frames(queued_at_start);
+    const int failed = atomic_load_explicit(
+        &worker->failed, memory_order_acquire);
+    const int empty = atomic_load_explicit(
+        &worker->producer_done, memory_order_acquire) && queued_at_start == 0U;
+    pthread_mutex_unlock(&worker->wait_mutex);
     if (failed || empty) return -1;
 
     char command[256];
@@ -455,15 +528,25 @@ static int stream_worker_to_alsa(mimi_decode_worker *worker,
     int result = 0;
     for (size_t frame = 0; ; ++frame) {
         const double wait_start = monotonic_seconds();
-        pthread_mutex_lock(&worker->mutex);
-        const int had_to_wait = worker->decoded_frames <= frame;
-        while (worker->decoded_frames <= frame && !worker->failed &&
-               !(worker->producer_done && worker->queued_frames <= frame))
-            pthread_cond_wait(&worker->ready, &worker->mutex);
-        const int decode_failed = worker->failed;
-        const int finished = worker->producer_done &&
-                             worker->queued_frames <= frame;
-        pthread_mutex_unlock(&worker->mutex);
+        pthread_mutex_lock(&worker->wait_mutex);
+        const int had_to_wait = atomic_load_explicit(
+            &worker->decoded_frames, memory_order_acquire) <= frame;
+        while (atomic_load_explicit(&worker->decoded_frames,
+                                    memory_order_acquire) <= frame &&
+               !atomic_load_explicit(&worker->failed,
+                                     memory_order_acquire) &&
+               !(atomic_load_explicit(&worker->producer_done,
+                                      memory_order_acquire) &&
+                 atomic_load_explicit(&worker->queued_frames,
+                                      memory_order_acquire) <= frame))
+            pthread_cond_wait(&worker->ready, &worker->wait_mutex);
+        const int decode_failed = atomic_load_explicit(
+            &worker->failed, memory_order_acquire);
+        const int finished = atomic_load_explicit(
+            &worker->producer_done, memory_order_acquire) &&
+            atomic_load_explicit(&worker->queued_frames,
+                                 memory_order_acquire) <= frame;
+        pthread_mutex_unlock(&worker->wait_mutex);
         if (decode_failed) { result = -1; break; }
         if (finished) break;
         if (had_to_wait) {
@@ -478,11 +561,12 @@ static int stream_worker_to_alsa(mimi_decode_worker *worker,
             result = -1;
             break;
         }
-        pthread_mutex_lock(&worker->mutex);
-        const size_t decoded_snapshot = worker->decoded_frames;
-        const size_t queued_snapshot = worker->queued_frames;
-        const int producer_done = worker->producer_done;
-        pthread_mutex_unlock(&worker->mutex);
+        const size_t decoded_snapshot = atomic_load_explicit(
+            &worker->decoded_frames, memory_order_acquire);
+        const size_t queued_snapshot = atomic_load_explicit(
+            &worker->queued_frames, memory_order_acquire);
+        const int producer_done = atomic_load_explicit(
+            &worker->producer_done, memory_order_acquire);
         printf("STREAM stage=alsa_write turn=%u frame=%zu decoded=%zu "
                "queued=%zu producer_done=%d elapsed_ms=%.0f\n",
                turn,frame+1U,decoded_snapshot,queued_snapshot,producer_done,
@@ -665,6 +749,7 @@ static int run(const char *thinker_path, const char *talker_path,
         if (pthread_create(&playback_thread, NULL, alsa_playback_thread,
                            &playback) != 0) {
             fprintf(stderr, "ALSA playback worker start failed\n");
+            minimindo_parallel_session_end();
             mimi_decode_worker_signal_done(&decoder);
             (void)mimi_decode_worker_finish(&decoder);
             free(decoder.audio);
@@ -676,6 +761,10 @@ static int run(const char *thinker_path, const char *talker_path,
     size_t text_steps=0; int text_finished=0, text_limit_hit=0;
     int audio_drain_complete=0, first_finished=1;
     double generate_thinker_seconds=0.0,generate_talker_seconds=0.0;
+    enum { THINKER_DRAIN_CHUNK = 16 };
+    uint32_t drain_tokens[THINKER_DRAIN_CHUNK] = {0};
+    float drain_bridges[THINKER_DRAIN_CHUNK * hidden];
+    size_t drain_bridge_count=0,drain_bridge_index=0;
     int stop[8]; for(int i=0;i<8;++i)stop[i]=-1;
     while(steps<generation_capacity) {
         uint32_t text_token;
@@ -705,6 +794,7 @@ static int run(const char *thinker_path, const char *talker_path,
                     frames[(size_t)c*generation_capacity+frame_count]=frame[c];
                 if (decoder_started && mimi_decode_worker_push(&decoder, frame) != 0) {
                     fprintf(stderr, "Mimi stream queue failed\n");
+                    minimindo_parallel_session_end();
                     mimi_decode_worker_signal_done(&decoder);
                     if (playback_started)
                         (void)pthread_join(playback_thread, NULL);
@@ -718,10 +808,37 @@ static int run(const char *thinker_path, const char *talker_path,
         ++steps;
         int all_stopped=1;for(int c=0;c<8;++c)if(stop[c]<0)all_stopped=0;
         if(text_finished&&all_stopped){audio_drain_complete=1;break;}
+        if(steps>=generation_capacity)break;
         for(uint32_t c=0;c<8;++c)current_audio[c]=pad;
         for(int c=0;c<8&&c<audio_step+1;++c)current_audio[c]=all_codes[(size_t)c*generation_capacity+steps-1];
         double stage_start=monotonic_seconds();
-        int thinker_result=minimindo_thinker_forward_bridge(thinker,text_token,text_logits,tv,bridge,hidden,error,sizeof(error));
+        int thinker_result=0;
+        if(text_finished) {
+            if(drain_bridge_index==drain_bridge_count) {
+                drain_bridge_count=generation_capacity-steps;
+                if(drain_bridge_count>THINKER_DRAIN_CHUNK)
+                    drain_bridge_count=THINKER_DRAIN_CHUNK;
+                drain_bridge_index=0;
+                thinker_result=minimindo_thinker_prefill_sequence(
+                    thinker,drain_tokens,drain_bridge_count,NULL,NULL,NULL,0,
+                    drain_bridges,drain_bridge_count*(size_t)hidden,
+                    error,sizeof(error));
+                printf("STREAM stage=thinker_drain_prefill turn=%u "
+                       "positions=%zu elapsed_ms=%.0f\n",
+                       live_turn,drain_bridge_count,
+                       (monotonic_seconds()-run_start)*1000.0);
+                fflush(stdout);
+            }
+            if(!thinker_result) {
+                memcpy(bridge,drain_bridges+drain_bridge_index*(size_t)hidden,
+                       hidden*sizeof(float));
+                ++drain_bridge_index;
+            }
+        } else {
+            thinker_result=minimindo_thinker_forward_bridge(
+                thinker,text_token,text_logits,tv,bridge,hidden,
+                error,sizeof(error));
+        }
         generate_thinker_seconds+=monotonic_seconds()-stage_start;
         uint32_t logits_mask=0;
         for(uint32_t c=0;c<8&&c<steps;++c)
@@ -732,6 +849,7 @@ static int run(const char *thinker_path, const char *talker_path,
         if(thinker_result||talker_result) {
             fprintf(stderr,"decode: %s\n",error);
             if (decoder_started) {
+                minimindo_parallel_session_end();
                 mimi_decode_worker_signal_done(&decoder);
                 if (playback_started)
                     (void)pthread_join(playback_thread, NULL);
@@ -744,6 +862,9 @@ static int run(const char *thinker_path, const char *talker_path,
     }
     const double generation_end = monotonic_seconds();
     const double generation_cpu_end = process_cpu_seconds();
+    /* Release the fixed 0-2 compute group before the decoder expands from its
+     * dedicated CPU3 lane to all four cores. */
+    minimindo_parallel_session_end();
     if (decoder_started) mimi_decode_worker_signal_done(&decoder);
     if (playback_device != NULL) {
         printf("EVENT model_end turn=%u elapsed_ms=%.0f\n", live_turn,
@@ -908,47 +1029,113 @@ enum { CAPTURE_CHUNK=512, CAPTURE_QUEUE=64 };
 typedef struct {
     FILE *stream;
     pthread_t thread;
-    pthread_mutex_t mutex;
+    /* The mutex is only the empty-queue sleep boundary.  ALSA capture is the
+     * sole chunk writer and VAD is the sole reader. */
+    pthread_mutex_t wait_mutex;
     pthread_cond_t ready;
     int16_t chunks[CAPTURE_QUEUE][CAPTURE_CHUNK];
-    size_t read_index,write_index,count;
-    int stopped,failed;
+    atomic_size_t read_sequence;
+    atomic_size_t write_sequence;
+    atomic_int stopped;
+    atomic_int failed;
 } capture_queue;
 
 static void *capture_worker(void *opaque)
 {
-    capture_queue *queue=opaque;int16_t chunk[CAPTURE_CHUNK];
-    while(!queue->stopped){size_t got=fread(chunk,sizeof(int16_t),CAPTURE_CHUNK,queue->stream);
-        if(got!=CAPTURE_CHUNK){if(feof(queue->stream)){clearerr(queue->stream);continue;}queue->failed=1;break;}
-        pthread_mutex_lock(&queue->mutex);
-        if(queue->count==CAPTURE_QUEUE){queue->read_index=(queue->read_index+1)%CAPTURE_QUEUE;--queue->count;}
-        memcpy(queue->chunks[queue->write_index],chunk,sizeof(chunk));queue->write_index=(queue->write_index+1)%CAPTURE_QUEUE;++queue->count;
-        pthread_cond_signal(&queue->ready);pthread_mutex_unlock(&queue->mutex);}
+    capture_queue *queue = opaque;
+    int16_t chunk[CAPTURE_CHUNK];
+    while (!atomic_load_explicit(&queue->stopped, memory_order_acquire)) {
+        const size_t got = fread(chunk, sizeof(int16_t), CAPTURE_CHUNK,
+                                 queue->stream);
+        if (got != CAPTURE_CHUNK) {
+            if (feof(queue->stream)) { clearerr(queue->stream); continue; }
+            atomic_store_explicit(&queue->failed, 1, memory_order_release);
+            pthread_mutex_lock(&queue->wait_mutex);
+            pthread_cond_signal(&queue->ready);
+            pthread_mutex_unlock(&queue->wait_mutex);
+            break;
+        }
+        const size_t write = atomic_load_explicit(
+            &queue->write_sequence, memory_order_relaxed);
+        const size_t read = atomic_load_explicit(
+            &queue->read_sequence, memory_order_acquire);
+        /* During inference capture intentionally stays live.  If its 2 s ring
+         * is full, discard new echo; live() flushes the ring before listening
+         * again.  The producer never mutates the consumer's read cursor. */
+        if (write - read >= CAPTURE_QUEUE) continue;
+        memcpy(queue->chunks[write % CAPTURE_QUEUE], chunk, sizeof(chunk));
+        atomic_store_explicit(&queue->write_sequence, write + 1U,
+                              memory_order_release);
+        pthread_mutex_lock(&queue->wait_mutex);
+        pthread_cond_signal(&queue->ready);
+        pthread_mutex_unlock(&queue->wait_mutex);
+    }
     return NULL;
 }
 
 static int capture_start(capture_queue *queue,const char *device)
 {
-    memset(queue,0,sizeof(*queue));queue->stream=open_capture(device);if(!queue->stream)return -1;
-    if(pthread_mutex_init(&queue->mutex,NULL)||pthread_cond_init(&queue->ready,NULL)||pthread_create(&queue->thread,NULL,capture_worker,queue))return -1;
+    memset(queue, 0, sizeof(*queue));
+    atomic_init(&queue->read_sequence, 0U);
+    atomic_init(&queue->write_sequence, 0U);
+    atomic_init(&queue->stopped, 0);
+    atomic_init(&queue->failed, 0);
+    queue->stream = open_capture(device);
+    if (!queue->stream) return -1;
+    if (pthread_mutex_init(&queue->wait_mutex, NULL) != 0) {
+        pclose(queue->stream);
+        return -1;
+    }
+    if (pthread_cond_init(&queue->ready, NULL) != 0) {
+        pthread_mutex_destroy(&queue->wait_mutex);
+        pclose(queue->stream);
+        return -1;
+    }
+    if (pthread_create(&queue->thread, NULL, capture_worker, queue) != 0) {
+        pthread_cond_destroy(&queue->ready);
+        pthread_mutex_destroy(&queue->wait_mutex);
+        pclose(queue->stream);
+        return -1;
+    }
     return 0;
 }
 
 static int capture_next(capture_queue *queue,int16_t output[CAPTURE_CHUNK])
 {
-    pthread_mutex_lock(&queue->mutex);while(!queue->count&&!queue->failed)pthread_cond_wait(&queue->ready,&queue->mutex);
-    if(queue->failed){pthread_mutex_unlock(&queue->mutex);return -1;}
-    memcpy(output,queue->chunks[queue->read_index],CAPTURE_CHUNK*sizeof(int16_t));queue->read_index=(queue->read_index+1)%CAPTURE_QUEUE;--queue->count;
-    pthread_mutex_unlock(&queue->mutex);return 0;
+    pthread_mutex_lock(&queue->wait_mutex);
+    while (atomic_load_explicit(&queue->read_sequence,
+                                memory_order_relaxed) ==
+               atomic_load_explicit(&queue->write_sequence,
+                                    memory_order_acquire) &&
+           !atomic_load_explicit(&queue->failed, memory_order_acquire))
+        pthread_cond_wait(&queue->ready, &queue->wait_mutex);
+    const int failed = atomic_load_explicit(
+        &queue->failed, memory_order_acquire);
+    pthread_mutex_unlock(&queue->wait_mutex);
+    if (failed) return -1;
+    const size_t read = atomic_load_explicit(
+        &queue->read_sequence, memory_order_relaxed);
+    memcpy(output, queue->chunks[read % CAPTURE_QUEUE],
+           CAPTURE_CHUNK * sizeof(int16_t));
+    atomic_store_explicit(&queue->read_sequence, read + 1U,
+                          memory_order_release);
+    return 0;
 }
 
 static void capture_flush(capture_queue *queue)
-{pthread_mutex_lock(&queue->mutex);queue->read_index=queue->write_index;queue->count=0;pthread_mutex_unlock(&queue->mutex);}
+{
+    const size_t write = atomic_load_explicit(
+        &queue->write_sequence, memory_order_acquire);
+    atomic_store_explicit(&queue->read_sequence, write, memory_order_release);
+}
 
 static void capture_stop(capture_queue *queue)
 {
-    queue->stopped=1;pclose(queue->stream);pthread_join(queue->thread,NULL);
-    pthread_cond_destroy(&queue->ready);pthread_mutex_destroy(&queue->mutex);
+    atomic_store_explicit(&queue->stopped, 1, memory_order_release);
+    pclose(queue->stream);
+    pthread_join(queue->thread,NULL);
+    pthread_cond_destroy(&queue->ready);
+    pthread_mutex_destroy(&queue->wait_mutex);
 }
 
 static int live(const char *thinker,const char *talker,const char *tokenizer,
@@ -957,7 +1144,11 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
 {
     if(!safe_alsa_name(capture_device)||!safe_alsa_name(playback_device))return -1;
     const double warm_start=monotonic_seconds();
-    if(warm_resident(thinker,talker,tokenizer,mimi,audio_encoder))return -1;
+    (void)minimindo_parallel_pin_current(0U);
+    (void)minimindo_parallel_session_begin(4U);
+    const int warm_result=warm_resident(thinker,talker,tokenizer,mimi,audio_encoder);
+    minimindo_parallel_session_end();
+    if(warm_result)return -1;
     printf("READY pipeline=MiniMind-O-native-C warmup_ms=%.0f capture=%s playback=%s\n",
            (monotonic_seconds()-warm_start)*1000,capture_device,playback_device);fflush(stdout);
     capture_queue capture;if(capture_start(&capture,capture_device)){perror("arecord");return -1;}
@@ -982,7 +1173,10 @@ static int live(const char *thinker,const char *talker,const char *tokenizer,
                 if(speech_count<4000||active_chunks<3){printf("EVENT empty_vad turn=%u samples=%zu active_chunks=%d action=discard\n",turn,speech_count,active_chunks);fflush(stdout);speech_count=0;continue;}
                 printf("EVENT speech_end turn=%u samples=%zu duration_ms=%zu end=%s\n",turn,speech_count,speech_count*1000/16000,hit_limit?"limit":"silence");fflush(stdout);
                 const double inference_start=monotonic_seconds();const char *response="/dev/shm/minimindo-live-response.wav";
+                (void)minimindo_parallel_pin_current(0U);
+                (void)minimindo_parallel_session_begin(3U);
                 int result=run(thinker,talker,tokenizer,mimi,NULL,response,audio_encoder,NULL,speech,speech_count,max_tokens,seed+turn,playback_device,turn);
+                minimindo_parallel_session_end();
                 printf("EVENT inference_end turn=%u elapsed_ms=%.0f result=%d\n",turn,(monotonic_seconds()-inference_start)*1000,result);fflush(stdout);speech_count=0;
                 capture_flush(&capture);cooldown=32;
             }}
@@ -1000,5 +1194,9 @@ int main(int argc,char **argv)
     if(live_mode)return live(argv[1],argv[2],argv[3],argv[4],audio_encoder,capture?capture:"plughw:1,0",playback?playback:"plughw:0,0",max_tokens,seed)!=0;
     if((!prompt&&!audio_path)||(prompt&&audio_path)||!output)return 2;
     if (playback != NULL && !safe_alsa_name(playback)) return 2;
-    return run(argv[1],argv[2],argv[3],argv[4],prompt,output,audio_encoder,audio_path,NULL,0,max_tokens,seed,playback,0)!=0;
+    (void)minimindo_parallel_pin_current(0U);
+    (void)minimindo_parallel_session_begin(3U);
+    const int result=run(argv[1],argv[2],argv[3],argv[4],prompt,output,audio_encoder,audio_path,NULL,0,max_tokens,seed,playback,0);
+    minimindo_parallel_session_end();
+    return result!=0;
 }

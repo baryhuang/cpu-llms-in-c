@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "minimindo_parallel.h"
 #include "minimindo_thinker.h"
 
 #include <errno.h>
@@ -83,11 +84,14 @@ int main(int argc, char **argv)
     const uint32_t vocab = minimindo_thinker_vocab_size(model);
     float *logits = malloc((size_t)vocab * sizeof(*logits));
     if (logits == NULL) return 5;
+    if (minimindo_parallel_session_begin(4U) != 0) return 5;
     const double prefill_start = seconds();
     for (size_t index = 0; index < token_count; ++index) {
         if (minimindo_thinker_forward(model, tokens[index], logits, vocab,
                                       error, sizeof(error)) != 0) {
-            fprintf(stderr, "%s\n", error); return 6;
+            fprintf(stderr, "%s\n", error);
+            minimindo_parallel_session_end();
+            return 6;
         }
     }
     const double prefill_seconds = seconds() - prefill_start;
@@ -101,7 +105,9 @@ int main(int argc, char **argv)
         if (next == 2 || produced == generate) break;
         if (minimindo_thinker_forward(model, next, logits, vocab,
                                       error, sizeof(error)) != 0) {
-            fprintf(stderr, "\n%s\n", error); return 7;
+            fprintf(stderr, "\n%s\n", error);
+            minimindo_parallel_session_end();
+            return 7;
         }
     }
     const double decode_seconds = seconds() - decode_start;
@@ -109,6 +115,7 @@ int main(int argc, char **argv)
            token_count, prefill_seconds, token_count / prefill_seconds);
     printf("generated_tokens=%" PRIu32 " decode_seconds=%.6f decode_tps=%.4f\n",
            produced, decode_seconds, produced / decode_seconds);
+    minimindo_parallel_session_end();
     minimindo_thinker_close(model);
     free(logits); free(tokens);
     return 0;
