@@ -239,6 +239,10 @@
     "sha256_pinned_in_runner": true,
     "partial_download_atomic_rename": true,
     "systemd_retry_seconds": 30,
-    "automatic_cold_boot_restore": true
+    "automatic_cold_boot_restore": true,
+    "empty_cache_restore_seconds": 78,
+    "warm_restart_verify_seconds": 6,
+    "warmup_ms_after_verify": 539,
+    "target_restore_test_passed": true
   }
 }

@@ -269,7 +269,10 @@ it before an atomic rename. A truncated or incorrect asset is never executed.
 Once all six files pass, the launcher `exec`s the native-C binary with the live
 production arguments. The unit retries after 30 seconds if the network is
 unavailable. A warm service restart performs local SHA checks and downloads
-nothing; a board reboot repopulates the volatile directory automatically.
+nothing; a board reboot repopulates the volatile directory automatically. The
+full empty-cache systemd test downloaded 377 MiB and reached `READY` in about
+78 seconds. A subsequent warm restart verified the same files and reached
+`READY` in about 6 seconds, including a 539 ms model warm-up.
 
 To verify/download the release without starting inference:
 
